@@ -26,3 +26,20 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # Sora, the design's typeface, bundled rather than fetched at runtime: the
+  # app must render identically offline and inside `flutter test`, which rules
+  # out a runtime Google Fonts download. Only the five weights the design uses.
+  fonts:
+    - family: Sora
+      fonts:
+        - asset: assets/fonts/Sora-ExtraLight.ttf
+          weight: 200
+        - asset: assets/fonts/Sora-Light.ttf
+          weight: 300
+        - asset: assets/fonts/Sora-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Sora-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Sora-SemiBold.ttf
+          weight: 600

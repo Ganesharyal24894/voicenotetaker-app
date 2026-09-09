@@ -7,6 +7,7 @@ import '../drivers/file_store.dart';
 import '../model/audio_codec.dart';
 import '../model/device_state.dart';
 import '../model/recording_metadata.dart';
+import '../model/stream_info.dart';
 import '../services/recording_service.dart';
 
 /// What the app is doing right now, as one flat enum the placeholder view can
@@ -31,8 +32,13 @@ class AppController extends ChangeNotifier {
     required FileStore fileStore,
     required this._recordingsDirectory,
     RecordingService? recordingService,
-    this.preferredCodec = AudioCodec.imaAdpcm,
-  })  : _transport = transport,
+    AudioCodec preferredCodec = AudioCodec.imaAdpcm,
+    // The public parameter name `preferredCodec:` is part of the existing API,
+    // while the field behind it is private because it is now reached through a
+    // notifying setter - so an initializing formal is not available here.
+    // ignore: prefer_initializing_formals
+  })  : _preferredCodec = preferredCodec,
+        _transport = transport,
         _fileStore = fileStore,
         _recorder = recordingService ??
             RecordingService(transport: transport, fileStore: fileStore);
@@ -42,8 +48,21 @@ class AppController extends ChangeNotifier {
   final String _recordingsDirectory;
   final RecordingService _recorder;
 
+  AudioCodec _preferredCodec;
+
   /// Codec requested from the device when a recording starts.
-  final AudioCodec preferredCodec;
+  AudioCodec get preferredCodec => _preferredCodec;
+
+  /// Changes the codec the next capture will ask the device for.
+  ///
+  /// Settable so the debug-only developer screen can drive it; it takes effect
+  /// on the next [startRecording], because the device is told which codec to
+  /// use as a capture begins.
+  set preferredCodec(AudioCodec codec) {
+    if (codec == _preferredCodec) return;
+    _preferredCodec = codec;
+    notifyListeners();
+  }
 
   StreamSubscription<DiscoveredDevice>? _scanSubscription;
   StreamSubscription<BleConnectionStatus>? _connectionSubscription;
@@ -62,6 +81,10 @@ class AppController extends ChangeNotifier {
   List<DiscoveredDevice> get devices => List.unmodifiable(_devices);
   DiscoveredDevice? get connectedDevice => _connectedDevice;
   CaptureStats get stats => _stats;
+
+  /// Stream info the device reported for the capture in progress, or the last
+  /// one. Null before the first recording starts.
+  StreamInfo? get streamInfo => _recorder.streamInfo;
   RecordingMetadata? get lastRecording => _lastRecording;
   String? get errorMessage => _errorMessage;
 
@@ -175,7 +198,7 @@ class AppController extends ChangeNotifier {
       await _recorder.start(
         deviceId: device.id,
         path: path,
-        requestCodec: preferredCodec,
+        requestCodec: _preferredCodec,
       );
     } on RecordingException catch (e) {
       _fail(e.message);

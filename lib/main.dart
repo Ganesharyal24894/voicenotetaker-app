@@ -5,10 +5,11 @@ import 'package:flutter/material.dart';
 import 'controller/app_controller.dart';
 import 'drivers/ble_transport_universal.dart';
 import 'drivers/file_store.dart';
-import 'view/placeholder_home_view.dart';
+import 'view/app_root.dart';
+import 'view/theme.dart';
 
 /// Entry point. Wires the concrete drivers into the controller and hands the
-/// controller to the (placeholder) view; no logic lives here.
+/// controller to the view layer; no logic lives here.
 ///
 /// This is the single place that names a concrete driver implementation, which
 /// is what makes `lib/drivers/` a genuine swap layer.
@@ -55,9 +56,9 @@ class _VoiceNotetakerAppState extends State<VoiceNotetakerApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'voiceNotetaker',
-      // Theming is intentionally left at the framework default: the real look
-      // is pending design (see `design/`).
-      home: PlaceholderHomeView(controller: widget.controller),
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.build(),
+      home: AppRoot(controller: widget.controller),
     );
   }
 }
