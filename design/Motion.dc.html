@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400;500;600&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #A78BFA; } a:hover { color: #C4B5FD; }
+    .mo { font-family: 'Sora', system-ui, sans-serif; }
+    .cell { background: #0B0A0F; border: 1px solid #1D1927; border-radius: 18px;
+            padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+    .stage { height: 176px; border-radius: 12px; background: #08070C;
+             display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+    .t  { font-size: 14px; font-weight: 500; color: #F4F1FB; }
+    .d  { font-size: 11px; font-weight: 300; color: #665F78; line-height: 1.5; }
+    .sp { font-size: 11px; font-weight: 300; color: #A78BFA; }
+
+    @keyframes spin    { to { transform: rotate(360deg); } }
+    @keyframes ripple  { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(1.7); opacity: 0; } }
+    @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+    @keyframes settle  { 0% { transform: scale(.82); opacity: 0; }
+                         55% { transform: scale(1.06); opacity: 1; }
+                         100% { transform: scale(1); opacity: 1; } }
+    @keyframes draw    { to { stroke-dashoffset: 0; } }
+    @keyframes glow    { 0%,100% { box-shadow: 0 0 0 rgba(74,222,128,0); }
+                         50% { box-shadow: 0 0 26px rgba(74,222,128,.35); } }
+    @keyframes press   { 0%,100% { transform: scale(1); } 50% { transform: scale(.93); } }
+    @keyframes slidein { 0% { transform: translateX(26px); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
+
+    .spin    { animation: spin 1.6s linear infinite; transform-origin: 50% 50%; }
+    .ring    { animation: ripple 2.4s ease-out infinite; }
+    .ring.b  { animation-delay: 1.2s; }
+    .live    { animation: breathe 2s ease-in-out infinite; }
+    .settle  { animation: settle .42s cubic-bezier(.2,.9,.3,1.2) infinite alternate; }
+    .glow    { animation: glow 2.4s ease-in-out infinite; }
+    .press   { animation: press 1.6s ease-in-out infinite; }
+    .tick    { stroke-dasharray: 26; stroke-dashoffset: 26; animation: draw .5s ease-out .18s infinite alternate; }
+    .row     { animation: slidein .45s cubic-bezier(.2,.9,.3,1) infinite alternate; }
+    .bar     { width: 4px; border-radius: 999px; background: #6D28D9; animation: lvl 1s ease-in-out infinite; }
+    @keyframes lvl { 0%,100% { height: 14px; } 50% { height: 58px; } }
+  </style>
+</helmet>
+
+<div class="mo" style="width: 1180px; height: 800px; box-sizing: border-box; background: #08070C; padding: 32px; display: flex; flex-direction: column; gap: 20px;">
+
+  <div style="display: flex; flex-direction: column; gap: 6px;">
+    <div style="font-size: 22px; font-weight: 500; color: #F4F1FB; letter-spacing: -0.02em;">Motion</div>
+    <div style="font-size: 13px; font-weight: 300; color: #9A93AC; max-width: 860px; line-height: 1.55;">These are running, not illustrations &mdash; what you see is the proposed timing. Each is short, purposeful and tied to a state change; nothing loops decoratively in the shipped app except the two that indicate a live condition (scanning, connected).</div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px;">
+
+    <div class="cell">
+      <div class="t">Scanning</div>
+      <div class="stage">
+        <div style="position: relative; width: 110px; height: 110px; display: flex; align-items: center; justify-content: center;">
+          <div class="ring" style="position: absolute; width: 110px; height: 110px; border-radius: 50%; border: 1px solid #4C1D95;"></div>
+          <div class="ring b" style="position: absolute; width: 110px; height: 110px; border-radius: 50%; border: 1px solid #4C1D95;"></div>
+          <div style="width: 92px; height: 92px; border-radius: 50%; background: #6D28D9; display: flex; align-items: center; justify-content: center;">
+            <svg class="spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#F4F1FB" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"></path><polyline points="20.5 3.5 20.5 9 15 9"></polyline></svg>
+          </div>
+        </div>
+      </div>
+      <div class="d">The dead-centre control that replaces the 13&nbsp;px spinner. 96&nbsp;px, so it is easy to hit. Icon rotates while scanning; rings ripple outward to say &ldquo;listening&rdquo;. <span class="sp">1.6&nbsp;s rotate &middot; 2.4&nbsp;s ripple, offset 1.2&nbsp;s</span></div>
+    </div>
+
+    <div class="cell">
+      <div class="t">Device found</div>
+      <div class="stage">
+        <div class="row" style="width: 250px; background: #14121B; border: 1px solid #6D28D9; border-radius: 14px; padding: 14px; display: flex; align-items: center; gap: 12px;">
+          <div style="width: 36px; height: 36px; border-radius: 10px; background: #6D28D9; display: flex; align-items: center; justify-content: center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#F4F1FB" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"></polyline></svg>
+          </div>
+          <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px;">
+            <div style="font-size: 14px; font-weight: 500; color: #F4F1FB;">voiceNotetaker</div>
+            <div style="font-size: 11px; font-weight: 300; color: #665F78;">EB:6B:5E:4C:33:A3</div>
+          </div>
+        </div>
+      </div>
+      <div class="d">Rows slide in from the right rather than appearing. Staggered 40&nbsp;ms apart when several arrive together, so the list reads as filling up. <span class="sp">450&nbsp;ms, cubic-bezier(.2,.9,.3,1)</span></div>
+    </div>
+
+    <div class="cell">
+      <div class="t">Connected</div>
+      <div class="stage">
+        <div class="settle" style="display: flex; flex-direction: column; align-items: center; gap: 14px;">
+          <div class="glow" style="width: 74px; height: 74px; border-radius: 50%; background: rgba(74,222,128,0.12); border: 1px solid rgba(74,222,128,0.34); display: flex; align-items: center; justify-content: center;">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline class="tick" points="5 12.5 10 17.5 19 7"></polyline></svg>
+          </div>
+          <div style="font-size: 13px; font-weight: 400; color: #4ADE80;">Connected</div>
+        </div>
+      </div>
+      <div class="d">The moment you asked for. Tick draws itself, the badge settles with a slight overshoot, and a soft green glow confirms it &mdash; then the screen moves to Home. <span class="sp">tick 500&nbsp;ms &middot; settle 420&nbsp;ms overshoot 1.06</span></div>
+    </div>
+
+    <div class="cell">
+      <div class="t">Connected &mdash; resting state</div>
+      <div class="stage">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div class="live" style="width: 8px; height: 8px; border-radius: 50%; background: #4ADE80;"></div>
+          <div style="font-size: 16px; font-weight: 300; color: #9A93AC;">Connected</div>
+        </div>
+      </div>
+      <div class="d">After the confirmation, the dot breathes slowly &mdash; a live link, not a static label. Deliberately subtle: this runs for hours. <span class="sp">2&nbsp;s ease-in-out, opacity 1 &rarr; 0.4</span></div>
+    </div>
+
+    <div class="cell">
+      <div class="t">Record &mdash; press</div>
+      <div class="stage">
+        <div class="press" style="width: 92px; height: 92px; border-radius: 50%; background: #6D28D9; display: flex; align-items: center; justify-content: center;">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#F4F1FB" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path><path d="M19 11v1a7 7 0 0 1-14 0v-1"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+        </div>
+      </div>
+      <div class="d">A press scales to 0.93 and back. Cheap, but it is the difference between a button that feels connected to your finger and one that does not. <span class="sp">120&nbsp;ms down, 180&nbsp;ms release</span></div>
+    </div>
+
+    <div class="cell">
+      <div class="t">Recording &mdash; live level</div>
+      <div class="stage">
+        <div style="display: flex; align-items: center; gap: 5px; height: 70px;">
+          <div class="bar" style="animation-delay: 0s;"></div>
+          <div class="bar" style="animation-delay: .12s;"></div>
+          <div class="bar" style="animation-delay: .26s; background:#7C3AED;"></div>
+          <div class="bar" style="animation-delay: .07s; background:#A78BFA;"></div>
+          <div class="bar" style="animation-delay: .34s;"></div>
+          <div class="bar" style="animation-delay: .19s; background:#7C3AED;"></div>
+          <div class="bar" style="animation-delay: .41s;"></div>
+          <div class="bar" style="animation-delay: .29s; background:#A78BFA;"></div>
+          <div class="bar" style="animation-delay: .1s;"></div>
+        </div>
+      </div>
+      <div class="d">Driven by real amplitude, not a canned loop &mdash; the whole point is that it proves the mic is hearing you. Falls back to a flat line if frames stop arriving. <span class="sp">follows the level meter, ~20&nbsp;ms per frame</span></div>
+    </div>
+
+  </div>
+
+  <div style="display: flex; align-items: flex-start; gap: 10px; border-top: 1px solid #1D1927; padding-top: 14px;">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#665F78" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+    <div style="font-size: 12px; font-weight: 300; color: #665F78; line-height: 1.55;">Two of these loop forever in the app &mdash; scanning and the connected dot &mdash; because they report a live condition. The rest fire once on a state change. All of them should respect the platform&rsquo;s reduce-motion setting, which Flutter exposes as <span style="color:#9A93AC;">MediaQuery.disableAnimations</span>; when it is on, states change instantly and the two loops become static.</div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

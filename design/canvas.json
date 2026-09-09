@@ -1,18 +1,99 @@
 {
   "pages": [
-    { "id": "page-1", "name": "Design" },
-    { "id": "page-2", "name": "Explorations" }
+    {
+      "id": "page-1",
+      "name": "Design"
+    },
+    {
+      "id": "page-2",
+      "name": "Explorations"
+    }
   ],
   "artboards": [
-    { "file": "Main.dc.html",    "x": 0, "y": 0,    "w": 2600, "h": 1000, "page": "page-1", "title": "voiceNotetaker - full flow" },
-    { "file": "Palette.dc.html", "x": 0, "y": 1150, "w": 1180, "h": 920,  "page": "page-1", "title": "Theme - #6D28D9 on dark" },
-    { "file": "FontsA.dc.html",     "x": 0,    "y": 0, "w": 1180, "h": 990, "page": "page-2", "title": "Type options (Sora chosen)" },
-    { "file": "DirectionB.dc.html", "x": 1280, "y": 0, "w": 880,  "h": 970, "page": "page-2", "title": "B - telemetry, now the dev screen" },
-    { "file": "DirectionC.dc.html", "x": 2260, "y": 0, "w": 880,  "h": 970, "page": "page-2", "title": "C - Ambient (not chosen)" }
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 2600,
+      "h": 1000,
+      "page": "page-1",
+      "title": "voiceNotetaker - full flow"
+    },
+    {
+      "file": "Palette.dc.html",
+      "x": 0,
+      "y": 1150,
+      "w": 1180,
+      "h": 920,
+      "page": "page-1",
+      "title": "Theme - #6D28D9 on dark"
+    },
+    {
+      "file": "Motion.dc.html",
+      "x": 0,
+      "y": 2200,
+      "w": 1180,
+      "h": 800,
+      "page": "page-1",
+      "title": "Motion - these actually run"
+    },
+    {
+      "file": "DeviceMotion.dc.html",
+      "x": 1320,
+      "y": 2200,
+      "w": 1180,
+      "h": 820,
+      "page": "page-1",
+      "title": "Device motion - no tilt, dock into header"
+    },
+    {
+      "file": "FontsA.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1180,
+      "h": 990,
+      "page": "page-2",
+      "title": "Type options (Sora chosen)"
+    },
+    {
+      "file": "DirectionB.dc.html",
+      "x": 1280,
+      "y": 0,
+      "w": 880,
+      "h": 970,
+      "page": "page-2",
+      "title": "B - telemetry, now the dev screen"
+    },
+    {
+      "file": "DirectionC.dc.html",
+      "x": 2260,
+      "y": 0,
+      "w": 880,
+      "h": 970,
+      "page": "page-2",
+      "title": "C - Ambient (not chosen)"
+    }
   ],
   "annotations": [
-    { "id": "contrast", "x": 1320, "y": 1150, "w": 340, "page": "page-1",
-      "text": "#6D28D9 measures 2.78:1 as text on the dark background - below the 4.5:1 floor for text and even the 3:1 floor for UI.\n\nSo it is a FILL colour, with light content on it (6.37:1). Purple text and icons use #A78BFA (7.25:1).\n\nThat also means the record button's icon is light, not dark - the earlier mockup had this wrong." }
+    {
+      "id": "contrast",
+      "x": 1320,
+      "y": 1150,
+      "w": 340,
+      "page": "page-1",
+      "text": "#6D28D9 measures 2.78:1 as text on the dark background - below the 4.5:1 floor for text and even the 3:1 floor for UI.\n\nSo it is a FILL colour, with light content on it (6.37:1). Purple text and icons use #A78BFA (7.25:1).\n\nThat also means the record button's icon is light, not dark - the earlier mockup had this wrong."
+    },
+    {
+      "id": "ui-feedback",
+      "x": 0,
+      "y": 3100,
+      "w": 360,
+      "page": "page-1",
+      "text": "DECIDED: no tilt, dock.\n\nThe board now lands in a real 38x46 slot beside the device name instead of a guessed offset, so it no longer overlaps.\n\nOne consequence to confirm: this adds a leading logo slot to the Home header and shifts the name/status block right by 50px. That changes a screen you already approved.\n\nStill open: the 96px scan control and the reworked playback waveform on the main flow board."
+    }
   ],
-  "launch": { "view": "canvas", "page": "page-1" }
+  "launch": {
+    "view": "canvas",
+    "page": "page-1"
+  }
 }
