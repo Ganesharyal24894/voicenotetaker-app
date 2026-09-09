@@ -15,6 +15,15 @@ dependencies:
   # See README.md ("Why universal_ble") before swapping this out.
   universal_ble: ^2.3.0
 
+  # Playback of the recorded WAV files. MIT, no commercial licence required.
+  # Named in lib/drivers/audio_player_just_audio.dart and nowhere else.
+  just_audio: ^0.10.6
+
+  # Per-platform app directories, so recordings land somewhere the OS keeps
+  # rather than somewhere it may evict. BSD-3-Clause, maintained by the Flutter
+  # team. Named in lib/drivers/app_directories.dart and nowhere else.
+  path_provider: ^2.1.6
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

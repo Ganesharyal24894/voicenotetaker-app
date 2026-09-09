@@ -1,8 +1,8 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
 import 'controller/app_controller.dart';
+import 'drivers/app_directories.dart';
+import 'drivers/audio_player_just_audio.dart';
 import 'drivers/ble_transport_universal.dart';
 import 'drivers/file_store.dart';
 import 'view/app_root.dart';
@@ -13,18 +13,22 @@ import 'view/theme.dart';
 ///
 /// This is the single place that names a concrete driver implementation, which
 /// is what makes `lib/drivers/` a genuine swap layer.
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   const fileStore = IoFileStore();
+  const directories = PathProviderAppDirectories();
+
+  // Recordings go in the app's documents directory, which the OS keeps until
+  // the app is uninstalled. They must not go anywhere cache-like: the system
+  // is free to evict those, and a deleted voice note is not recoverable.
+  final documents = await directories.documentsDirectory();
+
   final controller = AppController(
     transport: UniversalBleTransport(),
     fileStore: fileStore,
-    // TODO(storage): replace with a per-platform app documents directory once
-    // the storage location is decided. Deliberately not pulling in
-    // `path_provider` before that call is made.
-    recordingsDirectory:
-        fileStore.join(Directory.systemTemp.path, 'voicenotetaker'),
+    audioPlayer: JustAudioPlayer(),
+    recordingsDirectory: fileStore.join(documents, 'recordings'),
   );
 
   runApp(VoiceNotetakerApp(controller: controller));

@@ -5,10 +5,12 @@ import '../drivers/ble_transport.dart';
 import '../drivers/file_store.dart';
 import '../model/audio_codec.dart';
 import '../model/audio_frame.dart';
+import '../model/level_reading.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
 import 'codec/adpcm_decoder.dart';
 import 'frame_reassembler.dart';
+import 'level_meter.dart';
 import 'wav_writer.dart';
 
 /// Raised when a capture cannot be started or finished.
@@ -35,11 +37,18 @@ class RecordingService {
     required this._transport,
     required this._fileStore,
     DateTime Function()? clock,
-  }) : _clock = clock ?? DateTime.now;
+    LevelMeter? levelMeter,
+  })  : _clock = clock ?? DateTime.now,
+        _levelMeter = levelMeter ?? LevelMeter();
 
   final BleTransport _transport;
   final FileStore _fileStore;
   final DateTime Function() _clock;
+
+  /// Measures the PCM on its way to the file. Costs one pass over bytes that
+  /// are already decoded and in memory, so the live meter needs no second
+  /// source of audio and no change to the device.
+  final LevelMeter _levelMeter;
 
   final FrameReassembler _reassembler = FrameReassembler();
   final StreamController<CaptureStats> _statsController =
@@ -56,6 +65,12 @@ class RecordingService {
 
   /// Counters pushed as each notification is processed.
   Stream<CaptureStats> get stats => _statsController.stream;
+
+  /// Peak and RMS level of each decoded block.
+  Stream<LevelReading> get levels => _levelMeter.levels;
+
+  /// The most recent level, or `null` before any audio has been decoded.
+  LevelReading? get level => _levelMeter.level;
 
   bool get isRecording => _sink != null;
 
@@ -106,6 +121,7 @@ class RecordingService {
     }
 
     _reassembler.reset();
+    _levelMeter.reset();
     _decodedBytes = 0;
     _streamError = null;
     _streamInfo = info;
@@ -207,6 +223,7 @@ class RecordingService {
 
   Future<void> dispose() async {
     await abort();
+    await _levelMeter.dispose();
     await _statsController.close();
   }
 
@@ -218,6 +235,9 @@ class RecordingService {
     }
 
     final pcm = _decode(frame);
+    // Measured before the write, so the meter keeps moving even if the disk
+    // stalls; an empty block is ignored by the meter rather than divided by.
+    _levelMeter.addPcmS16le(pcm);
     final sink = _sink;
     if (pcm.isNotEmpty && sink != null) {
       _decodedBytes += pcm.length;

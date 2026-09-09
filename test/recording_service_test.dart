@@ -37,6 +37,24 @@ class InMemoryFileStore implements FileStore {
   }
 
   @override
+  Future<Uint8List> readRange(String path, int start, int end) async {
+    final bytes = await read(path);
+    final from = start.clamp(0, bytes.length);
+    final to = end.clamp(from, bytes.length);
+    return Uint8List.sublistView(bytes, from, to);
+  }
+
+  @override
+  Future<FileInfo?> stat(String path) async {
+    if (!await exists(path)) return null;
+    return FileInfo(
+      path: path,
+      sizeBytes: (await read(path)).length,
+      modifiedAt: DateTime(2026, 9, 10, 14, 30),
+    );
+  }
+
+  @override
   Future<void> writeBytes(String path, List<int> bytes) async {
     files[path] = Uint8List.fromList(bytes);
   }
@@ -448,6 +466,96 @@ void main() {
       await service.start(deviceId: deviceId, path: '/recordings/second.wav');
       expect(service.currentStats.framesReceived, 0);
       expect(service.currentStats.decodedBytes, 0);
+      await service.stop();
+      unawaited(frames2.close());
+    });
+  });
+
+  group('the live level meter', () {
+    /// PCM samples as one notification, the way codec 0 arrives on the wire.
+    Uint8List pcmNotification(int sequence, List<int> samples) {
+      final payload = Uint8List(samples.length * 2);
+      final view = ByteData.sublistView(payload);
+      for (var i = 0; i < samples.length; i++) {
+        view.setInt16(i * 2, samples[i], Endian.little);
+      }
+      return notification(sequence, payload);
+    }
+
+    test('no audio means no level', () async {
+      stubTransport(info: pcmInfo);
+      await service.start(deviceId: deviceId, path: path);
+      expect(service.level, isNull);
+    });
+
+    test('each decoded block is measured on its way to the file', () async {
+      stubTransport(info: pcmInfo);
+      final readings = <double>[];
+      final subscription =
+          service.levels.listen((r) => readings.add(r.peakDbfs));
+      await service.start(deviceId: deviceId, path: path);
+
+      frames.add(pcmNotification(0, <int>[32767, -32767, 32767, -32767]));
+      await settle();
+      expect(readings.single, closeTo(0, 0.01));
+      expect(service.level!.peakSample, 32767);
+
+      frames.add(pcmNotification(1, <int>[100, -100, 100, -100]));
+      await settle();
+      expect(readings, hasLength(2));
+      expect(readings.last, lessThan(readings.first));
+
+      await service.stop();
+      await subscription.cancel();
+    });
+
+    test('silence reads the floor rather than nothing at all', () async {
+      stubTransport(info: pcmInfo);
+      await service.start(deviceId: deviceId, path: path);
+
+      frames.add(pcmNotification(0, List<int>.filled(160, 0)));
+      await settle();
+
+      expect(service.level!.peakDbfs, -96);
+      await service.stop();
+    });
+
+    test('a decoded ADPCM block is measured too', () async {
+      await service.start(deviceId: deviceId, path: path);
+
+      frames.add(notification(0, adpcmBlock(0, 0, <int>[0x77, 0x77])));
+      await settle();
+
+      expect(service.level, isNotNull);
+      expect(service.level!.sampleCount, 4);
+      await service.stop();
+    });
+
+    test('a malformed notification never reaches the meter', () async {
+      await service.start(deviceId: deviceId, path: path);
+
+      // One byte: too short to carry a sequence header, so no frame and no
+      // samples - and above all no division by an empty block.
+      frames.add(Uint8List.fromList(<int>[0x01]));
+      await settle();
+
+      expect(service.level, isNull);
+      await service.stop();
+    });
+
+    test('a new capture starts from no level', () async {
+      stubTransport(info: pcmInfo);
+      await service.start(deviceId: deviceId, path: path);
+      frames.add(pcmNotification(0, <int>[1000, -1000]));
+      await settle();
+      expect(service.level, isNotNull);
+      await service.stop();
+
+      final frames2 = StreamController<Uint8List>();
+      when(() => transport.subscribeFrames(deviceId))
+          .thenAnswer((_) => frames2.stream);
+      await service.start(deviceId: deviceId, path: '/recordings/second.wav');
+      expect(service.level, isNull);
       await service.stop();
       unawaited(frames2.close());
     });

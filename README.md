@@ -6,8 +6,8 @@ it and writes a WAV file.
 
 > **The UI is built to the approved design.** `design/Main.dc.html` and
 > `design/Palette.dc.html` are the source of truth, and `lib/view/` implements
-> them screen for screen. Three things the design shows have no service behind
-> them yet — the recordings library, playback and transcription — and those are
+> them screen for screen. What still has no service behind it — transcription,
+> the battery reading, and the link figures on the developer screen — is
 > rendered from clearly marked placeholder state in
 > `lib/view/placeholder_data.dart`, never from an invented service.
 
@@ -67,9 +67,12 @@ lib/
                                                disconnect / subscribe frames /
                                                read info / select codec
                  ble_transport_universal.dart  universal_ble implementation
-                 audio_player.dart             abstract playback (no impl yet)
-                 file_store.dart               abstract file write/read
+                 audio_player.dart             abstract playback
+                 audio_player_just_audio.dart  just_audio implementation
+                 file_store.dart               abstract file write/read/stat
                                                + IoFileStore (dart:io)
+                 app_directories.dart          abstract "where may I write?"
+                                               + path_provider implementation
 
   services/    Domain logic on top of the driver interfaces. No package
                imports, no dart:io.
@@ -78,7 +81,13 @@ lib/
                  frame_reassembler.dart    strips the sequence header,
                                            detects gaps, counts loss
                  wav_writer.dart           44-byte RIFF header + s16le
+                 wav_reader.dart           reads that header back; malformed
+                                           and truncated files return null
                  recording_service.dart    capture -> decode -> file
+                 library_service.dart      lists saved recordings, newest
+                                           first, with real metadata; delete
+                 level_meter.dart          peak / RMS dBFS of the PCM the
+                                           app already decodes
 
   controller/  app_controller.dart — orchestration and app state.
   view/        THE UI, built to `design/Main.dc.html`. May use controller/
@@ -116,9 +125,11 @@ is written entirely in `lib/model/` types — `DiscoveredDevice`, `StreamInfo`,
   fake of `BleTransport` and an in-memory `FileStore`, with no radio, no
   filesystem and no platform channels involved.
 
-The same applies to `FileStore` (`services/` never imports `dart:io`) and to
-`AudioPlayer`, which is deliberately interface-only: no playback package has
-been chosen yet, so nothing outside `lib/drivers/` is allowed to assume one.
+The same applies to `FileStore` (`services/` never imports `dart:io`), to
+`AppDirectories` (`path_provider` is named in one file) and to `AudioPlayer`,
+whose `just_audio` implementation sits beside the interface: nothing outside
+`lib/drivers/` names a playback package, and the interface itself is written in
+plain Dart and `lib/model/` types.
 
 Two things live in `model/` that might look like they belong in `drivers/`, and
 they are there on purpose: the GATT UUIDs (`DeviceProfile`) and the packed
@@ -142,7 +153,11 @@ flutter test        # must be all green
 | `test/frame_reassembler_test.dart` | sequence gaps, 16-bit wraparound, loss counting |
 | `test/wav_writer_test.dart` | exact 44-byte header, field by field at its offset |
 | `test/recording_service_test.dart` | orchestration against a `mocktail` fake transport |
-| `test/file_store_test.dart` | the real `dart:io` sink, including header patching |
+| `test/file_store_test.dart` | the real `dart:io` sink, including header patching, `readRange` and `stat` |
+| `test/wav_reader_test.dart` | the reader against the writer's own bytes, plus every malformed case |
+| `test/library_service_test.dart` | listing order, metadata, duration from the header, broken files, delete |
+| `test/level_meter_test.dart` | silence, full scale, a sine of known amplitude, and the empty block |
+| `test/audio_player_test.dart` | the playback state machine against a fake, and the controller driving it |
 | `test/stream_info_test.dart` | `fe02` byte layout, codec mapping, device constants |
 | `test/view/theme_test.dart` | every design token, and the measured contrast ratios the palette rests on |
 | `test/view/*_view_test.dart` | each screen in its main states, against a `mocktail` fake transport |
@@ -218,12 +233,20 @@ in `lib/` constructs the screen.
 
 ### Not backed by a service yet
 
-Playback, transcription, a recordings library, the battery reading, and the ATT
-MTU / interval / PHY / throughput / jitter figures on the developer screen have
-nothing below `view/` that can produce them. They render as marked placeholder
-content (`lib/view/placeholder_data.dart`) or as `—`, and the transport
-controls tell the user plainly that nothing is playing. No driver or service
-was invented to fill the gap.
+Transcription, the battery reading, and the ATT MTU / interval / PHY /
+throughput / jitter figures on the developer screen still have nothing below
+`view/` that can produce them. They render as marked placeholder content
+(`lib/view/placeholder_data.dart`) or as `—`. No driver or service was invented
+to fill the gap.
+
+The recordings library and the peak level are no longer among them: the library
+list comes from `LibraryService` through `AppController.recordings`, and the
+peak readout on the recording screen comes from `LevelMeter` through
+`AppController.peakDbfs`. `PlaybackView`'s transport is still local state - the
+playback driver, the controller API (`playRecording`, `pausePlayback`,
+`seekPlayback`, `stopPlayback`, `playbackState`) and its tests exist, but
+binding the screen to them is more than a data-source swap and was left to
+whoever owns that screen.
 
 ## Package choices
 
@@ -256,11 +279,23 @@ Note that `mocktail` needs `registerFallbackValue` for any enum used with
 Standard lint set, enabled via `analysis_options.yaml`. `flutter analyze` is
 expected to be clean; treat a new warning as a build break.
 
-### No audio playback package yet
+### `just_audio` — licensing rationale
 
-Intentional. `lib/drivers/audio_player.dart` defines the interface only. When a
-package is chosen, add `audio_player_<package>.dart` beside it and wire it in
-`main.dart`.
+Playback is [`just_audio`](https://pub.dev/packages/just_audio), which is
+**MIT**: permissive, no commercial licence to buy, no fee. Its own dependencies
+are the same shape - `audio_session` and the `just_audio_*` platform packages
+are MIT, `rxdart` is Apache-2.0, `uuid` and `synchronized` are MIT, and
+`crypto` / `path` are BSD-3-Clause from the Dart team.
+
+It appears in exactly one file, `lib/drivers/audio_player_just_audio.dart`.
+Recordings are ordinary WAV files with a 44-byte RIFF header, so an off-the-
+shelf file player handles them and no raw-PCM streaming source is needed.
+
+### `path_provider` — licensing rationale
+
+[`path_provider`](https://pub.dev/packages/path_provider) is **BSD-3-Clause**,
+maintained by the Flutter team, and appears only in
+`lib/drivers/app_directories.dart`.
 
 ## Platform status
 
@@ -307,11 +342,16 @@ package under `android/app/src/main/kotlin/`, `linux/CMakeLists.txt`
 (`APPLICATION_ID`) and the iOS `PRODUCT_BUNDLE_IDENTIFIER` — but it must remain
 a valid Java package name.
 
-## Storage location — open decision
+## Storage location
 
-`main.dart` currently writes recordings under `Directory.systemTemp`. That is a
-placeholder: `path_provider` was deliberately not added before the storage
-location is decided. See the `TODO(storage)` in `lib/main.dart`.
+Recordings go in `<app documents>/recordings`, resolved at startup through the
+`AppDirectories` driver (`path_provider`'s `getApplicationDocumentsDirectory`).
+On Android that is the app's private `app_flutter` directory and on iOS the
+app's `Documents` directory - neither is a cache, so recordings survive an app
+restart and are removed only when the app is uninstalled.
+
+The previous `Directory.systemTemp` location was not viable: on Android it
+resolves inside `code_cache`, which the OS is free to evict.
 
 ## Repository layout notes
 

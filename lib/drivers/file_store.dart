@@ -19,6 +19,25 @@ abstract class FileSink {
   Future<void> close();
 }
 
+/// Size and modification time of one file.
+///
+/// A plain data holder rather than `dart:io`'s `FileStat`, so that `services/`
+/// can ask how big a recording is without importing `dart:io`.
+class FileInfo {
+  const FileInfo({
+    required this.path,
+    required this.sizeBytes,
+    required this.modifiedAt,
+  });
+
+  final String path;
+  final int sizeBytes;
+  final DateTime modifiedAt;
+
+  @override
+  String toString() => 'FileInfo($path, $sizeBytes B, $modifiedAt)';
+}
+
 /// All filesystem access the app performs.
 ///
 /// Abstract so that `services/` never imports `dart:io`, which keeps the domain
@@ -29,6 +48,16 @@ abstract class FileStore {
   Future<FileSink> openWrite(String path);
 
   Future<Uint8List> read(String path);
+
+  /// Reads bytes `[start, end)` of [path], clamped to the end of the file.
+  ///
+  /// The library reads the 44-byte WAV header of every recording; without this
+  /// it would have to pull whole multi-megabyte files into memory to look at
+  /// their first few bytes.
+  Future<Uint8List> readRange(String path, int start, int end);
+
+  /// Size and modification time of [path], or `null` when it does not exist.
+  Future<FileInfo?> stat(String path);
 
   Future<void> writeBytes(String path, List<int> bytes);
 
@@ -57,6 +86,36 @@ class IoFileStore implements FileStore {
 
   @override
   Future<Uint8List> read(String path) => File(path).readAsBytes();
+
+  @override
+  Future<Uint8List> readRange(String path, int start, int end) async {
+    if (start < 0) {
+      throw ArgumentError.value(start, 'start', 'must be >= 0');
+    }
+    if (end < start) {
+      throw ArgumentError.value(end, 'end', 'must be >= start');
+    }
+    if (end == start) return Uint8List(0);
+    final handle = await File(path).open();
+    try {
+      await handle.setPosition(start);
+      return await handle.read(end - start);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  @override
+  Future<FileInfo?> stat(String path) async {
+    final file = File(path);
+    if (!await file.exists()) return null;
+    final stat = await file.stat();
+    return FileInfo(
+      path: path,
+      sizeBytes: stat.size,
+      modifiedAt: stat.modified,
+    );
+  }
 
   @override
   Future<void> writeBytes(String path, List<int> bytes) async {

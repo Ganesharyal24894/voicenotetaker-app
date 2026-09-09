@@ -144,6 +144,81 @@ void main() {
     await expectLater(store.delete(p), completes);
   });
 
+  group('readRange, which the library uses to read WAV headers', () {
+    test('returns exactly the bytes asked for', () async {
+      final p = path('range.bin');
+      await store.writeBytes(p, List<int>.generate(100, (i) => i));
+
+      expect(await store.readRange(p, 0, 4), equals([0, 1, 2, 3]));
+      expect(await store.readRange(p, 40, 44), equals([40, 41, 42, 43]));
+      expect(await store.readRange(p, 99, 100), equals([99]));
+    });
+
+    test('does not read the rest of the file', () async {
+      // The point of the method: a 10 MB recording must not be pulled into
+      // memory to look at its 44-byte header.
+      final p = path('big.bin');
+      await store.writeBytes(p, Uint8List(10 * 1024 * 1024));
+      final head = await store.readRange(p, 0, 44);
+      expect(head, hasLength(44));
+    });
+
+    test('is clamped to the end of the file', () async {
+      final p = path('short.bin');
+      await store.writeBytes(p, [1, 2, 3]);
+      expect(await store.readRange(p, 0, 4096), equals([1, 2, 3]));
+      expect(await store.readRange(p, 3, 4096), isEmpty);
+      expect(await store.readRange(p, 10, 20), isEmpty);
+    });
+
+    test('an empty range reads nothing', () async {
+      final p = path('empty-range.bin');
+      await store.writeBytes(p, [1, 2, 3]);
+      expect(await store.readRange(p, 2, 2), isEmpty);
+    });
+
+    test('rejects a nonsense range', () async {
+      final p = path('bad-range.bin');
+      await store.writeBytes(p, [1, 2, 3]);
+      expect(() => store.readRange(p, -1, 2), throwsArgumentError);
+      expect(() => store.readRange(p, 2, 1), throwsArgumentError);
+    });
+
+    test('a missing file throws rather than pretending to be empty', () async {
+      await expectLater(
+        store.readRange(path('nope.bin'), 0, 4),
+        throwsA(isA<FileSystemException>()),
+      );
+    });
+  });
+
+  group('stat', () {
+    test('reports the size and modification time', () async {
+      final p = path('stat.bin');
+      final before = DateTime.now().subtract(const Duration(seconds: 2));
+      await store.writeBytes(p, List<int>.filled(1234, 7));
+
+      final info = (await store.stat(p))!;
+      expect(info.path, p);
+      expect(info.sizeBytes, 1234);
+      expect(info.modifiedAt.isAfter(before), isTrue);
+      expect(info.toString(), contains('1234 B'));
+    });
+
+    test('sees a file grow as it is written', () async {
+      final p = path('growing.wav');
+      final sink = await store.openWrite(p);
+      await sink.add(List<int>.filled(44, 0));
+      await sink.close();
+
+      expect((await store.stat(p))!.sizeBytes, 44);
+    });
+
+    test('a missing file has no stat', () async {
+      expect(await store.stat(path('missing.bin')), isNull);
+    });
+  });
+
   test('join does not double the separator', () async {
     final sep = Platform.pathSeparator;
     expect(store.join('/tmp', 'x'), '/tmp${sep}x');

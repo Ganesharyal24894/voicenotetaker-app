@@ -2,12 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../drivers/audio_player.dart';
 import '../drivers/ble_transport.dart';
 import '../drivers/file_store.dart';
 import '../model/audio_codec.dart';
 import '../model/device_state.dart';
+import '../model/level_reading.dart';
+import '../model/recording_info.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
+import '../services/library_service.dart';
 import '../services/recording_service.dart';
 
 /// What the app is doing right now, as one flat enum the placeholder view can
@@ -32,6 +36,8 @@ class AppController extends ChangeNotifier {
     required FileStore fileStore,
     required this._recordingsDirectory,
     RecordingService? recordingService,
+    LibraryService? libraryService,
+    AudioPlayer? audioPlayer,
     AudioCodec preferredCodec = AudioCodec.imaAdpcm,
     // The public parameter name `preferredCodec:` is part of the existing API,
     // while the field behind it is private because it is now reached through a
@@ -40,6 +46,12 @@ class AppController extends ChangeNotifier {
   })  : _preferredCodec = preferredCodec,
         _transport = transport,
         _fileStore = fileStore,
+        _player = audioPlayer,
+        _library = libraryService ??
+            LibraryService(
+              fileStore: fileStore,
+              directory: _recordingsDirectory,
+            ),
         _recorder = recordingService ??
             RecordingService(transport: transport, fileStore: fileStore);
 
@@ -47,6 +59,11 @@ class AppController extends ChangeNotifier {
   final FileStore _fileStore;
   final String _recordingsDirectory;
   final RecordingService _recorder;
+  final LibraryService _library;
+
+  /// Null when the app was built without a playback driver; every playback
+  /// method is then a no-op rather than a crash.
+  final AudioPlayer? _player;
 
   AudioCodec _preferredCodec;
 
@@ -67,6 +84,9 @@ class AppController extends ChangeNotifier {
   StreamSubscription<DiscoveredDevice>? _scanSubscription;
   StreamSubscription<BleConnectionStatus>? _connectionSubscription;
   StreamSubscription<CaptureStats>? _statsSubscription;
+  StreamSubscription<LevelReading>? _levelSubscription;
+  StreamSubscription<List<RecordingInfo>>? _librarySubscription;
+  StreamSubscription<PlaybackState>? _playbackSubscription;
 
   AppPhase _phase = AppPhase.idle;
   BleAvailability _availability = BleAvailability.unknown;
@@ -75,12 +95,43 @@ class AppController extends ChangeNotifier {
   CaptureStats _stats = const CaptureStats();
   RecordingMetadata? _lastRecording;
   String? _errorMessage;
+  LevelReading? _level;
+  List<RecordingInfo> _recordings = const <RecordingInfo>[];
+  PlaybackState _playback = PlaybackState.idle;
+  RecordingInfo? _nowPlaying;
+  String? _playbackError;
 
   AppPhase get phase => _phase;
   BleAvailability get availability => _availability;
   List<DiscoveredDevice> get devices => List.unmodifiable(_devices);
   DiscoveredDevice? get connectedDevice => _connectedDevice;
   CaptureStats get stats => _stats;
+
+  /// Loudness of the block being recorded right now, `null` when nothing is
+  /// being recorded or no audio has arrived yet.
+  LevelReading? get level => _level;
+
+  /// Peak of the current block in whole dBFS, for the recording screen's
+  /// readout. `null` means there is nothing to show.
+  int? get peakDbfs => _level?.peakDbfs.round();
+
+  /// Saved recordings, newest first.
+  List<RecordingInfo> get recordings => _recordings;
+
+  /// Whether a playback driver was supplied at all.
+  bool get canPlay => _player != null;
+
+  /// Position, duration and playing/paused of the loaded recording.
+  PlaybackState get playbackState => _playback;
+
+  /// The recording [playbackState] describes, when it was opened through
+  /// [playRecording].
+  RecordingInfo? get nowPlaying => _nowPlaying;
+
+  /// Last playback failure, cleared when playback is next started.
+  String? get playbackError => _playbackError;
+
+  bool get isPlaying => _playback.isPlaying;
 
   /// Stream info the device reported for the capture in progress, or the last
   /// one. Null before the first recording starts.
@@ -99,6 +150,25 @@ class AppController extends ChangeNotifier {
       _stats = stats;
       notifyListeners();
     });
+    _levelSubscription = _recorder.levels.listen((reading) {
+      _level = reading;
+      notifyListeners();
+    });
+    _librarySubscription = _library.recordings.listen((recordings) {
+      _recordings = recordings;
+      notifyListeners();
+    });
+    _playbackSubscription = _player?.state.listen(
+      (state) {
+        _playback = state;
+        notifyListeners();
+      },
+      onError: (Object error) {
+        _playbackError = '$error';
+        notifyListeners();
+      },
+    );
+    await refreshLibrary();
     try {
       _availability = await _transport.currentAvailability();
     } on BleTransportException catch (e) {
@@ -193,7 +263,11 @@ class AppController extends ChangeNotifier {
     final device = _connectedDevice;
     if (device == null || isRecording) return;
     _errorMessage = null;
-    final path = _fileStore.join(_recordingsDirectory, _newFileName());
+    _level = null;
+    final path = _fileStore.join(
+      _recordingsDirectory,
+      RecordingNaming.fileName(DateTime.now()),
+    );
     try {
       await _recorder.start(
         deviceId: device.id,
@@ -218,18 +292,119 @@ class AppController extends ChangeNotifier {
       _lastRecording = await _recorder.stop();
       _stats = _lastRecording!.stats;
     } on RecordingException catch (e) {
+      _level = null;
       _fail(e.message);
       return;
     }
+    _level = null;
+    // The file only exists once the header has been patched and the sink
+    // closed, so the library is re-read here rather than when the capture
+    // started.
+    await refreshLibrary();
     _setPhase(_connectedDevice == null ? AppPhase.idle : AppPhase.connected);
   }
 
-  /// Sortable, collision-free filename: `voicenote-20260910-143005.wav`.
-  String _newFileName() {
-    final now = DateTime.now();
-    String two(int v) => v.toString().padLeft(2, '0');
-    return 'voicenote-${now.year}${two(now.month)}${two(now.day)}'
-        '-${two(now.hour)}${two(now.minute)}${two(now.second)}.wav';
+  /// Re-reads the recordings directory.
+  Future<void> refreshLibrary() async {
+    try {
+      _recordings = await _library.refresh();
+    } on Object catch (error) {
+      // A library that cannot be listed is not a reason to break the app; the
+      // message is surfaced and the previous list is kept.
+      _errorMessage = 'Could not read the recordings folder: $error';
+    }
+    notifyListeners();
+  }
+
+  /// Deletes [recording] and refreshes the list.
+  Future<void> deleteRecording(RecordingInfo recording) async {
+    if (_nowPlaying?.path == recording.path) await stopPlayback();
+    try {
+      // The service re-lists the directory itself, so the deletion and the
+      // list can never disagree.
+      await _library.delete(recording.path);
+      _recordings = _library.current;
+    } on Object catch (error) {
+      _errorMessage = 'Could not delete ${recording.name}: $error';
+    }
+    notifyListeners();
+  }
+
+  /// Loads [recording] into the player and starts it.
+  Future<void> playRecording(RecordingInfo recording) async {
+    final player = _player;
+    if (player == null) return;
+    _playbackError = null;
+    try {
+      if (_nowPlaying?.path != recording.path) {
+        await player.load(recording.path);
+        _nowPlaying = recording;
+      }
+      await player.play();
+    } on AudioPlayerException catch (e) {
+      _nowPlaying = null;
+      _playbackError = e.message;
+    }
+    notifyListeners();
+  }
+
+  /// Resumes what is loaded; does nothing when nothing is.
+  Future<void> resumePlayback() async {
+    final player = _player;
+    if (player == null || _nowPlaying == null) return;
+    try {
+      await player.play();
+    } on AudioPlayerException catch (e) {
+      _playbackError = e.message;
+    }
+    notifyListeners();
+  }
+
+  Future<void> pausePlayback() async {
+    final player = _player;
+    if (player == null) return;
+    try {
+      await player.pause();
+    } on AudioPlayerException catch (e) {
+      _playbackError = e.message;
+    }
+    notifyListeners();
+  }
+
+  Future<void> stopPlayback() async {
+    final player = _player;
+    if (player == null) return;
+    try {
+      await player.stop();
+    } on AudioPlayerException catch (e) {
+      _playbackError = e.message;
+    }
+    _playback = PlaybackState(
+      isPlaying: false,
+      position: Duration.zero,
+      duration: _playback.duration,
+      path: _playback.path,
+    );
+    notifyListeners();
+  }
+
+  /// Play/pause on whatever is loaded, loading [recording] first if needed.
+  Future<void> togglePlayback(RecordingInfo recording) {
+    if (_nowPlaying?.path == recording.path && _playback.isPlaying) {
+      return pausePlayback();
+    }
+    return playRecording(recording);
+  }
+
+  Future<void> seekPlayback(Duration position) async {
+    final player = _player;
+    if (player == null || _nowPlaying == null) return;
+    try {
+      await player.seek(position < Duration.zero ? Duration.zero : position);
+    } on AudioPlayerException catch (e) {
+      _playbackError = e.message;
+    }
+    notifyListeners();
   }
 
   void _setPhase(AppPhase phase) {
@@ -261,7 +436,15 @@ class AppController extends ChangeNotifier {
     _connectionSubscription = null;
     await _statsSubscription?.cancel();
     _statsSubscription = null;
+    await _levelSubscription?.cancel();
+    _levelSubscription = null;
+    await _librarySubscription?.cancel();
+    _librarySubscription = null;
+    await _playbackSubscription?.cancel();
+    _playbackSubscription = null;
     await _recorder.dispose();
+    await _library.dispose();
+    await _player?.dispose();
     await _transport.dispose();
   }
 }
