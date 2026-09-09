@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:universal_ble/universal_ble.dart' as ub;
@@ -20,6 +21,17 @@ class UniversalBleTransport implements BleTransport {
 
   /// Guarded so `connect` does not rediscover services on every call.
   final Set<String> _servicesDiscovered = <String>{};
+
+  /// 247 carries our 244-byte notification value plus the 3-byte ATT header.
+  /// Android 14+ forces 517 on the first request and ignores later ones, so
+  /// asking for exactly what we need is not a limitation in practice.
+  static const int desiredMtu = 247;
+
+  @override
+  int? negotiatedMtu;
+
+  void _log(String message) =>
+      developer.log(message, name: 'BleTransport');
 
   StreamSubscription<Uint8List>? _frameSubscription;
   StreamController<Uint8List>? _frameController;
@@ -122,6 +134,33 @@ class UniversalBleTransport implements BleTransport {
       // read/write/subscribe on a custom service will resolve.
       await ub.UniversalBle.discoverServices(deviceId);
       _servicesDiscovered.add(deviceId);
+
+      // Negotiate up from the 23-byte default ATT MTU, which leaves only
+      // 20 bytes of notification payload -- far too small for a 166-byte
+      // ADPCM frame. Without this the device correctly refuses to send and
+      // every frame is dropped, producing a WAV containing only its header.
+      //
+      // Android honours this; on iOS Core Bluetooth negotiates on its own
+      // and the call is a no-op. Neither is fatal if it fails: the device
+      // reports the size it can actually carry, so we log and continue
+      // rather than refusing an otherwise healthy connection.
+      try {
+        negotiatedMtu = await ub.UniversalBle.requestMtu(deviceId, desiredMtu);
+      } on Exception catch (e) {
+        negotiatedMtu = null;
+        _log('MTU request failed, continuing with the platform default: $e');
+      }
+
+      // Shorter connection interval, which is what actually buys throughput
+      // for a sustained notify stream. Android-only; elsewhere it is ignored.
+      try {
+        await ub.UniversalBle.requestConnectionPriority(
+          deviceId,
+          ub.BleConnectionPriority.highPerformance,
+        );
+      } on Exception catch (e) {
+        _log('connection priority request failed: $e');
+      }
     } catch (e) {
       throw BleTransportException('could not connect to $deviceId', e);
     }

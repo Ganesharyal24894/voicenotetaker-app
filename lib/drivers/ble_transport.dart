@@ -32,6 +32,12 @@ abstract class BleTransport {
 
   /// Connects and discovers services. Throws [BleTransportException] on
   /// failure.
+  /// ATT MTU negotiated on the current link, or null when unknown.
+  ///
+  /// Worth surfacing: the 23-byte default leaves 20 bytes of notification
+  /// payload, which cannot carry a 166-byte ADPCM frame at all.
+  int? get negotiatedMtu;
+
   Future<void> connect(String deviceId, {Duration timeout});
 
   Future<void> disconnect(String deviceId);
