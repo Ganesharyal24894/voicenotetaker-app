@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/controller/app_controller.dart';
+import 'package:voicenotetaker_app/drivers/audio_player.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/drivers/file_store.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
@@ -18,9 +19,57 @@ import 'package:voicenotetaker_app/view/theme.dart';
 /// even importable from `view/`.
 class MockBleTransport extends Mock implements BleTransport {}
 
-/// mocktail needs a fallback for any enum used with `any()`.
+/// Fake player. The view tests never touch `just_audio`, and never need audio
+/// hardware: everything the playback screen renders arrives on [FakePlayback].
+class MockAudioPlayer extends Mock implements AudioPlayer {}
+
+/// mocktail needs a fallback for any non-primitive type used with `any()`.
 void registerViewFallbacks() {
   registerFallbackValue(AudioCodec.imaAdpcm);
+  registerFallbackValue(Duration.zero);
+}
+
+/// An [AudioPlayer] the tests drive by hand.
+///
+/// mocktail records the calls the screen makes - `load`, `play`, `seek` - and
+/// [emit] pushes the [PlaybackState] the screen renders. Nothing is emitted on
+/// its own: a fake that reported "playing" because `play()` was called would
+/// hide exactly the bug these tests exist to catch.
+class FakePlayback {
+  FakePlayback() {
+    when(() => player.state).thenAnswer((_) => _states.stream);
+    when(() => player.load(any())).thenAnswer((_) async {});
+    when(() => player.play()).thenAnswer((_) async {});
+    when(() => player.pause()).thenAnswer((_) async {});
+    when(() => player.stop()).thenAnswer((_) async {});
+    when(() => player.seek(any())).thenAnswer((_) async {});
+    when(() => player.dispose()).thenAnswer((_) async {});
+  }
+
+  final MockAudioPlayer player = MockAudioPlayer();
+  final StreamController<PlaybackState> _states =
+      StreamController<PlaybackState>.broadcast();
+
+  /// Reports a position, exactly as the driver's own stream would.
+  void emit({
+    required bool isPlaying,
+    required Duration position,
+    Duration? duration,
+    String? path,
+  }) =>
+      _states.add(
+        PlaybackState(
+          isPlaying: isPlaying,
+          position: position,
+          duration: duration,
+          path: path,
+        ),
+      );
+
+  /// Fails the way the driver does when the platform reports an error.
+  void fail(Object error) => _states.addError(error);
+
+  Future<void> close() => _states.close();
 }
 
 /// The recorder as the scan screen sees it.
@@ -39,8 +88,10 @@ const DiscoveredDevice unknownDevice = DiscoveredDevice(
 
 /// Everything a view test needs, wired together.
 class ViewHarness {
-  ViewHarness({List<DiscoveredDevice> devices = const <DiscoveredDevice>[]})
-      : transport = MockBleTransport() {
+  ViewHarness({
+    List<DiscoveredDevice> devices = const <DiscoveredDevice>[],
+    AudioPlayer? audioPlayer,
+  }) : transport = MockBleTransport() {
     when(() => transport.currentAvailability())
         .thenAnswer((_) async => BleAvailability.poweredOn);
     when(() => transport.availability)
@@ -64,6 +115,7 @@ class ViewHarness {
     controller = AppController(
       transport: transport,
       fileStore: fileStore,
+      audioPlayer: audioPlayer,
       recordingsDirectory: recordingsDirectory,
     );
   }

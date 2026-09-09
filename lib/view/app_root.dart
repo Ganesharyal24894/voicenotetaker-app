@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../model/recording_info.dart';
 import 'developer_view.dart';
 import 'home_view.dart';
 import 'library_view.dart';
@@ -92,11 +93,31 @@ class _AppRootState extends State<AppRoot> {
     );
   }
 
+  /// The saved file behind [entry], or null if the library does not list it.
+  ///
+  /// The path is what identifies a recording everywhere below `view/` - it is
+  /// the key [AppController] itself compares - and it is the one thing a
+  /// [RecordingEntry] carries over from the [RecordingInfo] it was projected
+  /// from, so it is what the two are matched on here.
+  RecordingInfo? _recordingFor(RecordingEntry entry) {
+    final path = entry.path;
+    if (path == null) return null;
+    for (final info in widget.controller.recordings) {
+      if (info.path == path) return info;
+    }
+    return null;
+  }
+
   void _openPlayback(BuildContext context, RecordingEntry entry) {
+    // Resolved as the screen is pushed, so playback is loaded from the file
+    // the user actually tapped rather than from whatever the list holds later.
+    final recording = _recordingFor(entry);
     _push(
       context,
       (context) => PlaybackView(
+        controller: widget.controller,
         entry: entry,
+        recording: recording,
         onBack: () => Navigator.of(context).pop(),
       ),
     );
