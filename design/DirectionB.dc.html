@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #A78BFA; } a:hover { color: #C4B5FD; }
+    .dirB { font-family: 'Space Grotesk', system-ui, sans-serif; }
+    .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+  </style>
+</helmet>
+
+<div class="dirB" style="width: 880px; height: 970px; box-sizing: border-box; background: #08070C; padding: 28px; display: flex; flex-direction: column; gap: 20px;">
+
+  <div style="display: flex; flex-direction: column; gap: 6px;">
+    <div style="display: flex; align-items: baseline; gap: 12px;">
+      <div style="font-size: 20px; font-weight: 600; color: #F4F1FB; letter-spacing: -0.01em;">Direction B &mdash; Studio console</div>
+      <div style="font-size: 13px; font-weight: 400; color: #665F78;">Space Grotesk + IBM Plex Mono &middot; dense &middot; telemetry-forward</div>
+    </div>
+    <div style="font-size: 13px; font-weight: 400; color: #9A93AC; line-height: 1.5; max-width: 700px;">Treats the device as instrumentation. Link quality, codec, packet loss and battery are on screen because this is real hardware that can fail. Monospace numerics, tighter grid, visible structure. <span style="color:#665F78;">Trade-off: busier, and it can read as intimidating to a non-technical user.</span></div>
+  </div>
+
+  <div style="display: flex; gap: 44px;">
+
+    <!-- ============ Screen 1: connected / idle ============ -->
+    <div style="width: 390px; height: 844px; background: #0B0A0F; border: 1px solid #2C2738; border-radius: 44px; overflow: hidden; display: flex; flex-direction: column; padding: 60px 20px 30px 20px; box-sizing: border-box; gap: 16px;">
+
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 6px;">
+        <div style="font-size: 18px; font-weight: 700; color: #F4F1FB; letter-spacing: -0.02em;">VOICENOTETAKER</div>
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#8B5CF6" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"></polyline></svg>
+      </div>
+
+      <div style="background: #14121B; border: 1px solid #2C2738; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 14px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="width: 7px; height: 7px; border-radius: 50%; background: #4ADE80;"></div>
+            <div style="font-size: 13px; font-weight: 500; color: #4ADE80;">LINK UP</div>
+          </div>
+          <div class="mono" style="font-size: 12px; color: #665F78;">EB:6B:5E:4C:33:A3</div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px;">
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <div style="font-size: 10px; font-weight: 500; color: #665F78; letter-spacing: 0.09em;">CODEC</div>
+            <div class="mono" style="font-size: 14px; color: #F4F1FB;">ADPCM</div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <div style="font-size: 10px; font-weight: 500; color: #665F78; letter-spacing: 0.09em;">RATE</div>
+            <div class="mono" style="font-size: 14px; color: #F4F1FB;">16 kHz</div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <div style="font-size: 10px; font-weight: 500; color: #665F78; letter-spacing: 0.09em;">BATTERY</div>
+            <div class="mono" style="font-size: 14px; color: #F4F1FB;">62%</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;">
+        <div style="width: 132px; height: 132px; border-radius: 22px; background: #8B5CF6; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px;">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#0B0A0F" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path><path d="M19 11v1a7 7 0 0 1-14 0v-1"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+          <div style="font-size: 12px; font-weight: 700; color: #0B0A0F; letter-spacing: 0.1em;">RECORD</div>
+        </div>
+        <div class="mono" style="font-size: 12px; color: #665F78;">2.1 GB free &middot; ~18 h</div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="font-size: 10px; font-weight: 500; color: #665F78; letter-spacing: 0.09em; padding: 0 6px;">LIBRARY &middot; 3</div>
+        <div style="background: #14121B; border: 1px solid #2C2738; border-radius: 12px; overflow: hidden;">
+          <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid #1D1927;">
+            <div style="flex-grow: 1; font-size: 14px; font-weight: 500; color: #F4F1FB;">Standup notes</div>
+            <div class="mono" style="font-size: 12px; color: #665F78;">04:12</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid #1D1927;">
+            <div style="flex-grow: 1; font-size: 14px; font-weight: 500; color: #F4F1FB;">Call with supplier</div>
+            <div class="mono" style="font-size: 12px; color: #665F78;">11:03</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px;">
+            <div style="flex-grow: 1; font-size: 14px; font-weight: 500; color: #F4F1FB;">Workshop walkthrough</div>
+            <div class="mono" style="font-size: 12px; color: #665F78;">27:55</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ Screen 2: recording ============ -->
+    <div style="width: 390px; height: 844px; background: #0B0A0F; border: 1px solid #2C2738; border-radius: 44px; overflow: hidden; display: flex; flex-direction: column; padding: 60px 20px 30px 20px; box-sizing: border-box; gap: 16px;">
+
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 6px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="width: 7px; height: 7px; border-radius: 50%; background: #FB7185;"></div>
+          <div style="font-size: 13px; font-weight: 700; color: #FB7185; letter-spacing: 0.08em;">REC</div>
+        </div>
+        <div class="mono" style="font-size: 12px; color: #665F78;">67.2 kbps</div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0;">
+        <div class="mono" style="font-size: 54px; font-weight: 400; color: #F4F1FB; letter-spacing: -0.02em;">02:47</div>
+        <div class="mono" style="font-size: 12px; color: #665F78;">2.7 MB written</div>
+      </div>
+
+      <div style="background: #14121B; border: 1px solid #2C2738; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: flex; align-items: baseline; justify-content: space-between;">
+          <div style="font-size: 10px; font-weight: 500; color: #665F78; letter-spacing: 0.09em;">INPUT LEVEL</div>
+          <div class="mono" style="font-size: 12px; color: #A78BFA;">&minus;18 dBFS</div>
+        </div>
+        <div style="height: 8px; border-radius: 4px; background: #1D1927; overflow: hidden; display: flex;">
+          <div style="width: 68%; background: #8B5CF6;"></div>
+          <div style="width: 6%; background: #C4B5FD;"></div>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div class="mono" style="font-size: 10px; color: #3A3350;">&minus;60</div>
+          <div class="mono" style="font-size: 10px; color: #3A3350;">&minus;30</div>
+          <div class="mono" style="font-size: 10px; color: #3A3350;">&minus;12</div>
+          <div class="mono" style="font-size: 10px; color: #3A3350;">0</div>
+        </div>
+      </div>
+
+      <div style="flex-grow: 1; background: #14121B; border: 1px solid #2C2738; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 14px;">
+        <div style="font-size: 10px; font-weight: 500; color: #665F78; letter-spacing: 0.09em;">WAVEFORM</div>
+        <div style="flex-grow: 1; display: flex; align-items: center; gap: 2px;">
+          <div style="flex-grow:1;height:18%;border-radius:1px;background:#4A4066;"></div>
+          <div style="flex-grow:1;height:34%;border-radius:1px;background:#5B4E80;"></div>
+          <div style="flex-grow:1;height:22%;border-radius:1px;background:#4A4066;"></div>
+          <div style="flex-grow:1;height:51%;border-radius:1px;background:#6D28D9;"></div>
+          <div style="flex-grow:1;height:71%;border-radius:1px;background:#7C3AED;"></div>
+          <div style="flex-grow:1;height:39%;border-radius:1px;background:#5B4E80;"></div>
+          <div style="flex-grow:1;height:86%;border-radius:1px;background:#8B5CF6;"></div>
+          <div style="flex-grow:1;height:57%;border-radius:1px;background:#6D28D9;"></div>
+          <div style="flex-grow:1;height:97%;border-radius:1px;background:#A78BFA;"></div>
+          <div style="flex-grow:1;height:64%;border-radius:1px;background:#7C3AED;"></div>
+          <div style="flex-grow:1;height:44%;border-radius:1px;background:#6D28D9;"></div>
+          <div style="flex-grow:1;height:79%;border-radius:1px;background:#8B5CF6;"></div>
+          <div style="flex-grow:1;height:100%;border-radius:1px;background:#C4B5FD;"></div>
+          <div style="flex-grow:1;height:61%;border-radius:1px;background:#7C3AED;"></div>
+          <div style="flex-grow:1;height:31%;border-radius:1px;background:#5B4E80;"></div>
+          <div style="flex-grow:1;height:74%;border-radius:1px;background:#8B5CF6;"></div>
+          <div style="flex-grow:1;height:48%;border-radius:1px;background:#6D28D9;"></div>
+          <div style="flex-grow:1;height:88%;border-radius:1px;background:#A78BFA;"></div>
+          <div style="flex-grow:1;height:26%;border-radius:1px;background:#4A4066;"></div>
+          <div style="flex-grow:1;height:55%;border-radius:1px;background:#6D28D9;"></div>
+          <div style="flex-grow:1;height:36%;border-radius:1px;background:#5B4E80;"></div>
+          <div style="flex-grow:1;height:69%;border-radius:1px;background:#8B5CF6;"></div>
+          <div style="flex-grow:1;height:20%;border-radius:1px;background:#4A4066;"></div>
+          <div style="flex-grow:1;height:42%;border-radius:1px;background:#5B4E80;"></div>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="flex-grow: 1; background: #14121B; border: 1px solid #2C2738; border-radius: 12px; padding: 12px 14px; display: flex; align-items: baseline; justify-content: space-between;">
+          <div style="font-size: 10px; font-weight: 500; color: #665F78; letter-spacing: 0.09em;">LOSS</div>
+          <div class="mono" style="font-size: 14px; color: #4ADE80;">0.00%</div>
+        </div>
+        <div style="width: 68px; height: 68px; border-radius: 18px; background: #FB7185; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 22px; height: 22px; border-radius: 4px; background: #0B0A0F;"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

@@ -1,0 +1,117 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;500&family=Manrope:wght@200;300;500&family=Instrument+Sans:wght@400;500&family=Schibsted+Grotesk:wght@400;500&family=Bricolage+Grotesque:wght@200;300;500&family=Archivo:wght@200;300;500&family=Chivo:wght@200;300;500&family=Familjen+Grotesk:wght@400;500&family=Onest:wght@200;300;500&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #A78BFA; } a:hover { color: #C4B5FD; }
+    .fb { font-family: 'Sora', system-ui, sans-serif; }
+    .cell { background: #0B0A0F; border: 1px solid #1D1927; border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+    .nm { font-family: 'Sora', sans-serif; font-size: 13px; font-weight: 500; color: #A78BFA; letter-spacing: -0.01em; }
+    .note { font-family: 'Sora', sans-serif; font-size: 11px; font-weight: 300; color: #665F78; line-height: 1.45; }
+    .tm { font-size: 46px; color: #F4F1FB; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+    .ti { font-size: 17px; color: #F4F1FB; letter-spacing: -0.02em; }
+    .rw { display: flex; align-items: baseline; justify-content: space-between; border-top: 1px solid #1D1927; padding-top: 10px; }
+    .rl { font-size: 14px; color: #F4F1FB; }
+    .rm { font-size: 12px; color: #665F78; }
+  </style>
+</helmet>
+
+<div class="fb" style="width: 1180px; height: 990px; box-sizing: border-box; background: #08070C; padding: 34px; display: flex; flex-direction: column; gap: 20px;">
+
+  <div style="display: flex; flex-direction: column; gap: 7px;">
+    <div style="font-size: 22px; font-weight: 500; color: #F4F1FB; letter-spacing: -0.02em;">Direction A &mdash; type options</div>
+    <div style="font-size: 13px; font-weight: 300; color: #9A93AC; max-width: 860px; line-height: 1.55;">Same layout, same purple, nine faces. The large timer is where character actually shows, so each is shown at the size it will be read. Note which ones offer a genuinely light weight &mdash; A depends on thin numerals for its calm, and four of these bottom out at Regular.</div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px;">
+
+    <div class="cell">
+      <div style="display:flex;align-items:baseline;gap:8px;"><div class="nm">Sora</div><div class="note">current &middot; w200</div></div>
+      <div class="tm" style="font-family:'Sora',sans-serif;font-weight:200;">02:47</div>
+      <div class="ti" style="font-family:'Sora',sans-serif;font-weight:500;">voiceNotetaker</div>
+      <div class="rw"><div class="rl" style="font-family:'Sora',sans-serif;font-weight:300;">Standup notes</div><div class="rm" style="font-family:'Sora',sans-serif;font-weight:300;">4:12</div></div>
+      <div class="note">Geometric, slightly technical. Open counters, very light weights available. Neutral to a fault.</div>
+    </div>
+
+    <div class="cell">
+      <div style="display:flex;align-items:baseline;gap:8px;"><div class="nm">Manrope</div><div class="note">w200</div></div>
+      <div class="tm" style="font-family:'Manrope',sans-serif;font-weight:200;">02:47</div>
+      <div class="ti" style="font-family:'Manrope',sans-serif;font-weight:500;">voiceNotetaker</div>
+      <div class="rw"><div class="rl" style="font-family:'Manrope',sans-serif;font-weight:300;">Standup notes</div><div class="rm" style="font-family:'Manrope',sans-serif;font-weight:300;">4:12</div></div>
+      <div class="note">Semi-rounded geometric. Softer than Sora, unusually good numerals. My pick if you want A warmer.</div>
+    </div>
+
+    <div class="cell">
+      <div style="display:flex;align-items:baseline;gap:8px;"><div class="nm">Instrument Sans</div><div class="note">w400 &middot; no light</div></div>
+      <div class="tm" style="font-family:'Instrument Sans',sans-serif;font-weight:400;">02:47</div>
+      <div class="ti" style="font-family:'Instrument Sans',sans-serif;font-weight:500;">voiceNotetaker</div>
+      <div class="rw"><div class="rl" style="font-family:'Instrument Sans',sans-serif;font-weight:400;">Standup notes</div><div class="rm" style="font-family:'Instrument Sans',sans-serif;font-weight:400;">4:12</div></div>
+      <div class="note">Compact modern grotesque with real personality. Denser colour &mdash; changes A from airy to solid.</div>
+    </div>
+
+    <div class="cell">
+      <div style="display:flex;align-items:baseline;gap:8px;"><div class="nm">Schibsted Grotesk</div><div class="note">w400 &middot; no light</div></div>
+      <div class="tm" style="font-family:'Schibsted Grotesk',sans-serif;font-weight:400;">02:47</div>
+      <div class="ti" style="font-family:'Schibsted Grotesk',sans-serif;font-weight:500;">voiceNotetaker</div>
+      <div class="rw"><div class="rl" style="font-family:'Schibsted Grotesk',sans-serif;font-weight:400;">Standup notes</div><div class="rm" style="font-family:'Schibsted Grotesk',sans-serif;font-weight:400;">4:12</div></div>
+      <div class="note">Editorial grotesque, built for news UI. Excellent at small sizes; the numerals are confident rather than quiet.</div>
+    </div>
+
+    <div class="cell">
+      <div style="display:flex;align-items:baseline;gap:8px;"><div class="nm">Bricolage Grotesque</div><div class="note">w200</div></div>
+      <div class="tm" style="font-family:'Bricolage Grotesque',sans-serif;font-weight:200;">02:47</div>
+      <div class="ti" style="font-family:'Bricolage Grotesque',sans-serif;font-weight:500;">voiceNotetaker</div>
+      <div class="rw"><div class="rl" style="font-family:'Bricolage Grotesque',sans-serif;font-weight:300;">Standup notes</div><div class="rm" style="font-family:'Bricolage Grotesque',sans-serif;font-weight:300;">4:12</div></div>
+      <div class="note">Deliberately imperfect, slightly quirky. The most memorable here &mdash; and the most likely to date.</div>
+    </div>
+
+    <div class="cell">
+      <div style="display:flex;align-items:baseline;gap:8px;"><div class="nm">Archivo</div><div class="note">w200</div></div>
+      <div class="tm" style="font-family:'Archivo',sans-serif;font-weight:200;">02:47</div>
+      <div class="ti" style="font-family:'Archivo',sans-serif;font-weight:500;">voiceNotetaker</div>
+      <div class="rw"><div class="rl" style="font-family:'Archivo',sans-serif;font-weight:300;">Standup notes</div><div class="rm" style="font-family:'Archivo',sans-serif;font-weight:300;">4:12</div></div>
+      <div class="note">Sturdy, slightly wide grotesque. Very legible small; the wide numerals read as instrumentation.</div>
+    </div>
+
+    <div class="cell">
+      <div style="display:flex;align-items:baseline;gap:8px;"><div class="nm">Chivo</div><div class="note">w200</div></div>
+      <div class="tm" style="font-family:'Chivo',sans-serif;font-weight:200;">02:47</div>
+      <div class="ti" style="font-family:'Chivo',sans-serif;font-weight:500;">voiceNotetaker</div>
+      <div class="rw"><div class="rl" style="font-family:'Chivo',sans-serif;font-weight:300;">Standup notes</div><div class="rm" style="font-family:'Chivo',sans-serif;font-weight:300;">4:12</div></div>
+      <div class="note">Grotesque with a wide weight range, so Thin and Black feel like one family. Good hierarchy tool.</div>
+    </div>
+
+    <div class="cell">
+      <div style="display:flex;align-items:baseline;gap:8px;"><div class="nm">Familjen Grotesk</div><div class="note">w400 &middot; no light</div></div>
+      <div class="tm" style="font-family:'Familjen Grotesk',sans-serif;font-weight:400;">02:47</div>
+      <div class="ti" style="font-family:'Familjen Grotesk',sans-serif;font-weight:500;">voiceNotetaker</div>
+      <div class="rw"><div class="rl" style="font-family:'Familjen Grotesk',sans-serif;font-weight:400;">Standup notes</div><div class="rm" style="font-family:'Familjen Grotesk',sans-serif;font-weight:400;">4:12</div></div>
+      <div class="note">Scandinavian, tight apertures, distinctive lowercase g and a. Characterful without being loud.</div>
+    </div>
+
+    <div class="cell">
+      <div style="display:flex;align-items:baseline;gap:8px;"><div class="nm">Onest</div><div class="note">w200</div></div>
+      <div class="tm" style="font-family:'Onest',sans-serif;font-weight:200;">02:47</div>
+      <div class="ti" style="font-family:'Onest',sans-serif;font-weight:500;">voiceNotetaker</div>
+      <div class="rw"><div class="rl" style="font-family:'Onest',sans-serif;font-weight:300;">Standup notes</div><div class="rm" style="font-family:'Onest',sans-serif;font-weight:300;">4:12</div></div>
+      <div class="note">Warm neutral, gently rounded terminals. Friendlier than Sora while staying quiet.</div>
+    </div>
+
+  </div>
+
+  <div style="display: flex; align-items: flex-start; gap: 10px; border-top: 1px solid #1D1927; padding-top: 14px;">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#665F78" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+    <div style="font-size: 12px; font-weight: 300; color: #665F78; line-height: 1.5;">All nine are on Google Fonts, so any is a one-line change. Worth knowing: PNG/PDF export from this canvas cannot embed webfonts, so exported images fall back to a system face &mdash; the live canvas above is the accurate view.</div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

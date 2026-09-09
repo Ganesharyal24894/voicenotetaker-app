@@ -1,0 +1,197 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400;500;600&family=Space+Grotesk:wght@400;600&family=Outfit:wght@300;600&family=IBM+Plex+Mono:wght@400&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #A78BFA; } a:hover { color: #C4B5FD; }
+    .pal { font-family: 'Sora', system-ui, sans-serif; }
+    .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+  </style>
+</helmet>
+
+<div class="pal" style="width: 1180px; height: 920px; box-sizing: border-box; background: #08070C; padding: 34px; display: flex; flex-direction: column; gap: 26px;">
+
+  <div style="display: flex; flex-direction: column; gap: 6px;">
+    <div style="font-size: 22px; font-weight: 500; color: #F4F1FB; letter-spacing: -0.02em;">Theme &mdash; purple on dark</div>
+    <div style="font-size: 13px; font-weight: 300; color: #9A93AC; max-width: 780px; line-height: 1.5;">Shared across all three directions, so what you are choosing between is layout and personality, not colour. The dark surfaces carry a faint purple cast rather than being neutral grey &mdash; it makes the accent feel native instead of stuck on.</div>
+  </div>
+
+  <!-- purple ramp -->
+  <div style="display: flex; flex-direction: column; gap: 12px;">
+    <div style="font-size: 11px; font-weight: 400; color: #665F78; letter-spacing: 0.1em;">PRIMARY &mdash; PURPLE</div>
+    <div style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px;">
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="height: 64px; border-radius: 12px; background: #EDE9FE;"></div>
+        <div class="mono" style="font-size: 11px; color: #9A93AC;">#EDE9FE</div>
+        <div style="font-size: 11px; font-weight: 300; color: #665F78;">100 &middot; on-accent text</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="height: 64px; border-radius: 12px; background: #C4B5FD;"></div>
+        <div class="mono" style="font-size: 11px; color: #9A93AC;">#C4B5FD</div>
+        <div style="font-size: 11px; font-weight: 300; color: #665F78;">300 &middot; peak / highlight</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="height: 64px; border-radius: 12px; background: #A78BFA;"></div>
+        <div class="mono" style="font-size: 11px; color: #9A93AC;">#A78BFA</div>
+        <div style="font-size: 11px; font-weight: 400; color: #A78BFA;">400 &middot; PURPLE TEXT</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="height: 64px; border-radius: 12px; background: #8B5CF6;"></div>
+        <div class="mono" style="font-size: 11px; color: #9A93AC;">#8B5CF6</div>
+        <div style="font-size: 11px; font-weight: 300; color: #665F78;">500 &middot; hover / lift</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="height: 64px; border-radius: 12px; background: #7C3AED;"></div>
+        <div class="mono" style="font-size: 11px; color: #9A93AC;">#7C3AED</div>
+        <div style="font-size: 11px; font-weight: 300; color: #665F78;">600 &middot; pressed</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="height: 64px; border-radius: 12px; background: #6D28D9; box-shadow: 0 0 0 2px #C4B5FD;"></div>
+        <div class="mono" style="font-size: 11px; color: #C4B5FD;">#6D28D9</div>
+        <div style="font-size: 11px; font-weight: 400; color: #A78BFA;">700 &middot; PRIMARY</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="height: 64px; border-radius: 12px; background: rgba(139,92,246,0.16); border: 1px solid rgba(139,92,246,0.30);"></div>
+        <div class="mono" style="font-size: 11px; color: #9A93AC;">500 @ 16%</div>
+        <div style="font-size: 11px; font-weight: 300; color: #665F78;">tint &middot; chips, wells</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display: flex; gap: 26px;">
+
+    <!-- surfaces -->
+    <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 12px;">
+      <div style="font-size: 11px; font-weight: 400; color: #665F78; letter-spacing: 0.1em;">SURFACES &mdash; ELEVATION</div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 14px; background: #08070C; border: 1px solid #1D1927; border-radius: 10px; padding: 13px 15px;">
+          <div style="width: 30px; height: 30px; border-radius: 7px; background: #08070C; border: 1px solid #2C2738;"></div>
+          <div style="flex-grow: 1; font-size: 13px; font-weight: 400; color: #F4F1FB;">Canvas</div>
+          <div class="mono" style="font-size: 11px; color: #665F78;">#08070C</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 14px; background: #0B0A0F; border: 1px solid #1D1927; border-radius: 10px; padding: 13px 15px;">
+          <div style="width: 30px; height: 30px; border-radius: 7px; background: #0B0A0F; border: 1px solid #2C2738;"></div>
+          <div style="flex-grow: 1; font-size: 13px; font-weight: 400; color: #F4F1FB;">Screen</div>
+          <div class="mono" style="font-size: 11px; color: #665F78;">#0B0A0F</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 14px; background: #14121B; border: 1px solid #1D1927; border-radius: 10px; padding: 13px 15px;">
+          <div style="width: 30px; height: 30px; border-radius: 7px; background: #14121B; border: 1px solid #2C2738;"></div>
+          <div style="flex-grow: 1; font-size: 13px; font-weight: 400; color: #F4F1FB;">Card</div>
+          <div class="mono" style="font-size: 11px; color: #665F78;">#14121B</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 14px; background: #1D1927; border: 1px solid #2C2738; border-radius: 10px; padding: 13px 15px;">
+          <div style="width: 30px; height: 30px; border-radius: 7px; background: #1D1927; border: 1px solid #2C2738;"></div>
+          <div style="flex-grow: 1; font-size: 13px; font-weight: 400; color: #F4F1FB;">Raised / track</div>
+          <div class="mono" style="font-size: 11px; color: #665F78;">#1D1927</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 14px; background: #14121B; border: 1px solid #2C2738; border-radius: 10px; padding: 13px 15px;">
+          <div style="width: 30px; height: 30px; border-radius: 7px; background: #2C2738;"></div>
+          <div style="flex-grow: 1; font-size: 13px; font-weight: 400; color: #F4F1FB;">Border / hairline</div>
+          <div class="mono" style="font-size: 11px; color: #665F78;">#2C2738</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- semantic -->
+    <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 12px;">
+      <div style="font-size: 11px; font-weight: 400; color: #665F78; letter-spacing: 0.1em;">DEVICE STATE</div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 14px; background: #14121B; border: 1px solid #1D1927; border-radius: 10px; padding: 13px 15px;">
+          <div style="width: 9px; height: 9px; border-radius: 50%; background: #4ADE80;"></div>
+          <div style="flex-grow: 1; font-size: 13px; font-weight: 400; color: #F4F1FB;">Connected</div>
+          <div class="mono" style="font-size: 11px; color: #665F78;">#4ADE80</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 14px; background: #14121B; border: 1px solid #1D1927; border-radius: 10px; padding: 13px 15px;">
+          <div style="width: 9px; height: 9px; border-radius: 50%; background: #FB7185;"></div>
+          <div style="flex-grow: 1; font-size: 13px; font-weight: 400; color: #F4F1FB;">Recording</div>
+          <div class="mono" style="font-size: 11px; color: #665F78;">#FB7185</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 14px; background: #14121B; border: 1px solid #1D1927; border-radius: 10px; padding: 13px 15px;">
+          <div style="width: 9px; height: 9px; border-radius: 50%; background: #FBBF24;"></div>
+          <div style="flex-grow: 1; font-size: 13px; font-weight: 400; color: #F4F1FB;">Weak link / packets lost</div>
+          <div class="mono" style="font-size: 11px; color: #665F78;">#FBBF24</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 14px; background: #14121B; border: 1px solid #1D1927; border-radius: 10px; padding: 13px 15px;">
+          <div style="width: 9px; height: 9px; border-radius: 50%; background: #F87171;"></div>
+          <div style="flex-grow: 1; font-size: 13px; font-weight: 400; color: #F4F1FB;">Error</div>
+          <div class="mono" style="font-size: 11px; color: #665F78;">#F87171</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 14px; background: #14121B; border: 1px solid #1D1927; border-radius: 10px; padding: 13px 15px;">
+          <div style="width: 9px; height: 9px; border-radius: 50%; background: #665F78;"></div>
+          <div style="flex-grow: 1; font-size: 13px; font-weight: 400; color: #9A93AC;">Disconnected</div>
+          <div class="mono" style="font-size: 11px; color: #665F78;">#665F78</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- type -->
+    <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 12px;">
+      <div style="font-size: 11px; font-weight: 400; color: #665F78; letter-spacing: 0.1em;">TYPE &mdash; ONE PER DIRECTION</div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="background: #14121B; border: 1px solid #1D1927; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 5px;">
+          <div style="font-family: 'Sora', sans-serif; font-size: 24px; font-weight: 300; color: #F4F1FB; letter-spacing: -0.02em;">Sora 02:47</div>
+          <div style="font-size: 11px; font-weight: 300; color: #665F78;">Direction A &middot; geometric, quiet, thin numerals</div>
+        </div>
+        <div style="background: #14121B; border: 1px solid #1D1927; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 5px;">
+          <div style="font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 600; color: #F4F1FB; letter-spacing: -0.02em;">Space Grotesk 02:47</div>
+          <div style="font-size: 11px; font-weight: 300; color: #665F78;">Direction B &middot; technical, with IBM Plex Mono for figures</div>
+        </div>
+        <div style="background: #14121B; border: 1px solid #1D1927; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 5px;">
+          <div style="font-family: 'Outfit', sans-serif; font-size: 24px; font-weight: 600; color: #F4F1FB; letter-spacing: -0.02em;">Outfit 02:47</div>
+          <div style="font-size: 11px; font-weight: 300; color: #665F78;">Direction C &middot; rounded, warm, consumer</div>
+        </div>
+        <div style="background: #14121B; border: 1px solid #1D1927; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 7px;">
+          <div style="font-size: 15px; font-weight: 400; color: #F4F1FB;">Primary text &middot; #F4F1FB</div>
+          <div style="font-size: 14px; font-weight: 300; color: #9A93AC;">Secondary &middot; #9A93AC</div>
+          <div style="font-size: 13px; font-weight: 300; color: #665F78;">Tertiary / meta &middot; #665F78</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="border-top: 1px solid #1D1927; padding-top: 16px; display: flex; gap: 26px;">
+
+    <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 10px;">
+      <div style="font-size: 11px; font-weight: 400; color: #665F78; letter-spacing: 0.1em;">THE ONE RULE &mdash; MEASURED CONTRAST vs #0B0A0F</div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="width: 96px; height: 26px; border-radius: 6px; background: #0B0A0F; border: 1px solid #2C2738; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #6D28D9;">#6D28D9</div>
+          <div class="mono" style="font-size: 12px; color: #F87171; width: 58px;">2.78:1</div>
+          <div style="font-size: 12px; font-weight: 300; color: #F87171;">FAILS as text &mdash; never use #6D28D9 on the dark background</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="width: 96px; height: 26px; border-radius: 6px; background: #0B0A0F; border: 1px solid #2C2738; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #A78BFA;">#A78BFA</div>
+          <div class="mono" style="font-size: 12px; color: #4ADE80; width: 58px;">7.25:1</div>
+          <div style="font-size: 12px; font-weight: 300; color: #9A93AC;">purple text and icons use this instead</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="width: 96px; height: 26px; border-radius: 6px; background: #6D28D9; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #F4F1FB;">#F4F1FB</div>
+          <div class="mono" style="font-size: 12px; color: #4ADE80; width: 58px;">6.37:1</div>
+          <div style="font-size: 12px; font-weight: 300; color: #9A93AC;">light content ON the primary fill &mdash; the correct pairing</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="width: 96px; height: 26px; border-radius: 6px; background: #6D28D9; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #0B0A0F;">#0B0A0F</div>
+          <div class="mono" style="font-size: 12px; color: #F87171; width: 58px;">2.78:1</div>
+          <div style="font-size: 12px; font-weight: 300; color: #F87171;">FAILS &mdash; dark icons on the purple button do not work at this shade</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="width: 330px; display: flex; flex-direction: column; gap: 10px;">
+      <div style="font-size: 11px; font-weight: 400; color: #665F78; letter-spacing: 0.1em;">NOTES</div>
+      <div style="font-size: 12px; font-weight: 300; color: #9A93AC; line-height: 1.55;">#6D28D9 is a <span style="color:#F4F1FB;">fill</span> colour: buttons, the waveform, filled chips &mdash; always with light content on top. At 400 (#A78BFA) it becomes the text and icon colour.</div>
+      <div style="font-size: 12px; font-weight: 300; color: #9A93AC; line-height: 1.55;">Recording uses rose <span class="mono" style="color:#F4F1FB;">#FB7185</span> rather than pure red &mdash; it stays legible beside purple, where a saturated red fights it.</div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>
