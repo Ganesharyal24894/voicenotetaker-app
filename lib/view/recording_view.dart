@@ -3,21 +3,43 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../model/level_reading.dart';
 import 'format.dart';
-import 'placeholder_data.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 import 'widgets/waveform.dart';
 
 /// Screen 3 - capture in progress.
 class RecordingView extends StatefulWidget {
-  const RecordingView({required this.controller, this.clock, super.key});
+  const RecordingView({
+    required this.controller,
+    this.levels,
+    this.clock,
+    super.key,
+  });
 
   final AppController controller;
+
+  /// Overrides the meter's history, for tests. Normally the screen builds it
+  /// from [AppController.level] - real, measured amplitude.
+  @visibleForTesting
+  final List<double>? levels;
 
   /// Wall clock, injectable for tests - the same seam `RecordingService`
   /// uses. Defaults to [DateTime.now].
   final DateTime Function()? clock;
+
+  /// The quietest level the meter draws as anything at all.
+  ///
+  /// `LevelMeter` bottoms out at -96 dBFS, the quietest thing 16-bit audio can
+  /// express; drawing across that whole range would pin ordinary speech near
+  /// the top of the band. -60 dBFS is the conventional window for a capture
+  /// meter, and it is what maps a real reading onto a believable bar.
+  static const double meterFloorDbfs = -60;
+
+  /// dBFS onto the `0.0 .. 1.0` the meter draws, over [meterFloorDbfs].
+  static double normalise(double dbfs) =>
+      ((dbfs - meterFloorDbfs) / -meterFloorDbfs).clamp(0.0, 1.0);
 
   @override
   State<RecordingView> createState() => _RecordingViewState();
@@ -34,10 +56,22 @@ class _RecordingViewState extends State<RecordingView> {
 
   Duration _elapsed = Duration.zero;
 
+  /// One bar per block that has actually arrived, oldest first. It only ever
+  /// grows from measured readings: nothing here is generated.
+  final List<double> _history = <double>[];
+  LevelReading? _lastReading;
+
   @override
   void initState() {
     super.initState();
     _startedAt = _clock();
+    // Seed without notifying: this runs inside the element's own build.
+    final reading = widget.controller.level;
+    if (reading != null) {
+      _lastReading = reading;
+      _history.add(RecordingView.normalise(reading.peakDbfs));
+    }
+    widget.controller.addListener(_takeLevel);
     _tick = Timer.periodic(const Duration(milliseconds: 250), (_) {
       if (!mounted) return;
       setState(() => _elapsed = _clock().difference(_startedAt));
@@ -46,14 +80,28 @@ class _RecordingViewState extends State<RecordingView> {
 
   @override
   void dispose() {
+    widget.controller.removeListener(_takeLevel);
     _tick.cancel();
     super.dispose();
   }
 
+  /// Appends the controller's newest reading, if it is a new one.
+  void _takeLevel() {
+    final reading = widget.controller.level;
+    if (reading == null || reading == _lastReading) return;
+    _lastReading = reading;
+    _history.add(RecordingView.normalise(reading.peakDbfs));
+    if (_history.length > LiveWaveform.barCount) {
+      _history.removeRange(0, _history.length - LiveWaveform.barCount);
+    }
+    if (mounted) setState(() {});
+  }
+
+
   @override
   Widget build(BuildContext context) {
     final info = widget.controller.streamInfo;
-    final stats = widget.controller.stats;
+    final peakDbfs = widget.controller.peakDbfs;
     final stopping = widget.controller.phase == AppPhase.stopping;
 
     return ScreenScaffold(
@@ -83,7 +131,8 @@ class _RecordingViewState extends State<RecordingView> {
               children: <Widget>[
                 Text(Fmt.timer(_elapsed), style: AppText.timer),
                 const SizedBox(height: 42),
-                LiveWaveform(advance: stats.framesReceived),
+                // Real amplitude, or a flat line - never a canned animation.
+                LiveWaveform(levels: widget.levels ?? _history),
                 const SizedBox(height: 42),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -93,9 +142,9 @@ class _RecordingViewState extends State<RecordingView> {
                     const Text('peak', style: AppText.meta13),
                     const SizedBox(width: 8),
                     Text(
-                      PlaceholderData.peakDbfs == null
+                      peakDbfs == null
                           ? '— dBFS'
-                          : '−${PlaceholderData.peakDbfs!.abs()} dBFS',
+                          : '−${peakDbfs.abs()} dBFS',
                       style: AppText.peakValue,
                     ),
                   ],

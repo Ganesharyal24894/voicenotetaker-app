@@ -65,6 +65,34 @@ abstract final class AppColors {
   static const Color purple900 = Color(0xFF4C1D95);
   static const Color purple800 = Color(0xFF5B21B6);
 
+  /// Unplayed scrubber bars, the short ones. `#2C2738` - the same value as
+  /// [border], named separately because here it is a waveform fill rather than
+  /// a hairline.
+  static const Color waveUnplayed = border;
+
+  /// Unplayed scrubber bars, the tall ones. `#332C44`, from screen 5 of
+  /// `design/Main.dc.html`.
+  static const Color waveUnplayedTall = Color(0xFF332C44);
+
+  /// The playback playhead. `#EDE9FE` - it has to read as a bright line
+  /// against both the played and the unplayed bars.
+  static const Color playhead = purple100;
+
+  /// The scan ripple rings. `#4C1D95`.
+  static const Color scanRipple = purple900;
+
+  /// The board artwork in `design/DeviceMotion.dc.html`, `#board`. These are
+  /// fills in a 38x46 logo, never text.
+  static const Color boardTop = Color(0xFF241F33);
+  static const Color boardBottom = Color(0xFF14111D);
+  static const Color boardEdge = Color(0xFF3A3350);
+  static const Color boardShieldTop = Color(0xFF4A4460);
+  static const Color boardShieldBottom = Color(0xFF2E2940);
+  static const Color boardShieldEdge = Color(0xFF5B5470);
+  static const Color boardMetal = Color(0xFF6E6880);
+  static const Color boardSlot = Color(0xFF171423);
+  static const Color boardGold = Color(0xFFC9A227);
+
   /// `rgba(109, 40, 217, 0.22)` - the Transcribe chip fill.
   static const Color purpleChipFill = Color(0x386D28D9);
 
@@ -345,6 +373,74 @@ abstract final class AppShape {
 
   /// Minimum hit target on every interactive element.
   static const double minTapTarget = 44;
+}
+
+/// Durations and curves, lifted from the captions in `design/Motion.dc.html`
+/// and `design/DeviceMotion.dc.html`.
+///
+/// REDUCE MOTION: every animation in `lib/view/` is gated on
+/// [AppMotion.isReduced]. One-shot animations become instant state changes and
+/// the two loops - the scan ripple and the connected dot - become static. See
+/// `lib/view/widgets/motion.dart`.
+abstract final class AppMotion {
+  /// True when the platform asks for reduced motion.
+  static bool isReduced(BuildContext context) =>
+      MediaQuery.disableAnimationsOf(context);
+
+  /// Scan control: the refresh glyph turns once every 1.6 s, linear.
+  static const Duration scanSpin = Duration(milliseconds: 1600);
+
+  /// Scan control: each ripple ring takes 2.4 s to travel out and fade.
+  static const Duration scanRipple = Duration(milliseconds: 2400);
+
+  /// The second ring starts half a cycle behind the first.
+  static const Duration scanRippleOffset = Duration(milliseconds: 1200);
+
+  /// `scale(1)` to `scale(1.55)` - `design/Main.dc.html`, `@keyframes ripple`.
+  static const double scanRippleScale = 1.55;
+
+  /// Peak opacity of a ripple ring, at the moment it leaves the control.
+  static const double scanRippleOpacity = 0.55;
+
+  /// Device found: one full `rotateY`, fading up from `scale(.7)`.
+  static const Duration deviceFound = Duration(milliseconds: 2100);
+
+  /// `cubic-bezier(.18,.85,.3,1)`.
+  static const Curve deviceFoundCurve = Cubic(0.18, 0.85, 0.3, 1);
+
+  /// The overshoot the board settles back from.
+  static const double deviceFoundOvershoot = 1.06;
+
+  /// Where in [deviceFound] the overshoot peaks; the rest is the settle.
+  static const double deviceFoundPeak = 0.86;
+
+  /// The Hero flight from the scan screen into the Home header slot.
+  static const Duration dock = Duration(milliseconds: 620);
+
+  /// The connected dot breathes 1 -> 0.4 and back, for hours.
+  static const Duration breathe = Duration(milliseconds: 2000);
+
+  /// The dimmest the connected dot goes.
+  static const double breatheMinOpacity = 0.4;
+
+  /// A discovered row slides in from the right.
+  static const Duration rowSlideIn = Duration(milliseconds: 450);
+
+  /// `cubic-bezier(.2,.9,.3,1)`.
+  static const Curve rowSlideInCurve = Cubic(0.2, 0.9, 0.3, 1);
+
+  /// How far a row travels, in logical pixels.
+  static const double rowSlideInOffset = 26;
+
+  /// Rows that arrive together are staggered by this much.
+  static const Duration rowStagger = Duration(milliseconds: 40);
+
+  /// A press takes 120 ms down and 180 ms back up.
+  static const Duration pressDown = Duration(milliseconds: 120);
+  static const Duration pressRelease = Duration(milliseconds: 180);
+
+  /// How far a pressed control shrinks.
+  static const double pressScale = 0.93;
 }
 
 /// Material glue. The screens paint themselves from [AppColors] / [AppText];

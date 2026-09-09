@@ -1,3 +1,4 @@
+import '../model/recording_info.dart';
 import '../model/recording_metadata.dart';
 import 'format.dart';
 
@@ -30,6 +31,21 @@ class RecordingEntry {
       path: metadata.path,
       sampleRateHz: metadata.streamInfo.sampleRateHz,
       channels: metadata.streamInfo.channels,
+    );
+  }
+
+  /// Built from a saved file the library service described.
+  factory RecordingEntry.fromInfo(RecordingInfo info) {
+    return RecordingEntry(
+      title: 'Voice note ${Fmt.timeOfDay(info.recordedAt)}',
+      recordedAt: info.recordedAt,
+      // A file whose header will not parse has no length; it still has to be
+      // listed, so it shows as 0:00 rather than being hidden.
+      duration: info.duration ?? Duration.zero,
+      sizeBytes: info.sizeBytes,
+      path: info.path,
+      sampleRateHz: info.sampleRateHz ?? 16000,
+      channels: info.channels ?? 1,
     );
   }
 

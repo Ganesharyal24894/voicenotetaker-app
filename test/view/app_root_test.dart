@@ -19,16 +19,22 @@ void main() {
     await pumpScreen(tester, AppRoot(controller: harness.controller));
     expect(find.byType(ScanView), findsOneWidget);
 
+    // Home replaces the scan screen through a real route transition - that is
+    // what gives the docking Hero something to fly between - so each state
+    // change is pumped past its transition before the stack is asserted on.
     await harness.discover(tester);
     await harness.connect(tester);
+    await settleDock(tester);
     expect(find.byType(HomeView), findsOneWidget);
     expect(find.byType(ScanView), findsNothing);
 
     await harness.record(tester);
+    await settleDock(tester);
     expect(find.byType(RecordingView), findsOneWidget);
     expect(find.byType(HomeView), findsNothing);
 
     await harness.stop(tester);
+    await settleDock(tester);
     expect(find.byType(HomeView), findsOneWidget);
   });
 
@@ -40,13 +46,18 @@ void main() {
     await pumpScreen(tester, AppRoot(controller: harness.controller));
     await harness.discover(tester);
     await harness.connect(tester);
+    await settleDock(tester);
+    // A real saved recording, listed by the library service - the screens are
+    // no longer fed placeholder rows.
+    await harness.seedRecording(at: DateTime(2026, 9, 10, 9, 14));
+    await tester.pump();
 
     await tester.tap(find.text('All'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.byType(LibraryView), findsOneWidget);
 
-    await tester.tap(find.text('Standup notes'));
+    await tester.tap(find.text('Voice note 09:14'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.byType(PlaybackView), findsOneWidget);
@@ -60,6 +71,7 @@ void main() {
     await pumpScreen(tester, AppRoot(controller: harness.controller));
     await harness.discover(tester);
     await harness.connect(tester);
+    await settleDock(tester);
 
     await tester.tap(find.text('All'));
     await tester.pump();

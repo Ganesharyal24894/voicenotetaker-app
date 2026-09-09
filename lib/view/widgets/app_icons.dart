@@ -35,6 +35,9 @@ enum AppGlyph {
 
   /// Three ragged lines - the Transcribe chip.
   transcribe,
+
+  /// Circular arrow with a head - the scan control's refresh glyph.
+  refresh,
 }
 
 /// A stroke-based vector icon drawn with a [CustomPainter].
@@ -235,6 +238,22 @@ class _GlyphPainter extends CustomPainter {
             ..moveTo(4, 19)
             ..lineTo(17, 19),
         ];
+      case AppGlyph.refresh:
+        return <Path>[
+          // M20.5 12 a8.5 8.5 0 1 1 -2.6 -6.1
+          Path()
+            ..moveTo(20.5, 12)
+            ..arcToPoint(
+              const Offset(17.9, 5.9),
+              radius: const Radius.circular(8.5),
+              largeArc: true,
+              clockwise: true,
+            ),
+          Path()
+            ..moveTo(20.5, 3.5)
+            ..lineTo(20.5, 9)
+            ..lineTo(15, 9),
+        ];
       case AppGlyph.play:
         return const <Path>[];
     }
@@ -326,102 +345,4 @@ class _BatteryPainter extends CustomPainter {
   @override
   bool shouldRepaint(_BatteryPainter old) =>
       old.level != level || old.color != color;
-}
-
-/// The scanning ring: a 13px circle with a 2px track and one lighter quadrant,
-/// rotating while a scan is running.
-class ScanSpinner extends StatefulWidget {
-  const ScanSpinner({this.size = 13, this.spinning = true, super.key});
-
-  final double size;
-
-  /// When false the ring is drawn but held still, which is the state the mock
-  /// shows for "not scanning".
-  final bool spinning;
-
-  @override
-  State<ScanSpinner> createState() => _ScanSpinnerState();
-}
-
-class _ScanSpinnerState extends State<ScanSpinner>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1100),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.spinning) _controller.repeat();
-  }
-
-  @override
-  void didUpdateWidget(ScanSpinner old) {
-    super.didUpdateWidget(old);
-    if (widget.spinning && !_controller.isAnimating) {
-      _controller.repeat();
-    } else if (!widget.spinning && _controller.isAnimating) {
-      _controller.stop();
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox.square(
-      dimension: widget.size,
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, _) => CustomPaint(
-          painter: _SpinnerPainter(turns: _controller.value),
-          size: Size.square(widget.size),
-        ),
-      ),
-    );
-  }
-}
-
-class _SpinnerPainter extends CustomPainter {
-  const _SpinnerPainter({required this.turns});
-
-  final double turns;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    const strokeWidth = 2.0;
-    final rect = Rect.fromLTWH(0, 0, size.width, size.height)
-        .deflate(strokeWidth / 2);
-    canvas.drawArc(
-      rect,
-      0,
-      6.283185307179586,
-      false,
-      Paint()
-        ..color = AppColors.border
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = strokeWidth
-        ..isAntiAlias = true,
-    );
-    canvas.drawArc(
-      rect,
-      -1.5707963267948966 + turns * 6.283185307179586,
-      1.5707963267948966,
-      false,
-      Paint()
-        ..color = AppColors.purpleText
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = strokeWidth
-        ..strokeCap = StrokeCap.round
-        ..isAntiAlias = true,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_SpinnerPainter old) => old.turns != turns;
 }

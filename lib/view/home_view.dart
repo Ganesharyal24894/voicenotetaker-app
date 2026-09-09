@@ -4,9 +4,12 @@ import '../controller/app_controller.dart';
 import '../model/device_profile.dart';
 import 'placeholder_data.dart';
 import 'recording_entry.dart';
+import 'scan_view.dart';
 import 'theme.dart';
 import 'widgets/app_icons.dart';
 import 'widgets/common.dart';
+import 'widgets/device_mark.dart';
+import 'widgets/motion.dart';
 
 /// Screen 2 - home.
 class HomeView extends StatelessWidget {
@@ -42,8 +45,20 @@ class HomeView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
+              // The 38x46 logo slot. It is present in BOTH states - dimmed
+              // when disconnected rather than removed - so the header does
+              // not jump as the link comes and goes. It is also the landing
+              // pad for the board flying in from the scan screen.
+              Hero(
+                tag: ScanView.deviceMarkHeroTag,
+                child: DeviceMark(
+                  dimmed: !connected,
+                  semanticLabel: 'voiceNotetaker recorder',
+                ),
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -55,7 +70,10 @@ class HomeView extends StatelessWidget {
                     const SizedBox(height: 4),
                     Row(
                       children: <Widget>[
-                        StatusDot(
+                        // Breathes only while the link is up: a live
+                        // condition, not decoration.
+                        BreathingDot(
+                          breathing: connected,
                           color: connected
                               ? AppColors.connected
                               : AppColors.disconnected,
@@ -133,6 +151,8 @@ class HomeView extends StatelessWidget {
 }
 
 /// 110px ring, 86px purple disc, a LIGHT mic glyph on the fill.
+///
+/// A press scales it to 0.93 and back - 120 ms down, 180 ms up.
 class _RecordButton extends StatelessWidget {
   const _RecordButton({required this.onTap});
 
@@ -146,8 +166,7 @@ class _RecordButton extends StatelessWidget {
       label: 'Record',
       container: true,
       excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
+      child: PressScale(
         onTap: onTap,
         child: Opacity(
           opacity: onTap == null ? 0.45 : 1,

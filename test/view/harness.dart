@@ -10,6 +10,8 @@ import 'package:voicenotetaker_app/drivers/file_store.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/model/stream_info.dart';
+import 'package:voicenotetaker_app/services/library_service.dart';
+import 'package:voicenotetaker_app/services/wav_writer.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
 
 /// Fake radio. The view tests never touch real BLE - `universal_ble` is not
@@ -62,15 +64,48 @@ class ViewHarness {
     controller = AppController(
       transport: transport,
       fileStore: fileStore,
-      recordingsDirectory: '/tmp/voicenotetaker-test',
+      recordingsDirectory: recordingsDirectory,
     );
   }
+
+  /// Where the controller writes captures, and where the library reads them.
+  static const String recordingsDirectory = '/tmp/voicenotetaker-test';
 
   final MockBleTransport transport;
   final MemoryFileStore fileStore = MemoryFileStore();
   final StreamController<Uint8List> frames =
       StreamController<Uint8List>.broadcast();
   late final AppController controller;
+
+  /// Writes a real WAV file into the store, exactly as a finished capture
+  /// would, and makes the controller re-read the library.
+  ///
+  /// Returns the path written. The file carries a genuine 44-byte header, so
+  /// the library reads its length out of the header rather than being told it.
+  Future<String> seedRecording({
+    DateTime? at,
+    Duration length = const Duration(minutes: 4, seconds: 12),
+    int sampleRateHz = 16000,
+  }) async {
+    final when = at ?? DateTime(2026, 9, 10, 9, 14);
+    final path = fileStore.join(
+      recordingsDirectory,
+      RecordingNaming.fileName(when),
+    );
+    final samples = (length.inMilliseconds * sampleRateHz) ~/ 1000;
+    await fileStore.writeBytes(
+      path,
+      WavWriter.wrapPcm(
+        Uint8List(samples * 2),
+        sampleRateHz: sampleRateHz,
+        channels: 1,
+        bitsPerSample: 16,
+      ),
+    );
+    fileStore.modifiedTimes[path] = when;
+    await controller.refreshLibrary();
+    return path;
+  }
 
   /// Runs a scan to completion so [AppController.devices] is populated.
   Future<void> discover(WidgetTester tester) async {
@@ -121,6 +156,17 @@ Future<void> flush(WidgetTester tester, {int rounds = 3}) async {
   }
 }
 
+/// Pumps past the dock transition between two of the state-driven screens.
+///
+/// `AppRoot` moves between the scan screen, Home and the recording screen with
+/// real route transitions, so that the board docking into the Home header can
+/// be a `Hero`. `pumpAndSettle` is not an option - the scan ripple loops by
+/// design - so the transition is pumped by hand.
+Future<void> settleDock(WidgetTester tester) async {
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 800));
+}
+
 /// Pumps [child] at the mock's 390x844 frame with the real app theme.
 Future<void> pumpScreen(
   WidgetTester tester,
@@ -145,6 +191,9 @@ Future<void> pumpScreen(
 class MemoryFileStore implements FileStore {
   final Map<String, List<int>> files = <String, List<int>>{};
 
+  /// Modification times for [stat], for tests that seed files directly.
+  final Map<String, DateTime> modifiedTimes = <String, DateTime>{};
+
   @override
   Future<FileSink> openWrite(String path) async {
     final bytes = <int>[];
@@ -155,6 +204,25 @@ class MemoryFileStore implements FileStore {
   @override
   Future<Uint8List> read(String path) async =>
       Uint8List.fromList(files[path] ?? const <int>[]);
+
+  @override
+  Future<Uint8List> readRange(String path, int start, int end) async {
+    final bytes = await read(path);
+    final from = start.clamp(0, bytes.length);
+    final to = end.clamp(from, bytes.length);
+    return Uint8List.sublistView(bytes, from, to);
+  }
+
+  @override
+  Future<FileInfo?> stat(String path) async {
+    final bytes = files[path];
+    if (bytes == null) return null;
+    return FileInfo(
+      path: path,
+      sizeBytes: bytes.length,
+      modifiedAt: modifiedTimes[path] ?? DateTime(2026, 9, 10, 14, 30),
+    );
+  }
 
   @override
   Future<void> writeBytes(String path, List<int> bytes) async =>
