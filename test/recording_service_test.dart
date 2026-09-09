@@ -420,6 +420,18 @@ void main() {
       expect(fileStore.sinks[path]!.closed, isTrue);
     });
 
+    test('surfaces a file write failure', () async {
+      // A failed disk write must not be swallowed: writes are fired without
+      // awaiting, so the error has to be captured and reported from stop().
+      final failing = FailingFileStore();
+      final svc = RecordingService(transport: transport, fileStore: failing);
+      await svc.start(deviceId: deviceId, path: path);
+      frames.add(notification(0, adpcmBlock(0, 0, const [0x71])));
+      await settle();
+      await expectLater(svc.stop(), throwsA(isA<RecordingException>()));
+      await svc.dispose();
+    });
+
     test('refuses to stop when nothing is running', () async {
       await expectLater(service.stop(), throwsA(isA<RecordingException>()));
     });
@@ -453,6 +465,23 @@ void main() {
       await expectLater(service.abort(), completes);
     });
   });
+}
+
+/// Store whose sink fails on the first payload write (the WAV header goes
+/// through so the capture can start).
+class FailingFileStore extends InMemoryFileStore {
+  @override
+  Future<FileSink> openWrite(String path) async => FailingFileSink();
+}
+
+class FailingFileSink extends MemoryFileSink {
+  int _adds = 0;
+
+  @override
+  Future<void> add(List<int> bytes) async {
+    if (_adds++ > 0) throw StateError('disk full');
+    return super.add(bytes);
+  }
 }
 
 /// Mocktail needs a fallback instance for any enum used with `any()`.

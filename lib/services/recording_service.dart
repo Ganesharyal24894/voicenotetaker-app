@@ -218,11 +218,16 @@ class RecordingService {
     }
 
     final pcm = _decode(frame);
-    if (pcm.isNotEmpty) {
+    final sink = _sink;
+    if (pcm.isNotEmpty && sink != null) {
       _decodedBytes += pcm.length;
       // Fire and forget: the sink serialises its own writes, and awaiting here
-      // would stall the notification stream behind disk I/O.
-      unawaited(_sink?.add(pcm) ?? Future<void>.value());
+      // would stall the notification stream behind disk I/O. A write failure is
+      // captured rather than left as an unhandled async error, and surfaces
+      // from stop().
+      unawaited(
+        sink.add(pcm).catchError((Object error) => _streamError ??= error),
+      );
     }
     _emitStats();
   }
