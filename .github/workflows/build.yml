@@ -1,0 +1,104 @@
+# CI: tests on Linux, an unsigned iOS .ipa on macOS.
+#
+# Why this exists
+# ---------------
+# Building for iOS requires macOS -- not by policy but mechanically: Flutter's
+# ios_workflow.dart gates on isMacOS, and `flutter build` offers no ios/ipa
+# subcommand at all on Linux. A hosted macOS runner is the way to build an iOS
+# app without owning a Mac.
+#
+# Cost: GitHub's macOS runners are free and unmetered on PUBLIC repositories.
+# On a private repo they bill against the 2,000 min/month free tier at a 10x
+# multiplier -- about 200 macOS minutes a month, which one of these builds can
+# eat a noticeable slice of. If this repo is private, expect to watch the quota.
+#
+# The .ipa this produces is UNSIGNED beyond an ad-hoc signature. It is not
+# installable from a browser; it is the input to a sideloader (SideStore,
+# AltStore) which applies your own free Apple ID's 7-day certificate on device.
+# No Apple Developer Program membership and no secrets are needed to run this
+# workflow -- that is the point of keeping signing out of CI.
+
+name: build
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Runs on Linux because it is faster and, on a private repo, 10x cheaper.
+  # Nothing here needs macOS.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # Pinned, not 'any': a CI that silently follows stable will one day
+          # fail on a Flutter change unrelated to anything in this repo.
+          flutter-version: '3.47.3'
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  ios:
+    needs: test
+    # Pinned rather than macos-latest so an Xcode bump is a deliberate commit
+    # and not a surprise red build.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.3'
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      # --no-codesign is what makes this possible without an Apple account:
+      # it skips the signing identity that CI does not have and cannot get.
+      - name: Build unsigned Runner.app
+        run: flutter build ios --release --no-codesign
+
+      - name: Ad-hoc sign and package as .ipa
+        run: |
+          set -euo pipefail
+          cd build/ios/iphoneos
+
+          # An .ipa is a zip with the bundle inside a top-level Payload/.
+          mkdir -p Payload
+          cp -R Runner.app Payload/
+
+          # THE STEP THAT IS EASY TO MISS.
+          #
+          # A completely unsigned Flutter build crashes the sideloader rather
+          # than failing cleanly: AltStore/SideStore sign with ldid, and ldid
+          # aborts on the unsigned embedded frameworks with
+          #     _assert(): end >= size - 0x10
+          # which reads like a corrupt download, not a missing signature.
+          #
+          # An ad-hoc signature (-s -) gives every Mach-O a well-formed, empty
+          # signature for ldid to replace. Inside-out: frameworks before the
+          # bundle that contains them, or the outer signature is invalidated.
+          if compgen -G "Payload/Runner.app/Frameworks/*" > /dev/null; then
+            codesign -s - -f Payload/Runner.app/Frameworks/*
+          fi
+          codesign -s - -f Payload/Runner.app
+
+          zip -qr voicenotetaker.ipa Payload
+          ls -lh voicenotetaker.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voicenotetaker-ipa
+          path: build/ios/iphoneos/voicenotetaker.ipa
+          # A 7-day sideload certificate makes anything older than this
+          # useless anyway.
+          retention-days: 14
