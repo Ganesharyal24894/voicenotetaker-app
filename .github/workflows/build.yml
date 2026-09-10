@@ -32,7 +32,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: subosito/flutter-action@v2
         with:
@@ -52,7 +52,7 @@ jobs:
     # and not a surprise red build.
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: subosito/flutter-action@v2
         with:
@@ -95,7 +95,7 @@ jobs:
           zip -qr voicenotetaker.ipa Payload
           ls -lh voicenotetaker.ipa
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: voicenotetaker-ipa
           path: build/ios/iphoneos/voicenotetaker.ipa
