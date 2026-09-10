@@ -105,6 +105,10 @@ class ViewHarness {
         .thenAnswer((_) => const Stream<BleConnectionStatus>.empty());
     when(() => transport.disconnect(any())).thenAnswer((_) async {});
     when(() => transport.selectCodec(any(), any())).thenAnswer((_) async {});
+    // The device's own default: auto-sleep off. Tests that care re-stub this
+    // - including with a throw, which is what firmware without `fe04` does.
+    when(() => transport.readAutoSleep(any())).thenAnswer((_) async => false);
+    when(() => transport.setAutoSleep(any(), any())).thenAnswer((_) async {});
     when(() => transport.readStreamInfo(any()))
         .thenAnswer((_) async => StreamInfo.fallback);
     when(() => transport.subscribeFrames(any()))

@@ -1,10 +1,14 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/view/developer_view.dart';
+import 'package:voicenotetaker_app/view/theme.dart';
 
 import 'harness.dart';
 
@@ -92,6 +96,7 @@ void main() {
       expect(find.text('LINK'), findsOneWidget);
       expect(find.text('STREAM'), findsOneWidget);
       expect(find.text('CODEC'), findsOneWidget);
+      expect(find.text('AUTO-SLEEP'), findsOneWidget);
       expect(find.text('Export diagnostics'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
@@ -156,6 +161,165 @@ void main() {
         find.textContaining('address: EB:6B:5E:4C:33:A3'),
         findsOneWidget,
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // AUTO-SLEEP
+  //
+  // The flag lives in the device's flash, so the screen may only ever show
+  // what it read back. The state that matters most here is the THIRD one:
+  // a device that did not answer must render as unavailable, with NEITHER
+  // segment filled, because "Off" would be a claim about a setting that can
+  // put the recorder to sleep.
+  // ---------------------------------------------------------------------
+  group('the auto-sleep toggle', () {
+    /// Scrolls the auto-sleep card up to where it can be tapped: the
+    /// developer screen is taller than the phone and the card is the last of
+    /// them, so it starts below the fold.
+    Future<void> reveal(WidgetTester tester, String label) async {
+      await tester.ensureVisible(find.text(label));
+      await tester.pump();
+    }
+
+    /// The painted fill of a segment: purple when selected, null when not.
+    Color? fillOf(WidgetTester tester, String label) {
+      final box = tester.widget<Container>(
+        find.ancestor(of: find.text(label), matching: find.byType(Container))
+            .first,
+      );
+      return (box.decoration! as BoxDecoration).color;
+    }
+
+    testWidgets('shows OFF when the device reports 0x00', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readAutoSleep(any()))
+          .thenAnswer((_) async => false);
+
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+
+      expect(fillOf(tester, 'Off'), AppColors.primaryFill);
+      expect(fillOf(tester, 'On'), isNull);
+    });
+
+    testWidgets('shows ON when the device reports 0x01', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readAutoSleep(any()))
+          .thenAnswer((_) async => true);
+
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+
+      expect(fillOf(tester, 'On'), AppColors.primaryFill);
+      expect(fillOf(tester, 'Off'), isNull);
+    });
+
+    testWidgets('a device that does not report it shows neither state',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readAutoSleep(any())).thenThrow(
+        const BleTransportException('could not read the auto-sleep setting'),
+      );
+
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+
+      expect(fillOf(tester, 'On'), isNull);
+      expect(fillOf(tester, 'Off'), isNull,
+          reason: 'an unread flag must never render as "off"');
+      expect(
+        find.textContaining('did not report the setting'),
+        findsOneWidget,
+      );
+
+      // And it is inert: tapping a setting the device never reported writes
+      // nothing to the device.
+      await reveal(tester, 'On');
+      await tester.tap(find.text('On'));
+      await flush(tester);
+      verifyNever(() => harness.transport.setAutoSleep(any(), any()));
+    });
+
+    testWidgets('with nothing connected the control is unavailable',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+
+      expect(fillOf(tester, 'On'), isNull);
+      expect(fillOf(tester, 'Off'), isNull);
+      expect(find.textContaining('Connect to the recorder'), findsOneWidget);
+    });
+
+    testWidgets('tapping ON writes to the device and repaints', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readAutoSleep(any()))
+          .thenAnswer((_) async => false);
+
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+
+      await reveal(tester, 'On');
+      await tester.tap(find.text('On'));
+      await flush(tester);
+
+      verify(() => harness.transport.setAutoSleep(knownDevice.id, true))
+          .called(1);
+      expect(harness.controller.autoSleepEnabled, isTrue);
+      expect(fillOf(tester, 'On'), AppColors.primaryFill);
+    });
+
+    testWidgets('tapping OFF writes the disable', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readAutoSleep(any()))
+          .thenAnswer((_) async => true);
+
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+
+      await reveal(tester, 'Off');
+      await tester.tap(find.text('Off'));
+      await flush(tester);
+
+      verify(() => harness.transport.setAutoSleep(knownDevice.id, false))
+          .called(1);
+      expect(fillOf(tester, 'Off'), AppColors.primaryFill);
+    });
+
+    testWidgets('says when the device sleeps and when it will not',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+
+      expect(
+        find.textContaining('about 10 seconds without motion'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('not sleep while recording'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('the screen is reachable by its accessibility labels',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+
+      // "On" and "Off" say nothing on their own when read aloud.
+      expect(find.bySemanticsLabel('Auto-sleep on'), findsOneWidget);
+      expect(find.bySemanticsLabel('Auto-sleep off'), findsOneWidget);
     });
   });
 }

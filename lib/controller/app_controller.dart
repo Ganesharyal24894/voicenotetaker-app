@@ -81,6 +81,14 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The device's auto-sleep flag, or null when it is unknown: nothing is
+  /// connected, the read failed, or the firmware predates `fe04`.
+  ///
+  /// Null is a third state on purpose. The device persists this flag in
+  /// flash, so a default of "off" would be a guess about a setting that can
+  /// put the recorder to sleep - and a wrong guess is worse than no answer.
+  bool? _autoSleep;
+
   StreamSubscription<DiscoveredDevice>? _scanSubscription;
   StreamSubscription<BleConnectionStatus>? _connectionSubscription;
   StreamSubscription<CaptureStats>? _statsSubscription;
@@ -138,6 +146,15 @@ class AppController extends ChangeNotifier {
   StreamInfo? get streamInfo => _recorder.streamInfo;
   RecordingMetadata? get lastRecording => _lastRecording;
   String? get errorMessage => _errorMessage;
+
+  /// Whether the connected device actually reported its auto-sleep setting.
+  /// False means the control has nothing truthful to show and must be
+  /// presented as unavailable.
+  bool get autoSleepAvailable => _autoSleep != null;
+
+  /// The device's auto-sleep flag as last read from, or written to, the
+  /// recorder. Meaningless unless [autoSleepAvailable] is true.
+  bool get autoSleepEnabled => _autoSleep ?? false;
 
   bool get isScanning => _phase == AppPhase.scanning;
   bool get isConnected =>
@@ -237,10 +254,49 @@ class AppController extends ChangeNotifier {
         _transport.connectionState(device.id).listen((status) {
       if (status == BleConnectionStatus.disconnected) {
         _connectedDevice = null;
+        _autoSleep = null;
         _setPhase(AppPhase.idle);
       }
     });
     _setPhase(AppPhase.connected);
+    // Read rather than assumed: the flag lives in the device's flash and
+    // survives reboots, so only the device knows what it is.
+    await _readAutoSleep(device.id);
+  }
+
+  /// Re-reads the auto-sleep flag from the connected device.
+  ///
+  /// A failure is not an app error: it leaves the setting unknown and the
+  /// control unavailable, which is all older firmware without `fe04` can
+  /// honestly be reported as.
+  Future<void> _readAutoSleep(String deviceId) async {
+    try {
+      _autoSleep = await _transport.readAutoSleep(deviceId);
+    } on BleTransportException {
+      _autoSleep = null;
+    }
+    notifyListeners();
+  }
+
+  /// Writes the auto-sleep flag to the connected device.
+  ///
+  /// Does nothing unless the device reported the setting in the first place:
+  /// a write to firmware that has no `fe04` would fail anyway, and writing a
+  /// value the app never read would be writing a guess.
+  Future<void> setAutoSleep(bool enabled) async {
+    final device = _connectedDevice;
+    if (device == null || !autoSleepAvailable || enabled == _autoSleep) return;
+    try {
+      await _transport.setAutoSleep(device.id, enabled);
+    } on BleTransportException catch (e) {
+      // The device kept its old setting, so the app keeps showing it. This is
+      // not a phase change: the link is fine and the recorder still works.
+      _errorMessage = e.message;
+      notifyListeners();
+      return;
+    }
+    _autoSleep = enabled;
+    notifyListeners();
   }
 
   Future<void> disconnect() async {
@@ -256,6 +312,7 @@ class AppController extends ChangeNotifier {
       return;
     }
     _connectedDevice = null;
+    _autoSleep = null;
     _setPhase(AppPhase.idle);
   }
 

@@ -22,6 +22,15 @@ abstract final class DeviceProfile {
   static const String controlCharacteristicUuid =
       '6e40fe03-b5a3-f393-e0a9-e50e24dcca9e';
 
+  /// `fe04` - READ + WRITE, one byte holding the auto-sleep flag (see
+  /// [AutoSleep]). The firmware persists it in flash, so it survives a
+  /// reboot and must be read rather than assumed.
+  ///
+  /// Firmware older than this characteristic simply does not have it; the app
+  /// treats the absence as "setting unavailable", never as "off".
+  static const String autoSleepCharacteristicUuid =
+      '6e40fe04-b5a3-f393-e0a9-e50e24dcca9e';
+
   /// Every notification is prefixed with a little-endian uint16 sequence
   /// number; gaps in it are packets dropped on the link.
   static const int sequenceHeaderBytes = 2;

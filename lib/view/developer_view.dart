@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,33 +30,65 @@ Widget? debugOnlyDeveloperView({
 
 /// Screen 6 - developer diagnostics. Debug builds only; reach it through
 /// [debugOnlyDeveloperView].
-class DeveloperView extends StatelessWidget {
+///
+/// Stateful for one reason: this screen is PUSHED, so a `setState` in
+/// [AppRoot] does not reach it. Anything here that reflects live device state
+/// - the codec selection, the auto-sleep flag the device reported - would
+/// otherwise render once and then go stale. It listens the same way the
+/// playback and recording screens do.
+class DeveloperView extends StatefulWidget {
   const DeveloperView({required this.controller, this.onBack, super.key});
 
   final AppController controller;
   final VoidCallback? onBack;
 
+  @override
+  State<DeveloperView> createState() => _DeveloperViewState();
+}
+
+class _DeveloperViewState extends State<DeveloperView> {
+  AppController get _controller => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onControllerChanged);
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onControllerChanged);
+    super.dispose();
+  }
+
+  void _onControllerChanged() {
+    if (mounted) setState(() {});
+  }
+
   String _diagnostics() {
-    final device = controller.connectedDevice;
-    final stats = controller.stats;
-    final info = controller.streamInfo;
+    final device = _controller.connectedDevice;
+    final stats = _controller.stats;
+    final info = _controller.streamInfo;
     return <String>[
       'voiceNotetaker diagnostics',
       'generated: ${DateTime.now().toIso8601String()}',
-      'phase: ${controller.phase.name}',
-      'adapter: ${controller.availability.name}',
+      'phase: ${_controller.phase.name}',
+      'adapter: ${_controller.availability.name}',
       'address: ${device?.id ?? '—'}',
       'name: ${device?.name ?? '—'}',
       'rssi: ${Fmt.rssi(device?.rssi)}',
-      'codec requested: ${controller.preferredCodec.name}',
+      'codec requested: ${_controller.preferredCodec.name}',
+      // Reported as unknown when the device never told us, so a report from a
+      // board running older firmware cannot be misread as "auto-sleep off".
+      'auto-sleep: ${_controller.autoSleepAvailable ? (_controller.autoSleepEnabled ? 'on' : 'off') : 'unknown'}',
       'stream: ${info == null ? '—' : info.toString()}',
       'frames received: ${stats.framesReceived}',
       'frames lost: ${stats.framesLost}',
       'malformed frames: ${stats.malformedFrames}',
       'wire bytes: ${stats.wireBytes}',
       'decoded bytes: ${stats.decodedBytes}',
-      'last file: ${controller.lastRecording?.path ?? '—'}',
-      'error: ${controller.errorMessage ?? 'none'}',
+      'last file: ${_controller.lastRecording?.path ?? '—'}',
+      'error: ${_controller.errorMessage ?? 'none'}',
     ].join('\n');
   }
 
@@ -91,9 +125,10 @@ class DeveloperView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final device = controller.connectedDevice;
-    final stats = controller.stats;
+    final device = _controller.connectedDevice;
+    final stats = _controller.stats;
     final lossPercent = (stats.lossRatio * 100).toStringAsFixed(2);
+    final onBack = widget.onBack;
 
     return ScreenScaffold(
       child: Column(
@@ -233,21 +268,21 @@ class DeveloperView extends StatelessWidget {
                       Row(
                         children: <Widget>[
                           Expanded(
-                            child: _CodecSegment(
+                            child: _Segment(
                               label: 'ADPCM',
-                              selected: controller.preferredCodec ==
+                              selected: _controller.preferredCodec ==
                                   AudioCodec.imaAdpcm,
-                              onTap: () => controller.preferredCodec =
+                              onTap: () => _controller.preferredCodec =
                                   AudioCodec.imaAdpcm,
                             ),
                           ),
                           const SizedBox(width: 8),
                           Expanded(
-                            child: _CodecSegment(
+                            child: _Segment(
                               label: 'Raw PCM',
-                              selected: controller.preferredCodec ==
+                              selected: _controller.preferredCodec ==
                                   AudioCodec.pcmS16le,
-                              onTap: () => controller.preferredCodec =
+                              onTap: () => _controller.preferredCodec =
                                   AudioCodec.pcmS16le,
                             ),
                           ),
@@ -262,6 +297,8 @@ class DeveloperView extends StatelessWidget {
                     ],
                   ),
                 ),
+                const SizedBox(height: 10),
+                _AutoSleepCard(controller: _controller),
               ],
             ),
           ),
@@ -276,53 +313,139 @@ class DeveloperView extends StatelessWidget {
   }
 }
 
-/// One half of the codec selector. Selected: purple fill with LIGHT text.
-class _CodecSegment extends StatelessWidget {
-  const _CodecSegment({
+/// The auto-sleep toggle - the `fe04` flag the device keeps in flash.
+///
+/// UNAVAILABLE IS A REAL STATE, NOT A DEFAULT. When the device has not
+/// reported the flag - nothing is connected, the read failed, or the firmware
+/// predates `fe04` - NEITHER segment is selected and neither is tappable.
+/// Showing "Off" there would be a claim about a setting that can put the
+/// recorder to sleep, made without having read it.
+class _AutoSleepCard extends StatelessWidget {
+  const _AutoSleepCard({required this.controller});
+
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final available = controller.autoSleepAvailable;
+    final enabled = available && controller.autoSleepEnabled;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const SectionCaption('Auto-sleep', small: true),
+          const SizedBox(height: 12),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _Segment(
+                  label: 'Off',
+                  semanticLabel: 'Auto-sleep off',
+                  selected: available && !enabled,
+                  enabled: available,
+                  onTap: () => unawaited(controller.setAutoSleep(false)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _Segment(
+                  label: 'On',
+                  semanticLabel: 'Auto-sleep on',
+                  selected: enabled,
+                  enabled: available,
+                  onTap: () => unawaited(controller.setAutoSleep(true)),
+                ),
+              ),
+            ],
+          ),
+          if (!available) ...<Widget>[
+            const SizedBox(height: 12),
+            Text(
+              controller.isConnected
+                  ? 'This recorder did not report the setting, so nothing is '
+                      'shown and nothing is written. Firmware without the '
+                      'auto-sleep characteristic looks like this.'
+                  : 'Connect to the recorder to read this setting. It is kept '
+                      'on the device, not in the app.',
+              style: AppText.footnote11,
+            ),
+          ],
+          const SizedBox(height: 12),
+          const Text(
+            'The device sleeps after about 10 seconds without motion. It will '
+            'not sleep while recording, or while the app is connected.',
+            style: AppText.footnote11,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One segment of a two-way selector - the codec pick, the auto-sleep flag.
+/// Selected: purple fill with LIGHT text, per the contrast rule in `theme.dart`.
+///
+/// [enabled] false dims the segment and takes its tap away, which is how a
+/// setting the device has not reported is shown: present, and visibly not
+/// answerable.
+class _Segment extends StatelessWidget {
+  const _Segment({
     required this.label,
     required this.selected,
     required this.onTap,
+    this.semanticLabel,
+    this.enabled = true,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
+  /// Read out instead of [label] when the visible word is too short to say
+  /// what it does on its own - "On" means nothing without "Auto-sleep".
+  final String? semanticLabel;
+  final bool enabled;
+
   @override
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
+      enabled: enabled,
       selected: selected,
-      label: label,
+      label: semanticLabel ?? label,
       container: true,
       excludeSemantics: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: SizedBox(
-          height: AppShape.minTapTarget,
-          child: Center(
-            child: Container(
-              height: 38,
-              decoration: BoxDecoration(
-                color: selected ? AppColors.primaryFill : null,
-                border: selected
-                    ? null
-                    : Border.all(color: AppColors.border),
-                borderRadius: AppShape.segment,
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                label,
-                style: selected
-                    ? AppText.devValue.copyWith(
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.onPrimaryFill,
-                      )
-                    : AppText.devLabel.copyWith(
-                        fontWeight: FontWeight.w400,
-                        color: AppColors.textSecondary,
-                      ),
+        onTap: enabled ? onTap : null,
+        child: Opacity(
+          opacity: enabled ? 1 : 0.45,
+          child: SizedBox(
+            height: AppShape.minTapTarget,
+            child: Center(
+              child: Container(
+                height: 38,
+                decoration: BoxDecoration(
+                  color: selected ? AppColors.primaryFill : null,
+                  border: selected
+                      ? null
+                      : Border.all(color: AppColors.border),
+                  borderRadius: AppShape.segment,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  label,
+                  style: selected
+                      ? AppText.devValue.copyWith(
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.onPrimaryFill,
+                        )
+                      : AppText.devLabel.copyWith(
+                          fontWeight: FontWeight.w400,
+                          color: AppColors.textSecondary,
+                        ),
+                ),
               ),
             ),
           ),

@@ -56,8 +56,9 @@ The same four-layer scheme the firmware uses. Dependencies point one way only:
 ```
 lib/
   model/       Pure DATA. Classes and enums for stream info, codec, frames,
-               device state, recording metadata, and the device's fixed GATT
-               identifiers. No logic, no I/O, no Flutter imports.
+               device state, recording metadata, the auto-sleep flag's one-byte
+               wire format, and the device's fixed GATT identifiers. No logic,
+               no I/O, no Flutter imports.
 
   drivers/     PLATFORM LAYER. All external-world access lives here, and only
                here. Each driver is an abstract interface that names no package
@@ -65,7 +66,8 @@ lib/
 
                  ble_transport.dart            abstract: scan / connect /
                                                disconnect / subscribe frames /
-                                               read info / select codec
+                                               read info / select codec /
+                                               read + write auto-sleep
                  ble_transport_universal.dart  universal_ble implementation
                  audio_player.dart             abstract playback
                  audio_player_just_audio.dart  just_audio implementation

@@ -48,6 +48,17 @@ abstract class BleTransport {
   /// Writes [codec] to the `fe03` control characteristic.
   Future<void> selectCodec(String deviceId, AudioCodec codec);
 
+  /// Reads the `fe04` auto-sleep characteristic.
+  ///
+  /// Throws [BleTransportException] when the characteristic is absent - which
+  /// is what firmware older than `fe04` looks like from here - or when the
+  /// value is not the single byte the protocol defines. Callers must treat
+  /// that as "unknown", never as "off".
+  Future<bool> readAutoSleep(String deviceId);
+
+  /// Writes [enabled] to the `fe04` auto-sleep characteristic as one byte.
+  Future<void> setAutoSleep(String deviceId, bool enabled);
+
   /// Subscribes to `fe01` and emits each notification verbatim - sequence
   /// header included. Stripping that header is [FrameReassembler]'s job, not
   /// the transport's.

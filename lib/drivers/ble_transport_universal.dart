@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:universal_ble/universal_ble.dart' as ub;
 
 import '../model/audio_codec.dart';
+import '../model/auto_sleep.dart';
 import '../model/device_profile.dart';
 import '../model/device_state.dart';
 import '../model/stream_info.dart';
@@ -206,6 +207,41 @@ class UniversalBleTransport implements BleTransport {
       );
     } catch (e) {
       throw BleTransportException('could not select codec ${codec.name}', e);
+    }
+  }
+
+  @override
+  Future<bool> readAutoSleep(String deviceId) async {
+    try {
+      final bytes = await ub.UniversalBle.read(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.autoSleepCharacteristicUuid,
+      );
+      return AutoSleep.fromBytes(bytes);
+    } on FormatException catch (e) {
+      throw BleTransportException('malformed auto-sleep setting', e);
+    } catch (e) {
+      // Firmware without `fe04` fails here, and so does a link that dropped
+      // mid-read. Neither is worth telling apart: the setting is unknown.
+      throw BleTransportException('could not read the auto-sleep setting', e);
+    }
+  }
+
+  @override
+  Future<void> setAutoSleep(String deviceId, bool enabled) async {
+    try {
+      await ub.UniversalBle.write(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.autoSleepCharacteristicUuid,
+        AutoSleep.toBytes(enabled),
+      );
+    } catch (e) {
+      throw BleTransportException(
+        'could not ${enabled ? 'enable' : 'disable'} auto-sleep',
+        e,
+      );
     }
   }
 
