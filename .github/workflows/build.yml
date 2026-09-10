@@ -125,7 +125,14 @@ jobs:
           # This app is a BLE client and nothing else. If the plugin ever
           # stops being linked, everything still builds and the app is inert
           # on device -- so assert the symbols are really in the binary.
-          strings -a "$APP/Runner" | grep -q 'universal_ble' || {
+          #
+          # Written to a file rather than piped into grep on purpose. Under
+          # `set -o pipefail`, `strings ... | grep -q` fails when the symbol
+          # IS found: grep exits at the first match, closes the pipe, and
+          # strings dies with "failed to flush output". The check then reports
+          # exactly the opposite of the truth.
+          strings -a "$APP/Runner" > /tmp/runner-strings.txt
+          grep -q 'universal_ble' /tmp/runner-strings.txt || {
             echo "::error::universal_ble is not linked into Runner"; exit 1; }
 
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
