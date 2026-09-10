@@ -64,8 +64,14 @@ jobs:
 
       # --no-codesign is what makes this possible without an Apple account:
       # it skips the signing identity that CI does not have and cannot get.
+      #
+      # The build number is the CI run number so two .ipa files are always
+      # tellable apart. Without it every build is version 1 and "is this the
+      # one with the fix?" has no answer once the file is on a phone.
       - name: Build unsigned Runner.app
-        run: flutter build ios --release --no-codesign
+        run: |
+          flutter build ios --release --no-codesign \
+            --build-number=${{ github.run_number }}
 
       - name: Ad-hoc sign and package as .ipa
         run: |
@@ -95,9 +101,40 @@ jobs:
           zip -qr voicenotetaker.ipa Payload
           ls -lh voicenotetaker.ipa
 
+      # A green build is not the same as an installable app. Everything below
+      # was checked by hand once and then automated, because each failure is
+      # silent: the build stays green and the app misbehaves on the phone.
+      - name: Check the .ipa is actually installable
+        run: |
+          set -euo pipefail
+          cd build/ios/iphoneos
+          APP=Payload/Runner.app
+
+          test -f "$APP/Info.plist"   || { echo "::error::no Info.plist"; exit 1; }
+          test -x "$APP/Runner"       || { echo "::error::no Runner executable"; exit 1; }
+
+          # Ad-hoc signatures, inside-out. A missing one here is what makes
+          # ldid abort in the sideloader with a corrupt-looking error rather
+          # than saying the bundle is unsigned.
+          test -d "$APP/_CodeSignature" || { echo "::error::app bundle unsigned"; exit 1; }
+          for fw in "$APP"/Frameworks/*.framework; do
+            test -d "$fw/_CodeSignature" || {
+              echo "::error::unsigned framework: $(basename "$fw")"; exit 1; }
+          done
+
+          # This app is a BLE client and nothing else. If the plugin ever
+          # stops being linked, everything still builds and the app is inert
+          # on device -- so assert the symbols are really in the binary.
+          strings -a "$APP/Runner" | grep -q 'universal_ble' || {
+            echo "::error::universal_ble is not linked into Runner"; exit 1; }
+
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion'    "$APP/Info.plist"
+          echo "ipa looks installable"
+
       - uses: actions/upload-artifact@v7
         with:
-          name: voicenotetaker-ipa
+          name: voicenotetaker-ipa-${{ github.run_number }}-${{ github.sha }}
           path: build/ios/iphoneos/voicenotetaker.ipa
           # A 7-day sideload certificate makes anything older than this
           # useless anyway.
