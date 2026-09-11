@@ -135,8 +135,24 @@ jobs:
           grep -q 'universal_ble' /tmp/runner-strings.txt || {
             echo "::error::universal_ble is not linked into Runner"; exit 1; }
 
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion'    "$APP/Info.plist"
+          # Apple's Developer Portal derives the App ID name from CFBundleName
+          # and accepts ONLY letters, digits and spaces. Flutter's default is
+          # the Dart package name, which contains an underscore -- and that
+          # fails at INSTALL time, on device, with
+          #   Developer error 35: An invalid value '<name>' was provided for
+          #   the parameter 'appIdName'
+          # long after CI has gone green. Catch it here instead.
+          BUNDLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$APP/Info.plist")
+          case "$BUNDLE_NAME" in
+            *[!A-Za-z0-9\ ]*)
+              echo "::error::CFBundleName '$BUNDLE_NAME' has characters Apple rejects in appIdName (letters, digits and spaces only)"
+              exit 1 ;;
+          esac
+
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier'  "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleName'        "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion'     "$APP/Info.plist"
           echo "ipa looks installable"
 
       - uses: actions/upload-artifact@v7
