@@ -18,6 +18,10 @@ Widget _library({
       entries: entries ?? PlaceholderData.library(now: _now),
       onOpen: onOpen ?? (_) {},
       onNewRecording: onNewRecording ?? () {},
+      // Pinned, not the wall clock. The entries are built relative to _now,
+      // so without this the TODAY/YESTERDAY headers were only correct on
+      // 10 Sept 2026 and the test failed at the next midnight.
+      now: _now,
     );
 
 void main() {
@@ -37,6 +41,34 @@ void main() {
 
     expect(find.text('New recording'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  // The bug this pins: LibraryView used to call dayLabel() with no `now`, so
+  // the headers came from the wall clock while the entries came from a fixed
+  // date. It read correctly on the day it was written and broke at the next
+  // midnight. Passing a `now` a week after the entries must therefore NOT
+  // produce TODAY -- if it does, the injected clock is being ignored again.
+  testWidgets('day headers follow the injected clock, not the wall clock',
+      (tester) async {
+    final entries = PlaceholderData.library(now: _now);
+
+    await pumpScreen(tester, _library(entries: entries));
+    expect(find.text('TODAY'), findsOneWidget,
+        reason: 'entries are same-day as the pinned now');
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await pumpScreen(
+      tester,
+      LibraryView(
+        entries: entries,
+        onOpen: (_) {},
+        onNewRecording: () {},
+        now: _now.add(const Duration(days: 7)),
+      ),
+    );
+    expect(find.text('TODAY'), findsNothing,
+        reason: 'a week later nothing is today; the widget must use `now`');
+    expect(find.text('YESTERDAY'), findsNothing);
   });
 
   testWidgets('builds empty', (tester) async {

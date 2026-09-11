@@ -19,6 +19,7 @@ class HomeView extends StatelessWidget {
     required this.onOpenLibrary,
     required this.onOpenRecording,
     this.onOpenDeveloper,
+    this.now,
     super.key,
   });
 
@@ -33,6 +34,9 @@ class HomeView extends StatelessWidget {
 
   /// Non-null only in debug builds - see `developer_view.dart`.
   final VoidCallback? onOpenDeveloper;
+
+  /// See [LibraryView.now]: the day labels are relative to this.
+  final DateTime? now;
 
   @override
   Widget build(BuildContext context) {
@@ -143,6 +147,7 @@ class HomeView extends StatelessWidget {
               entry: shown[i],
               lastInList: i == shown.length - 1,
               onTap: () => onOpenRecording(shown[i]),
+              now: now,
             ),
         ],
       ),
@@ -231,11 +236,15 @@ class _RecentRow extends StatelessWidget {
     required this.entry,
     required this.lastInList,
     required this.onTap,
+    this.now,
   });
 
   final RecordingEntry entry;
   final bool lastInList;
   final VoidCallback onTap;
+
+  /// See [HomeView.now]: threaded down so the day label is pinnable.
+  final DateTime? now;
 
   @override
   Widget build(BuildContext context) {
@@ -267,7 +276,7 @@ class _RecentRow extends StatelessWidget {
                 children: <Widget>[
                   Text(entry.title, style: AppText.rowTitle),
                   const SizedBox(height: 3),
-                  Text(entry.recentLabel(), style: AppText.rowMeta),
+                  Text(entry.recentLabel(now: now), style: AppText.rowMeta),
                 ],
               ),
             ),

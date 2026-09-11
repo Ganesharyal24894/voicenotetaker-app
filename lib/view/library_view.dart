@@ -16,6 +16,7 @@ class LibraryView extends StatefulWidget {
     required this.onOpen,
     required this.onNewRecording,
     this.onBack,
+    this.now,
     super.key,
   });
 
@@ -23,6 +24,12 @@ class LibraryView extends StatefulWidget {
   final ValueChanged<RecordingEntry> onOpen;
   final VoidCallback onNewRecording;
   final VoidCallback? onBack;
+
+  /// "Today"/"Yesterday" are relative to this, defaulting to the wall clock.
+  /// Injectable so a test can pin the day: without it these headers change
+  /// meaning at midnight, and a test asserting "TODAY" passes only on the
+  /// day it was written.
+  final DateTime? now;
 
   @override
   State<LibraryView> createState() => _LibraryViewState();
@@ -51,7 +58,7 @@ class _LibraryViewState extends State<LibraryView> {
   Map<String, List<RecordingEntry>> _grouped(List<RecordingEntry> entries) {
     final groups = <String, List<RecordingEntry>>{};
     for (final entry in entries) {
-      groups.putIfAbsent(entry.dayLabel(), () => <RecordingEntry>[]).add(entry);
+      groups.putIfAbsent(entry.dayLabel(now: widget.now), () => <RecordingEntry>[]).add(entry);
     }
     return groups;
   }
