@@ -7,10 +7,12 @@ import 'package:voicenotetaker_app/services/device_test_store.dart';
 import 'view/harness.dart' show MemoryFileStore;
 
 /// The store is what turns "a number you watched" into "a number you can go
-/// back to", which is the whole reason the harness exists. These tests pin down
-/// that it survives a restart, that it stays newest-first, and - most
-/// importantly - that a file it cannot fully understand costs it the rows it
-/// cannot read and NOTHING ELSE.
+/// back to", which is the whole reason the mic check saves anything. These tests
+/// pin down that it survives a restart, that it stays newest-first, and - most
+/// importantly - that a file it cannot fully understand costs it the DISPLAY of
+/// the rows it cannot read and nothing else: those rows are still in the file
+/// afterwards, because the file on the owner's phone is a bare-board baseline
+/// that cannot be taken again.
 void main() {
   DeviceTestStore storeOn(MemoryFileStore files, {int maxResults = 200}) =>
       DeviceTestStore(
@@ -30,7 +32,7 @@ void main() {
         startedAt: DateTime.utc(2026, 9, 13, 14, minute),
         duration: const Duration(seconds: 10),
         readings: <DeviceTestReading>[
-          DeviceTestReading(label: 'Stops', value: minute),
+          DeviceTestReading(label: 'Peak', value: minute),
         ],
       );
 
@@ -40,7 +42,9 @@ void main() {
 
     expect(store.isLoaded, isTrue);
     expect(store.results, isEmpty);
-    expect(store.latestOf(DeviceTestKind.range), isNull);
+    expect(store.latestOf(DeviceTestKind.sensitivity), isNull);
+    expect(store.unreadRunCount, 0);
+    expect(store.retiredRunCount, 0);
   });
 
   test('until it is loaded it does not claim there is no history', () {
@@ -60,34 +64,36 @@ void main() {
 
     expect(second.results, hasLength(1));
     expect(second.results.single.kind, DeviceTestKind.noiseFloor);
-    expect(second.latestOf(DeviceTestKind.noiseFloor)?.reading('Stops')?.value, 2);
+    expect(second.latestOf(DeviceTestKind.noiseFloor)?.reading('Peak')?.value, 2);
   });
 
   test('the newest run comes first', () async {
     final store = storeOn(MemoryFileStore());
     await store.load();
-    await store.append(result(DeviceTestKind.range, 1));
-    await store.append(result(DeviceTestKind.range, 2));
-    await store.append(result(DeviceTestKind.range, 3));
+    await store.append(result(DeviceTestKind.sensitivity, 1));
+    await store.append(result(DeviceTestKind.sensitivity, 2));
+    await store.append(result(DeviceTestKind.sensitivity, 3));
 
     expect(
-      store.results.map((r) => r.reading('Stops')?.value).toList(),
+      store.results.map((r) => r.reading('Peak')?.value).toList(),
       <int>[3, 2, 1],
     );
     // Which is what makes "latest" and "the one before it" - the comparison the
     // screen shows - a matter of taking the first two.
-    expect(store.latestOf(DeviceTestKind.range)?.reading('Stops')?.value, 3);
+    expect(store.latestOf(DeviceTestKind.sensitivity)?.reading('Peak')?.value, 3);
   });
 
-  test('latestOf answers per test, not across them', () async {
+  test('latestOf answers per check, not across them', () async {
     final store = storeOn(MemoryFileStore());
     await store.load();
-    await store.append(result(DeviceTestKind.range, 1));
-    await store.append(result(DeviceTestKind.linkSoak, 2));
+    await store.append(result(DeviceTestKind.sensitivity, 1));
+    await store.append(result(DeviceTestKind.noiseFloor, 2));
 
-    expect(store.latestOf(DeviceTestKind.range)?.reading('Stops')?.value, 1);
-    expect(store.latestOf(DeviceTestKind.linkSoak)?.reading('Stops')?.value, 2);
-    expect(store.latestOf(DeviceTestKind.sensitivity), isNull);
+    expect(
+      store.latestOf(DeviceTestKind.sensitivity)?.reading('Peak')?.value,
+      1,
+    );
+    expect(store.latestOf(DeviceTestKind.noiseFloor)?.reading('Peak')?.value, 2);
   });
 
   test('the oldest runs fall off the end rather than growing without bound',
@@ -95,12 +101,12 @@ void main() {
     final store = storeOn(MemoryFileStore(), maxResults: 3);
     await store.load();
     for (var minute = 1; minute <= 5; minute++) {
-      await store.append(result(DeviceTestKind.range, minute));
+      await store.append(result(DeviceTestKind.sensitivity, minute));
     }
 
     expect(store.results, hasLength(3));
     expect(
-      store.results.map((r) => r.reading('Stops')?.value).toList(),
+      store.results.map((r) => r.reading('Peak')?.value).toList(),
       <int>[5, 4, 3],
     );
   });
@@ -110,24 +116,25 @@ void main() {
     await store.load();
     await store.append(
       result(
-        DeviceTestKind.wakeOnMotion,
+        DeviceTestKind.sensitivity,
         1,
         outcome: DeviceTestOutcome.unavailable,
       ),
     );
 
     expect(
-      store.latestOf(DeviceTestKind.wakeOnMotion)?.outcome,
+      store.latestOf(DeviceTestKind.sensitivity)?.outcome,
       DeviceTestOutcome.unavailable,
     );
   });
 
-  test('one unreadable row costs that row and not the rest', () async {
+  test('one unreadable row costs the DISPLAY of that row and nothing else',
+      () async {
     final files = MemoryFileStore();
     final store = storeOn(files);
     await store.load();
-    await store.append(result(DeviceTestKind.range, 1));
-    await store.append(result(DeviceTestKind.range, 2));
+    await store.append(result(DeviceTestKind.sensitivity, 1));
+    await store.append(result(DeviceTestKind.sensitivity, 2));
 
     // A row written by a build that knows a sixth test. The two rows this build
     // does understand must still be readable - refusing to show any history
@@ -145,6 +152,11 @@ void main() {
     final reopened = storeOn(files);
     await reopened.load();
     expect(reopened.results, hasLength(2));
+    // Counted, not silently absent: a screen showing two of three runs has to be
+    // able to say where the third went.
+    expect(reopened.unreadRunCount, 1);
+    // From a future build, not a measurement this app used to take.
+    expect(reopened.retiredRunCount, 0);
   });
 
   test('a corrupt file leaves an empty history and does not throw', () async {
@@ -156,7 +168,7 @@ void main() {
     expect(store.results, isEmpty);
     // And new runs can still be recorded: losing old results is bad, refusing
     // to take new measurements would be worse.
-    await store.append(result(DeviceTestKind.range, 1));
+    await store.append(result(DeviceTestKind.sensitivity, 1));
     expect(store.results, hasLength(1));
   });
 
@@ -168,7 +180,7 @@ void main() {
       utf8.encode(
         jsonEncode(<String, Object?>{
           'version': DeviceTestStore.formatVersion + 1,
-          'results': <Object?>[result(DeviceTestKind.range, 1).toJson()],
+          'results': <Object?>[result(DeviceTestKind.sensitivity, 1).toJson()],
         }),
       ),
     );
@@ -184,9 +196,9 @@ void main() {
     await store.load();
 
     // A result that was measured and not saved has failed at the one thing the
-    // harness is for, so the caller must be told.
+    // saved history is for, so the caller must be told.
     await expectLater(
-      store.append(result(DeviceTestKind.range, 1)),
+      store.append(result(DeviceTestKind.sensitivity, 1)),
       throwsA(isA<Exception>()),
     );
   });
@@ -194,7 +206,7 @@ void main() {
   test('clear forgets every run', () async {
     final store = storeOn(MemoryFileStore());
     await store.load();
-    await store.append(result(DeviceTestKind.range, 1));
+    await store.append(result(DeviceTestKind.sensitivity, 1));
     await store.clear();
 
     expect(store.results, isEmpty);
@@ -259,7 +271,7 @@ void main() {
     expect(batches.single.spreadOf('Noise floor (RMS)').median, -2);
   });
 
-  test('two sittings of the same test are two batches, newest first', () async {
+  test('two sittings of the same check are two batches, newest first', () async {
     final store = storeOn(MemoryFileStore());
     await store.load();
     await store.append(
@@ -275,15 +287,14 @@ void main() {
     expect(batches.map((batch) => batch.batchId), <String>['after', 'before']);
   });
 
-  test('batchesOf never mixes one test into another', () async {
+  test('batchesOf never mixes one check into another', () async {
     final store = storeOn(MemoryFileStore());
     await store.load();
     await store.append(inBatch(DeviceTestKind.noiseFloor, 1, batchId: 'a'));
-    await store.append(inBatch(DeviceTestKind.linkSoak, 2, batchId: 'b'));
+    await store.append(inBatch(DeviceTestKind.sensitivity, 2, batchId: 'b'));
 
     expect(store.batchesOf(DeviceTestKind.noiseFloor), hasLength(1));
-    expect(store.batchesOf(DeviceTestKind.linkSoak), hasLength(1));
-    expect(store.batchesOf(DeviceTestKind.range), isEmpty);
+    expect(store.batchesOf(DeviceTestKind.sensitivity), hasLength(1));
   });
 
   test('a file written before batches existed still loads, every row',
@@ -375,6 +386,148 @@ void main() {
     expect(only.sampleCount, 3);
     expect(only.requested, 5);
     expect(only.isPartial, isTrue);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE BASELINE MUST SURVIVE THE MEASUREMENTS THAT WERE REMOVED
+  //
+  // There is a phone with runs of the range walk, the link soak and
+  // wake-on-motion in it, taken on the bare board before the enclosure existed.
+  // This build cannot read any of the three. The file is REWRITTEN on every
+  // append, so the danger is not that those rows fail to display - it is that
+  // the next mic check silently erases them. These are the tests that say it
+  // does not.
+  // -------------------------------------------------------------------------
+  group('runs of a retired measurement', () {
+    /// The file as the old build left it: acoustic runs this build reads,
+    /// interleaved with runs of the three measurements it does not.
+    Future<DeviceTestStore> baselineOn(MemoryFileStore files) async {
+      final store = storeOn(files);
+      Map<String, Object?> row(String kind, String at, num value) =>
+          <String, Object?>{
+            'kind': kind,
+            'outcome': 'completed',
+            'startedAt': at,
+            'durationMs': 10000,
+            'readings': <Object?>[
+              <String, Object?>{
+                'label': 'Noise floor (RMS)',
+                'value': value,
+                'unit': 'dBFS',
+              },
+            ],
+            'steps': <Object?>[],
+            'note': 'from the bare board',
+          };
+      await files.writeBytes(
+        store.path,
+        utf8.encode(
+          jsonEncode(<String, Object?>{
+            'version': 1,
+            'results': <Object?>[
+              row('wake-on-motion', '2026-09-13T14:05:00.000Z', 1.9),
+              row('noise-floor', '2026-09-13T14:04:00.000Z', -54.2),
+              row('link-soak', '2026-09-13T14:03:00.000Z', 0),
+              row('sensitivity', '2026-09-13T14:02:00.000Z', -24.6),
+              row('range', '2026-09-13T14:01:00.000Z', -79),
+            ],
+          }),
+        ),
+      );
+      await store.load();
+      return store;
+    }
+
+    test('are not shown, and are counted rather than quietly absent', () async {
+      final store = await baselineOn(MemoryFileStore());
+
+      expect(store.results, hasLength(2));
+      expect(store.unreadRunCount, 3);
+      // All three are retired measurements, none is from a future build - which
+      // is the distinction the screen needs in order to explain itself.
+      expect(store.retiredRunCount, 3);
+    });
+
+    test('survive an append, byte for byte', () async {
+      final files = MemoryFileStore();
+      final store = await baselineOn(files);
+
+      await store.append(
+        inBatch(DeviceTestKind.noiseFloor, 30, batchId: 'after-the-case'),
+      );
+
+      final rewritten = jsonDecode(utf8.decode(files.files[store.path]!))
+          as Map<String, Object?>;
+      final rows = (rewritten['results']! as List)
+          .cast<Map<String, Object?>>();
+
+      // Six rows: the five that were there, plus the new one at the front.
+      expect(rows, hasLength(6));
+      expect(rows.first['kind'], 'noise-floor');
+      expect(
+        rows.map((row) => row['kind']).toList(),
+        <String>[
+          'noise-floor',
+          'wake-on-motion',
+          'noise-floor',
+          'link-soak',
+          'sensitivity',
+          'range',
+        ],
+      );
+      // Not just present - UNCHANGED. The wake run still carries the reading and
+      // the note it was written with, because nothing interpreted it.
+      final wake = rows[1];
+      expect(wake['note'], 'from the bare board');
+      expect(wake['startedAt'], '2026-09-13T14:05:00.000Z');
+      expect((wake['readings']! as List).single, <String, Object?>{
+        'label': 'Noise floor (RMS)',
+        'value': 1.9,
+        'unit': 'dBFS',
+      });
+      // And the row the old build wrote for the range walk still has its
+      // `steps` key, which this build has no field for at all.
+      expect(rows.last.containsKey('steps'), isTrue);
+    });
+
+    test('are still there on the next launch, after that append', () async {
+      final files = MemoryFileStore();
+      final store = await baselineOn(files);
+      await store.append(
+        inBatch(DeviceTestKind.noiseFloor, 30, batchId: 'after-the-case'),
+      );
+
+      final reopened = storeOn(files);
+      await reopened.load();
+
+      expect(reopened.results, hasLength(3));
+      expect(reopened.unreadRunCount, 3);
+      expect(reopened.retiredRunCount, 3);
+    });
+
+    test('the retired names are the three that were removed, and nothing else',
+        () {
+      expect(
+        DeviceTestStore.retiredKinds,
+        <String>{'range', 'link-soak', 'wake-on-motion'},
+      );
+      // Documented rather than remembered: every one of them is a string that
+      // exists in a file somewhere.
+      for (final kind in DeviceTestKind.values) {
+        expect(
+          DeviceTestStore.retiredKinds.contains(kind.wireName),
+          isFalse,
+          reason: '${kind.wireName} is still taken',
+        );
+      }
+    });
+
+    test('the format version was NOT bumped for the removal', () {
+      // Bumping it would make this build refuse to read the baseline it most
+      // needs: the shape did not change, three values of one field simply
+      // stopped being produced.
+      expect(DeviceTestStore.formatVersion, 1);
+    });
   });
 }
 

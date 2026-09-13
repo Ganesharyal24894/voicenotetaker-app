@@ -14,13 +14,18 @@ import 'package:voicenotetaker_app/services/device_test_store.dart';
 
 import 'view/harness.dart' show MemoryFileStore, MockBleTransport, knownDevice;
 
-/// The five enclosure tests, driven against a fake radio.
+/// The mic check - noise floor and sensitivity - driven against a fake radio.
 ///
 /// These are service tests, not widget tests, and deliberately: the interesting
 /// behaviour is a sequence over time - open a notify stream, count for a window,
-/// watch an advertising gap, time a shake - and a widget tester's fake clock is
-/// the wrong instrument for it. The windows are injected in milliseconds so the
-/// whole file runs in a second.
+/// save - and a widget tester's fake clock is the wrong instrument for it. The
+/// windows are injected in milliseconds so the whole file runs in a second.
+///
+/// THE RANGE WALK, THE LINK SOAK AND WAKE-ON-MOTION USED TO BE TESTED HERE. They
+/// are gone: the first two are now the live Link view on the diagnostics screen,
+/// which measures the same two quantities continuously, and the third reported a
+/// figure dominated by the phone's own scan-discovery latency. See the library
+/// comment of `model/device_test_result.dart`.
 void main() {
   setUpAll(() {
     registerFallbackValue(AudioCodec.imaAdpcm);
@@ -32,8 +37,6 @@ void main() {
   late StreamController<Uint8List> frames;
   late StreamController<BleConnectionStatus> link;
   late List<StreamController<DiscoveredDevice>> scans;
-  late bool advertising;
-  late int disconnects;
   late int frameSubscriptions;
   DeviceTestService? service;
 
@@ -44,8 +47,6 @@ void main() {
     frames = StreamController<Uint8List>.broadcast();
     link = StreamController<BleConnectionStatus>.broadcast();
     scans = <StreamController<DiscoveredDevice>>[];
-    advertising = true;
-    disconnects = 0;
     frameSubscriptions = 0;
 
     when(() => transport.selectCodec(any(), any())).thenAnswer((_) async {});
@@ -60,20 +61,6 @@ void main() {
     when(() => transport.readRssi(any())).thenAnswer((_) async => -58);
     when(() => transport.readDieTemperature(any()))
         .thenAnswer((_) async => const DieTemperature(deciCelsius: 386));
-    when(() => transport.setAutoSleep(any(), any())).thenAnswer((_) async {});
-    when(() => transport.stopScan()).thenAnswer((_) async {});
-    // Each scan window is a fresh stream, exactly as the real transport hands
-    // one out. Nothing is emitted unless the device is "advertising".
-    when(() => transport.scan()).thenAnswer((_) {
-      final controller = StreamController<DiscoveredDevice>();
-      scans.add(controller);
-      if (advertising) {
-        scheduleMicrotask(() {
-          if (!controller.isClosed) controller.add(knownDevice);
-        });
-      }
-      return controller.stream;
-    });
   });
 
   tearDown(() async {
@@ -88,28 +75,13 @@ void main() {
 
   DeviceTestService build({
     Duration acoustic = const Duration(milliseconds: 60),
-    Duration soak = const Duration(milliseconds: 60),
-    Duration poll = const Duration(milliseconds: 20),
-    Duration confirm = const Duration(milliseconds: 60),
-    Duration systemOff = const Duration(milliseconds: 900),
-    Duration wake = const Duration(milliseconds: 300),
-    Future<void> Function()? disconnectLink,
     DeviceTestStore? withStore,
   }) {
     final built = DeviceTestService(
       transport: transport,
       store: withStore ?? store,
-      disconnectLink: disconnectLink ??
-          () async {
-            disconnects++;
-          },
       noiseFloorWindow: acoustic,
       sensitivityWindow: acoustic,
-      linkSoakWindow: soak,
-      advertisingPollWindow: poll,
-      systemOffConfirm: confirm,
-      systemOffTimeout: systemOff,
-      wakeTimeout: wake,
       tick: const Duration(milliseconds: 10),
     );
     service = built;
@@ -159,7 +131,7 @@ void main() {
   }
 
   // -------------------------------------------------------------------------
-  group('the noise floor test', () {
+  group('the noise floor check', () {
     test('reports the RMS of the window it measured', () async {
       final tests = build();
       await tests.load();
@@ -296,7 +268,7 @@ void main() {
     });
   });
 
-  group('the sensitivity test', () {
+  group('the sensitivity check', () {
     test('reports peak and RMS, and names the distance it was spoken from',
         () async {
       final tests = build();
@@ -347,325 +319,6 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
-  group('the range walk', () {
-    test('records the live RSSI and the frames lost on each leg', () async {
-      final tests = build();
-      await tests.load();
-
-      expect(
-        await tests.beginRangeWalk(
-          deviceId: knownDevice.id,
-          requestCodec: AudioCodec.pcmS16le,
-        ),
-        isTrue,
-      );
-      expect(tests.phase, DeviceTestPhase.walking);
-
-      // Leg one: clean.
-      await pushFrames(10);
-      when(() => transport.readRssi(any())).thenAnswer((_) async => -54);
-      await tests.markRangeStep();
-
-      // Leg two: a gap in the sequence numbers - frames the device sent and the
-      // phone never saw.
-      await pushFrames(5, from: 10);
-      await pushFrames(5, from: 19);
-      when(() => transport.readRssi(any())).thenAnswer((_) async => -79);
-      await tests.markRangeStep();
-
-      final result = await tests.finishRangeWalk();
-
-      expect(result!.steps.length, greaterThanOrEqualTo(2));
-      expect(result.steps[0].rssiDbm, -54);
-      expect(result.steps[0].framesLost, 0);
-      expect(result.steps[1].rssiDbm, -79);
-      expect(result.steps[1].framesLost, 4);
-      // THE HEADLINE: the signal at the stop where frames first went missing.
-      // An RSSI-only report would have called -79 dBm a usable link.
-      expect(
-        result.reading(DeviceTestReadings.rssiAtFirstDrop)?.value,
-        -79,
-      );
-      expect(result.note, contains('stop 2'));
-    });
-
-    test('a walk with no drops reports no limit rather than a false one',
-        () async {
-      final tests = build();
-      await tests.load();
-      await tests.beginRangeWalk(
-        deviceId: knownDevice.id,
-        requestCodec: AudioCodec.pcmS16le,
-      );
-      await pushFrames(20);
-      await tests.markRangeStep();
-      final result = await tests.finishRangeWalk();
-
-      // Null, NOT 0 dBm: nothing dropped, so there is no signal level to name.
-      expect(result!.reading(DeviceTestReadings.rssiAtFirstDrop)?.value, isNull);
-      expect(result.note, contains('only a floor on it'));
-    });
-
-    test('a stop with no RSSI reading still records its frame counts',
-        () async {
-      when(() => transport.readRssi(any()))
-          .thenThrow(const BleTransportException('not supported here'));
-      final tests = build();
-      await tests.load();
-      await tests.beginRangeWalk(
-        deviceId: knownDevice.id,
-        requestCodec: AudioCodec.pcmS16le,
-      );
-      await pushFrames(6);
-      await tests.markRangeStep();
-      final result = await tests.finishRangeWalk();
-
-      expect(result!.steps.first.rssiDbm, isNull);
-      expect(result.steps.first.framesReceived, greaterThan(0));
-      // The frame counts are the half of the measurement that cannot be argued
-      // with, so losing RSSI must not lose the walk.
-      expect(result.outcome, DeviceTestOutcome.completed);
-    });
-
-    test('the final leg is measured rather than thrown away', () async {
-      final tests = build();
-      await tests.load();
-      await tests.beginRangeWalk(
-        deviceId: knownDevice.id,
-        requestCodec: AudioCodec.pcmS16le,
-      );
-      await pushFrames(4);
-      await tests.markRangeStep();
-      await pushFrames(4, from: 4);
-      // No second Mark step: finishing must still close the last leg.
-      final result = await tests.finishRangeWalk();
-
-      expect(result!.steps, hasLength(2));
-      expect(result.steps.last.framesReceived, 4);
-    });
-
-    test('marking a step outside a walk does nothing', () async {
-      final tests = build();
-      await tests.load();
-      await tests.markRangeStep();
-      expect(tests.steps, isEmpty);
-      expect(await tests.finishRangeWalk(), isNull);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  group('the link soak', () {
-    test('counts frames, loss and disconnections over the window', () async {
-      final tests = build(soak: const Duration(milliseconds: 120));
-      await tests.load();
-
-      final run = tests.runLinkSoak(
-        deviceId: knownDevice.id,
-        requestCodec: AudioCodec.pcmS16le,
-      );
-      await streaming();
-      await pushFrames(10);
-      await pushFrames(10, from: 12);
-      final result = await run;
-
-      expect(result!.outcome, DeviceTestOutcome.completed);
-      expect(result.reading(DeviceTestReadings.framesLost)?.value, 2);
-      expect(result.reading(DeviceTestReadings.lossPercent)?.value,
-          closeTo(100 * 2 / 22, 0.01));
-      expect(result.reading(DeviceTestReadings.disconnections)?.value, 0);
-    });
-
-    test('a link that goes away ends the soak and says so', () async {
-      final tests = build(soak: const Duration(seconds: 30));
-      await tests.load();
-
-      final run = tests.runLinkSoak(
-        deviceId: knownDevice.id,
-        requestCodec: AudioCodec.pcmS16le,
-      );
-      await streaming();
-      await pushFrames(5);
-      link.add(BleConnectionStatus.disconnected);
-      final result = await run;
-
-      // A run that spent most of its window disconnected is not a soak, and an
-      // intermittent link is exactly what this test is looking for.
-      expect(result!.outcome, DeviceTestOutcome.failed);
-      expect(result.reading(DeviceTestReadings.disconnections)?.value, 1);
-      expect(result.note, contains('went away'));
-    });
-
-    test('a transport that cannot report link state says unknown, not zero',
-        () async {
-      when(() => transport.connectionState(any()))
-          .thenThrow(const BleTransportException('unsupported'));
-      final tests = build(soak: const Duration(milliseconds: 60));
-      await tests.load();
-
-      final run = tests.runLinkSoak(
-        deviceId: knownDevice.id,
-        requestCodec: AudioCodec.pcmS16le,
-      );
-      await streaming();
-      await pushFrames(4);
-      final result = await run;
-
-      // "No disconnections" and "we could not tell" are different facts.
-      expect(result!.reading(DeviceTestReadings.disconnections)?.value, isNull);
-      expect(result.reading(DeviceTestReadings.framesLost)?.value, 0);
-    });
-
-    test('malformed notifications are counted separately from loss', () async {
-      final tests = build(soak: const Duration(milliseconds: 80));
-      await tests.load();
-
-      final run = tests.runLinkSoak(
-        deviceId: knownDevice.id,
-        requestCodec: AudioCodec.pcmS16le,
-      );
-      await streaming();
-      await pushFrames(3);
-      // One byte: too short to carry a sequence header at all.
-      frames.add(Uint8List.fromList(<int>[0x01]));
-      await Future<void>.delayed(const Duration(milliseconds: 5));
-      final result = await run;
-
-      expect(result!.reading('Malformed frames')?.value, 1);
-      expect(result.reading(DeviceTestReadings.framesLost)?.value, 0);
-    });
-
-    test('cancelling stops it early and saves what it had', () async {
-      final tests = build(soak: const Duration(seconds: 30));
-      await tests.load();
-
-      final run = tests.runLinkSoak(
-        deviceId: knownDevice.id,
-        requestCodec: AudioCodec.pcmS16le,
-      );
-      await streaming();
-      await pushFrames(6);
-      tests.cancel();
-      final result = await run;
-
-      expect(result!.outcome, DeviceTestOutcome.cancelled);
-      expect(result.reading('Frames received')?.value, 6);
-      expect(tests.history.first.outcome, DeviceTestOutcome.cancelled);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  group('the wake-on-motion test', () {
-    test('enables auto-sleep, drops the link, waits for silence, times a shake',
-        () async {
-      final tests = build();
-      await tests.load();
-
-      final run = tests.runWakeOnMotion(deviceId: knownDevice.id);
-      // It stops advertising shortly after the link goes.
-      await until(() => disconnects == 1);
-      advertising = false;
-
-      await until(() => tests.phase == DeviceTestPhase.waitingForShake);
-      // The shake, and the device coming back.
-      advertising = true;
-      tests.confirmShaken();
-      final result = await run;
-
-      verify(() => transport.setAutoSleep(knownDevice.id, true)).called(1);
-      expect(disconnects, 1);
-      expect(result!.outcome, DeviceTestOutcome.completed);
-      final delay = result.reading(DeviceTestReadings.wakeDelay)!;
-      expect(delay.value, isNotNull);
-      expect(delay.unit, 's');
-      // The caveat travels with the figure: this includes the phone's own scan
-      // discovery latency, so it is a coarse number by construction.
-      expect(result.note, contains('scan-discovery latency'));
-    });
-
-    test('firmware that will not take the flag is unavailable, not failed',
-        () async {
-      when(() => transport.setAutoSleep(any(), any()))
-          .thenThrow(const BleTransportException('no such characteristic'));
-      final tests = build();
-      await tests.load();
-
-      final result = await tests.runWakeOnMotion(deviceId: knownDevice.id);
-
-      expect(result!.outcome, DeviceTestOutcome.unavailable);
-      expect(result.note, contains('auto-sleep could not be enabled'));
-      // And the link is left alone: there was never a test to run.
-      expect(disconnects, 0);
-    });
-
-    test('a build that cannot end the link reports that, and measures nothing',
-        () async {
-      final tests = DeviceTestService(
-        transport: transport,
-        store: store,
-        tick: const Duration(milliseconds: 10),
-      );
-      service = tests;
-      await tests.load();
-
-      final result = await tests.runWakeOnMotion(deviceId: knownDevice.id);
-
-      expect(result!.outcome, DeviceTestOutcome.unavailable);
-      expect(result.note, contains('will not sleep while the app is connected'));
-    });
-
-    test('a device that never stops advertising is a failure with a reason',
-        () async {
-      final tests = build(systemOff: const Duration(milliseconds: 200));
-      await tests.load();
-
-      // Never goes quiet.
-      final result = await tests.runWakeOnMotion(deviceId: knownDevice.id);
-
-      expect(result!.outcome, DeviceTestOutcome.failed);
-      expect(result.note, contains('never reached System OFF'));
-      expect(result.reading(DeviceTestReadings.wakeDelay), isNull);
-    });
-
-    test('a shake that does not wake it reports no wake time at all', () async {
-      final tests = build(wake: const Duration(milliseconds: 150));
-      await tests.load();
-
-      final run = tests.runWakeOnMotion(deviceId: knownDevice.id);
-      await until(() => disconnects == 1);
-      advertising = false;
-      await until(() => tests.phase == DeviceTestPhase.waitingForShake);
-      // Shaken, but it stays asleep - the case is damping the shake below the
-      // IMU's threshold, which is the whole finding.
-      tests.confirmShaken();
-      final result = await run;
-
-      expect(result!.outcome, DeviceTestOutcome.failed);
-      // A timeout is NOT a wake time.
-      expect(result.reading(DeviceTestReadings.wakeDelay)?.value, isNull);
-      expect(result.note, contains('mass and damping'));
-    });
-
-    test('cancelling before the shake says auto-sleep was left enabled',
-        () async {
-      final tests = build();
-      await tests.load();
-
-      final run = tests.runWakeOnMotion(deviceId: knownDevice.id);
-      await until(() => disconnects == 1);
-      advertising = false;
-      await until(() => tests.phase == DeviceTestPhase.waitingForShake);
-      tests.cancel();
-      final result = await run;
-
-      expect(result!.outcome, DeviceTestOutcome.cancelled);
-      // The flag lives in the device's flash, so leaving it on is a real
-      // consequence the operator has to be told about.
-      expect(result.note, contains('left'));
-      expect(result.note, contains('enabled'));
-    });
-  });
-
-  // -------------------------------------------------------------------------
   // -------------------------------------------------------------------------
   // THE DIE TEMPERATURE, STAMPED ON EVERY RUN
   //
@@ -690,54 +343,6 @@ void main() {
       final die = result!.reading(DeviceTestReadings.dieTemperature)!;
       expect(die.value, closeTo(38.6, 1e-9));
       expect(die.unit, '°C');
-    });
-
-    test('is recorded with a soak and with a range walk', () async {
-      final tests = build(soak: const Duration(milliseconds: 60));
-      await tests.load();
-
-      final soak = tests.runLinkSoak(
-        deviceId: knownDevice.id,
-        requestCodec: AudioCodec.pcmS16le,
-      );
-      await streaming();
-      await pushFrames(2);
-      final soaked = await soak;
-      expect(
-        soaked!.reading(DeviceTestReadings.dieTemperature)?.value,
-        closeTo(38.6, 1e-9),
-      );
-
-      await tests.beginRangeWalk(
-        deviceId: knownDevice.id,
-        requestCodec: AudioCodec.pcmS16le,
-      );
-      await pushFrames(2, from: 40);
-      final walk = await tests.finishRangeWalk();
-      expect(
-        walk!.reading(DeviceTestReadings.dieTemperature)?.value,
-        closeTo(38.6, 1e-9),
-      );
-    });
-
-    test('the wake test reads it BEFORE dropping the link', () async {
-      final tests = build();
-      await tests.load();
-
-      final run = tests.runWakeOnMotion(deviceId: knownDevice.id);
-      await until(() => disconnects == 1);
-      advertising = false;
-      await until(() => tests.phase == DeviceTestPhase.waitingForShake);
-      advertising = true;
-      tests.confirmShaken();
-      final result = await run;
-
-      // Afterwards the device is asleep and then freshly awake, with no link to
-      // read over - so a reading taken at the end would always be missing.
-      expect(
-        result!.reading(DeviceTestReadings.dieTemperature)?.value,
-        closeTo(38.6, 1e-9),
-      );
     });
 
     test('firmware without fe07 records null, never zero degrees', () async {
@@ -782,8 +387,8 @@ void main() {
     });
   });
 
-  group('the harness itself', () {
-    test('only one test runs at a time', () async {
+  group('the service itself', () {
+    test('only one check runs at a time', () async {
       final tests = build(acoustic: const Duration(milliseconds: 200));
       await tests.load();
 
@@ -800,13 +405,6 @@ void main() {
           requestCodec: AudioCodec.pcmS16le,
         ),
         isNull,
-      );
-      expect(
-        await tests.beginRangeWalk(
-          deviceId: knownDevice.id,
-          requestCodec: AudioCodec.pcmS16le,
-        ),
-        isFalse,
       );
       await first;
     });
@@ -1026,7 +624,7 @@ void main() {
       expect(tests.isBatchActive, isFalse);
     });
 
-    test('the sensitivity test waits for the operator between samples',
+    test('the sensitivity check waits for the operator between samples',
         () async {
       final tests = build(acoustic: const Duration(milliseconds: 40));
       await tests.load();
@@ -1104,43 +702,7 @@ void main() {
       expect(frameSubscriptions, 0);
     });
 
-    test('a walk is offered again rather than started for the operator',
-        () async {
-      final tests = build();
-      await tests.load();
-
-      await tests.beginRangeWalk(
-        deviceId: knownDevice.id,
-        requestCodec: AudioCodec.pcmS16le,
-        repeats: 2,
-      );
-      await streaming();
-      await pushFrames(4);
-      await tests.markRangeStep();
-      await tests.finishRangeWalk();
-
-      // Between walks: the phone has to be carried back to the device first.
-      expect(tests.isRunning, isFalse);
-      expect(tests.awaitingNextSample, isTrue);
-      expect(tests.batchKind, DeviceTestKind.range);
-      expect(tests.samplesTaken, 1);
-
-      await tests.continueBatch();
-      expect(tests.running, DeviceTestKind.range);
-      expect(tests.phase, DeviceTestPhase.walking);
-      // A fresh walk, not a continuation of the last one's stops.
-      expect(tests.steps, isEmpty);
-
-      await tests.markRangeStep();
-      await tests.finishRangeWalk();
-
-      final batch = tests.batchesOf(DeviceTestKind.range).single;
-      expect(batch.sampleCount, 2);
-      expect(batch.isPartial, isFalse);
-      expect(tests.isBatchActive, isFalse);
-    });
-
-    test('a batch in progress keeps another test out', () async {
+    test('a batch in progress keeps the other check out', () async {
       final tests = build(acoustic: const Duration(milliseconds: 40));
       await tests.load();
 
@@ -1164,72 +726,14 @@ void main() {
         isNull,
       );
       expect(
-        await tests.beginRangeWalk(
+        await tests.runSensitivity(
           deviceId: knownDevice.id,
           requestCodec: AudioCodec.pcmS16le,
         ),
-        isFalse,
+        isNull,
       );
       expect(tests.batchKind, DeviceTestKind.sensitivity);
       expect(frameSubscriptions, 1);
-    });
-
-    test('a second wake sample needs no link to enable auto-sleep', () async {
-      final tests = build();
-      await tests.load();
-
-      final first = tests.runWakeOnMotion(
-        deviceId: knownDevice.id,
-        repeats: 2,
-      );
-      await until(() => disconnects == 1);
-      advertising = false;
-      await until(() => tests.phase == DeviceTestPhase.waitingForShake);
-      advertising = true;
-      tests.confirmShaken();
-      expect((await first)!.outcome, DeviceTestOutcome.completed);
-      expect(tests.awaitingNextSample, isTrue);
-
-      // THE LINK IS GONE - the first sample ended it on purpose and nothing
-      // reconnects it, so `fe04` cannot be written again. It does not need to
-      // be: the flag lives in the device's flash. A failure here must not turn
-      // the second sample into "unavailable".
-      when(() => transport.setAutoSleep(any(), any()))
-          .thenThrow(const BleTransportException('not connected'));
-
-      final second = tests.continueBatch();
-      await until(() => tests.phase == DeviceTestPhase.waitingForSystemOff);
-      advertising = false;
-      await until(() => tests.phase == DeviceTestPhase.waitingForShake);
-      advertising = true;
-      tests.confirmShaken();
-      final result = await second;
-
-      expect(result!.outcome, DeviceTestOutcome.completed);
-      expect(result.reading(DeviceTestReadings.wakeDelay)?.value, isNotNull);
-      final batch = tests.batchesOf(DeviceTestKind.wakeOnMotion).single;
-      expect(batch.sampleCount, 2);
-      expect(batch.spreadOf(DeviceTestReadings.wakeDelay).n, 2);
-    });
-
-    test('the FIRST sample still refuses when auto-sleep cannot be enabled',
-        () async {
-      when(() => transport.setAutoSleep(any(), any()))
-          .thenThrow(const BleTransportException('no such characteristic'));
-      final tests = build();
-      await tests.load();
-
-      final result = await tests.runWakeOnMotion(
-        deviceId: knownDevice.id,
-        repeats: 3,
-      );
-
-      // Firmware with no `fe04` has nothing to put to sleep, and asking for it
-      // three times over would not change that.
-      expect(result!.outcome, DeviceTestOutcome.unavailable);
-      expect(disconnects, 0);
-      expect(tests.isBatchActive, isFalse);
-      expect(tests.batchesOf(DeviceTestKind.wakeOnMotion).single.sampleCount, 1);
     });
 
     test('a single sample is still a batch of one, and says so', () async {
@@ -1256,7 +760,7 @@ void main() {
       );
     });
 
-    test('two sittings of the same test stay two batches', () async {
+    test('two sittings of the same check stay two batches', () async {
       final tests = build(acoustic: const Duration(milliseconds: 40));
       await tests.load();
 

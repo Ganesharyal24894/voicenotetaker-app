@@ -1,43 +1,57 @@
-/// The saved result of one device test, and the vocabulary around it.
+/// The saved result of one device measurement, and the vocabulary around it.
 ///
 /// WHY THIS IS A SAVED ARTEFACT AND NOT A LIVE READOUT. The recorder is going
 /// into a plastic enclosure with a LiPo cell under the board. Both change how
 /// it behaves, and the only way to know whether they made it worse is to have
 /// measured it before. A number you can watch but not re-read cannot answer
-/// "was it better before?", so every test ends in one of these, it is written
-/// to disk, and it goes into the diagnostics export.
+/// "was it better before?", so every mic check ends in one of these, it is
+/// written to disk, and it goes into the diagnostics export.
 ///
 /// Runs are distinguished by [startedAt] and nothing else. The app has no way
 /// to know whether the enclosure is fitted, and a checkbox claiming it does
-/// would be a fabricated fact - so the instruction is to run the suite before
+/// would be a fabricated fact - so the instruction is to run the check before
 /// fitting the case and again after, and to compare by date.
+///
+/// WHAT IS NOT HERE ANY MORE. Three measurements were removed rather than kept
+/// for completeness:
+///
+///   * the stepped range walk and the minutes-long link soak, because the live
+///     Link view on the diagnostics screen measures the same two things - the
+///     signal, and the frames that went missing - continuously and without
+///     anybody having to walk anywhere. A soak is that view left open.
+///   * wake-on-motion, because the figure it reported was dominated by the
+///     phone's own scan-discovery latency rather than by the IMU, absence of an
+///     advertising packet is evidence of System OFF rather than proof of it,
+///     and there is no mechanism by which a plastic shell changes the
+///     sensitivity of an IMU that is soldered to the board. It also wrote
+///     auto-sleep into the device's flash and dropped the link, which is a
+///     mutation with nothing trustworthy to show for it.
+///
+/// Their wire names are listed in `DeviceTestStore.retiredKinds` and runs saved
+/// under them are KEPT IN THE FILE, untouched - see that class. This build just
+/// does not read them.
 ///
 /// Pure data, like [BatteryStatus] and [StreamInfo]: no I/O, no formatting.
 /// Persistence lives in `services/device_test_store.dart`; the strings a human
 /// reads are assembled in `view/`.
 library;
 
-/// The five things worth measuring about the enclosure.
+/// The two things worth measuring, and the reason there are only two.
+///
+/// Both are acoustic, and acoustics is where the enclosure can hurt a recording
+/// silently: nothing fails, the words just get harder to make out. Everything
+/// the LINK does is observable live, so it needs no saved run at all.
 enum DeviceTestKind {
-  /// How far the link carries before frames start going missing.
-  range('range'),
-
   /// Ten seconds of a quiet room: what the enclosure itself contributes.
   noiseFloor('noise-floor'),
 
   /// A voice at a marked distance: what the port costs.
-  sensitivity('sensitivity'),
-
-  /// Minutes of streaming: intermittent RF problems an instant reading misses.
-  linkSoak('link-soak'),
-
-  /// Whether a shake still wakes a device with a case's mass and damping.
-  wakeOnMotion('wake-on-motion');
+  sensitivity('sensitivity');
 
   const DeviceTestKind(this.wireName);
 
   /// Stable identifier used in the saved file. NEVER the enum index: inserting
-  /// a value would silently re-label every result already on disk.
+  /// or removing a value would silently re-label every result already on disk.
   final String wireName;
 
   static DeviceTestKind? fromWireName(String name) {
@@ -50,12 +64,12 @@ enum DeviceTestKind {
 
 /// How a run ended.
 ///
-/// [unavailable] is the honest answer for a test that could not even start -
-/// nothing connected, no `fe04` on this firmware, a capture already running.
-/// It is a RESULT, recorded and exported like any other, because "we could not
-/// measure it" is a fact worth having in a before-and-after comparison. What
-/// it must never be is a zero, or a default, or a blank row that looks like a
-/// pass.
+/// [unavailable] is the honest answer for a check that could not even start -
+/// nothing connected, a capture already running, a device that will not say
+/// what format it is streaming. It is a RESULT, recorded and exported like any
+/// other, because "we could not measure it" is a fact worth having in a
+/// before-and-after comparison. What it must never be is a zero, or a default,
+/// or a blank row that looks like a pass.
 enum DeviceTestOutcome {
   /// Ran to its end and produced its readings.
   completed('completed'),
@@ -67,8 +81,8 @@ enum DeviceTestOutcome {
   /// It could not run at all. [DeviceTestResult.note] says why.
   unavailable('unavailable'),
 
-  /// It started and then failed - the link went away, the device never stopped
-  /// advertising, the shake never woke it. [DeviceTestResult.note] says what.
+  /// It started and then failed - the link went away, or no audio arrived.
+  /// [DeviceTestResult.note] says what.
   failed('failed');
 
   const DeviceTestOutcome(this.wireName);
@@ -83,11 +97,11 @@ enum DeviceTestOutcome {
   }
 }
 
-/// What a running test is waiting for.
+/// What a running check is waiting for.
 ///
-/// The operator is half of every one of these tests - they walk away, they
-/// speak, they shake the board - so the phase is not decoration: it is the
-/// instruction, and the screen cannot be built without it.
+/// The operator is half of the sensitivity check - they speak - so the phase is
+/// not decoration: it is the instruction, and the screen cannot be built
+/// without it.
 ///
 /// In `model/` rather than beside the service that sets it, because `view/`
 /// renders it and `view/` depends on models, not on services.
@@ -95,29 +109,14 @@ enum DeviceTestPhase {
   /// Nothing running.
   idle,
 
-  /// Streaming and counting; the operator is walking.
-  walking,
-
   /// Streaming and measuring for a fixed window.
   measuring,
-
-  /// Scanning, waiting for the device to stop advertising (System OFF).
-  waitingForSystemOff,
-
-  /// Waiting for the operator to say they have shaken it.
-  waitingForShake,
-
-  /// Scanning, waiting for it to advertise again.
-  waitingForWake,
 
   /// Writing the result to disk.
   saving,
 
   /// A batch of samples is part-way through and the next one needs the
-  /// operator: they have to walk away again, speak again, or shake it again.
-  ///
-  /// APPENDED, never inserted. Nothing persists a phase, but the discipline is
-  /// the same one [DeviceTestKind] follows for a reason worth keeping.
+  /// operator: they have to speak again.
   awaitingNextSample,
 }
 
@@ -127,32 +126,23 @@ enum DeviceTestPhase {
 /// Named constants rather than string literals so the service that produces a
 /// reading, the card that shows it and the test that asserts on it cannot drift
 /// apart in what they call the same number.
+///
+/// EVERY NAME HERE IS ALSO A KEY IN A FILE ON SOMEBODY'S PHONE. The bare-board
+/// baseline is stored under these exact labels, so renaming one silently breaks
+/// the comparison the whole file exists for.
 abstract final class DeviceTestReadings {
-  /// The distance the sensitivity test is spoken from, in centimetres.
+  /// The distance the sensitivity check is spoken from, in centimetres.
   ///
   /// A CONSTANT, not a setting. The number itself does not matter; what matters
   /// is that the run before the enclosure and the run after were taken from the
   /// same place, and a free-text field is how that stops being true.
   static const int sensitivityDistanceCm = 30;
 
-  /// The headline of the range walk: the signal at the stop where frames FIRST
-  /// went missing. Null on a walk where nothing dropped.
-  static const String rssiAtFirstDrop = 'RSSI where drops began';
-
   static const String noiseFloorRms = 'Noise floor (RMS)';
   static const String peak = 'Peak';
   static const String rms = 'RMS';
-  static const String framesReceived = 'Frames received';
   static const String framesLost = 'Frames lost';
-  static const String malformedFrames = 'Malformed frames';
-  static const String lossPercent = 'Loss';
-  static const String disconnections = 'Disconnections';
-  static const String wakeDelay = 'Shake to advertising';
-  static const String stops = 'Stops';
-  static const String strongestRssi = 'Strongest RSSI';
-  static const String weakestRssi = 'Weakest RSSI';
   static const String audioMeasured = 'Audio measured';
-  static const String soaked = 'Soaked';
 
   /// The nRF52840's DIE temperature at the moment of the run. Named "die"
   /// HERE, in the label itself, because the label is what a reader of the
@@ -161,7 +151,7 @@ abstract final class DeviceTestReadings {
   static const String dieTemperature = 'Die temperature';
 }
 
-/// Why a test cannot be offered right now.
+/// Why a mic check cannot be offered right now.
 ///
 /// The same three-state discipline `AppController` uses for auto-sleep and the
 /// battery: a control with nothing truthful behind it is shown as unavailable
@@ -172,26 +162,17 @@ enum DeviceTestBlocker {
   notConnected,
 
   /// A capture is running. The frame subscription is exclusive - see
-  /// `BleTransport.subscribeFrames` - so a test cannot have one too.
+  /// `BleTransport.subscribeFrames` - so a check cannot have one too.
   recording,
 
-  /// Another test is running.
+  /// Another check is running.
   testRunning,
-
-  /// Firmware with no `fe04`. Nothing can be put to sleep on purpose, so the
-  /// wake test has no starting condition.
-  noAutoSleep,
-
-  /// The OS refused the permissions a scan needs, and the wake test can only
-  /// see the device advertise by scanning.
-  scanPermissionDenied,
 }
 
-/// One number out of a test, with its unit.
+/// One number out of a run, with its unit.
 ///
 /// [value] is nullable because a reading can legitimately be absent from an
-/// otherwise good run - "RSSI where drops began" has no value when nothing
-/// dropped, which is the best possible outcome and must not render as zero.
+/// otherwise good run, and an absent reading must not render as zero.
 class DeviceTestReading {
   const DeviceTestReading({
     required this.label,
@@ -243,81 +224,7 @@ class DeviceTestReading {
   String toString() => 'DeviceTestReading($label: $value $unit)';
 }
 
-/// One stop on the range walk.
-///
-/// RSSI ALONE MISLEADS, which is the whole reason this type has two fields
-/// next to each other. A link can sit at a perfectly respectable -75 dBm and
-/// still be shedding frames, because what kills a notify stream is retries and
-/// a crowded 2.4 GHz band, not raw path loss. So every stop records the signal
-/// AND what the link actually delivered between this stop and the last one.
-class DeviceTestStep {
-  const DeviceTestStep({
-    required this.index,
-    required this.rssiDbm,
-    required this.framesReceived,
-    required this.framesLost,
-  });
-
-  /// 1-based position in the walk.
-  final int index;
-
-  /// Signal strength read from the live link at this stop, or `null` when the
-  /// platform would not give one. Null is not zero: 0 dBm is a reading.
-  final int? rssiDbm;
-
-  /// Frames that arrived since the previous stop.
-  final int framesReceived;
-
-  /// Frames the sequence numbers say went missing since the previous stop.
-  final int framesLost;
-
-  int get framesExpected => framesReceived + framesLost;
-
-  /// Fraction of expected frames lost in this leg, `0.0 .. 1.0`.
-  double get lossRatio =>
-      framesExpected == 0 ? 0.0 : framesLost / framesExpected;
-
-  bool get dropped => framesLost > 0;
-
-  Map<String, Object?> toJson() => <String, Object?>{
-        'index': index,
-        'rssiDbm': rssiDbm,
-        'framesReceived': framesReceived,
-        'framesLost': framesLost,
-      };
-
-  static DeviceTestStep fromJson(Map<String, Object?> json) {
-    final index = json['index'];
-    final rssi = json['rssiDbm'];
-    final received = json['framesReceived'];
-    final lost = json['framesLost'];
-    if (index is! int || received is! int || lost is! int) {
-      throw const FormatException('step counters must be integers');
-    }
-    if (rssi != null && rssi is! int) {
-      throw const FormatException('step rssiDbm must be an integer or null');
-    }
-    return DeviceTestStep(
-      index: index,
-      rssiDbm: rssi as int?,
-      framesReceived: received,
-      framesLost: lost,
-    );
-  }
-
-  @override
-  bool operator ==(Object other) =>
-      other is DeviceTestStep &&
-      other.index == index &&
-      other.rssiDbm == rssiDbm &&
-      other.framesReceived == framesReceived &&
-      other.framesLost == framesLost;
-
-  @override
-  int get hashCode => Object.hash(index, rssiDbm, framesReceived, framesLost);
-}
-
-/// A finished run of one test - the thing that is saved, re-read and exported.
+/// A finished run of one check - the thing that is saved, re-read and exported.
 class DeviceTestResult {
   const DeviceTestResult({
     required this.kind,
@@ -325,7 +232,6 @@ class DeviceTestResult {
     required this.startedAt,
     required this.duration,
     this.readings = const <DeviceTestReading>[],
-    this.steps = const <DeviceTestStep>[],
     this.note,
     this.batchId,
     this.repeatIndex = 1,
@@ -356,14 +262,11 @@ class DeviceTestResult {
   /// another - see the library comment.
   final DateTime startedAt;
 
-  /// How long it took, which for the wake test is itself the measurement.
+  /// How long it took.
   final Duration duration;
 
   /// The numbers, in the order they should be read.
   final List<DeviceTestReading> readings;
-
-  /// The range walk, empty for every other test.
-  final List<DeviceTestStep> steps;
 
   /// Free text: why it was unavailable, what failed, the marked distance, the
   /// caveat that belongs with the figure.
@@ -376,8 +279,7 @@ class DeviceTestResult {
   /// comparable against a single measurement - see
   /// `model/device_test_aggregate.dart` - so the unit of comparison is a set of
   /// samples, and a set needs a name. Grouping by "runs within ten minutes of
-  /// each other" would have silently merged two deliberately separate sittings
-  /// and split one long soak batch in half.
+  /// each other" would have silently merged two deliberately separate sittings.
   ///
   /// NULL IS NOT A BUG. Every result saved before batches existed has none, and
   /// each of those is read as a batch of one, which is what it was.
@@ -387,16 +289,16 @@ class DeviceTestResult {
   final int repeatIndex;
 
   /// How many samples the batch was ASKED for, which may be more than it took:
-  /// the operator can stop a walk-away-and-shake test after three of five, and
-  /// three samples aggregated beats five samples abandoned. The difference
-  /// between this and the number of runs actually saved is what lets the screen
-  /// say "n=3 of 5, stopped early" rather than pretending five were taken.
+  /// the operator can stop a speak-again check after three of five, and three
+  /// samples aggregated beats five samples abandoned. The difference between
+  /// this and the number of runs actually saved is what lets the screen say
+  /// "n=3 of 5, stopped early" rather than pretending five were taken.
   final int repeatTarget;
 
   /// The same run, stamped with where it sat in a batch.
   ///
-  /// Used by the service as a result is saved, so the eight places that build
-  /// one do not each have to remember the batch fields.
+  /// Used by the service as a result is saved, so the places that build one do
+  /// not each have to remember the batch fields.
   DeviceTestResult inBatch({
     required String? batchId,
     required int repeatIndex,
@@ -409,7 +311,6 @@ class DeviceTestResult {
         startedAt: startedAt,
         duration: duration ?? this.duration,
         readings: readings,
-        steps: steps,
         note: note,
         batchId: batchId,
         repeatIndex: repeatIndex,
@@ -417,8 +318,7 @@ class DeviceTestResult {
       );
 
   /// Whether this run produced numbers worth comparing.
-  bool get hasReadings =>
-      readings.any((reading) => reading.value != null) || steps.isNotEmpty;
+  bool get hasReadings => readings.any((reading) => reading.value != null);
 
   /// The reading called [label], or `null` when this run has none.
   DeviceTestReading? reading(String label) {
@@ -434,7 +334,6 @@ class DeviceTestResult {
         'startedAt': startedAt.toIso8601String(),
         'durationMs': duration.inMilliseconds,
         'readings': readings.map((r) => r.toJson()).toList(),
-        'steps': steps.map((s) => s.toJson()).toList(),
         'note': note,
         // ADDITIVE, and the store's format version is deliberately NOT bumped
         // for them: a file written before these existed reads back with
@@ -449,9 +348,15 @@ class DeviceTestResult {
   /// Reads one saved result.
   ///
   /// Throws [FormatException] on anything it does not recognise, INCLUDING an
-  /// unknown [kind] or [outcome] - a file written by a newer build is not this
-  /// build's to reinterpret. The store drops such entries and keeps the rest,
-  /// rather than refusing to show any history at all.
+  /// unknown [kind] or [outcome]. Two different things look like that: a file
+  /// written by a NEWER build, which is not this build's to reinterpret, and a
+  /// run of a measurement that has since been retired. Neither is read, and
+  /// NEITHER IS DISCARDED - the store keeps the row exactly as it found it and
+  /// writes it back out untouched. See `DeviceTestStore`.
+  ///
+  /// A key this build does not know is IGNORED rather than rejected. That is
+  /// what lets a run saved by an older build - one that also wrote a `steps`
+  /// list for the range walk - still read as a result.
   static DeviceTestResult fromJson(Map<String, Object?> json) {
     final kindName = json['kind'];
     final outcomeName = json['outcome'];
@@ -491,7 +396,6 @@ class DeviceTestResult {
       startedAt: DateTime.parse(startedAt),
       duration: Duration(milliseconds: durationMs),
       readings: _listOf(json['readings'], DeviceTestReading.fromJson),
-      steps: _listOf(json['steps'], DeviceTestStep.fromJson),
       note: note as String?,
       batchId: batchId as String?,
       repeatIndex: _counter(json['repeatIndex'], 'repeatIndex'),

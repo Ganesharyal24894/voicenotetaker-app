@@ -8,6 +8,7 @@ import '../model/device_state.dart';
 import '../model/recording_info.dart';
 import 'connection_lost_view.dart';
 import 'developer_view.dart';
+import 'diagnostics_view.dart';
 import 'home_view.dart';
 import 'library_view.dart';
 import 'playback_view.dart';
@@ -28,8 +29,8 @@ import 'theme.dart';
 /// transition. A rebuild that swapped one screen widget for another gives it
 /// nothing to fly between.
 ///
-/// Library, playback and the developer screen are pushed on top, because they
-/// are places the user chose to go.
+/// Library, playback, diagnostics and the developer screen are pushed on top,
+/// because they are places the user chose to go.
 class AppRoot extends StatefulWidget {
   const AppRoot({required this.controller, super.key});
 
@@ -148,15 +149,41 @@ class _AppRootState extends State<AppRoot> {
     );
   }
 
-  void _openDeveloper(BuildContext context) {
-    final navigator = Navigator.of(context);
-    final screen = debugOnlyDeveloperView(
-      controller: widget.controller,
-      onBack: () => navigator.pop(),
+  /// Pushes Device Diagnostics, and hands it the door to Developer options.
+  ///
+  /// Diagnostics is in every build; the developer callback it is given is null
+  /// outside debug, which is what removes the button rather than leaving one that
+  /// does nothing.
+  void _openDiagnostics(BuildContext context) {
+    _push(
+      context,
+      (context) => DiagnosticsView(
+        controller: widget.controller,
+        onBack: () => Navigator.of(context).pop(),
+        onOpenDeveloper:
+            kDebugMode ? () => _openDeveloper(context) : null,
+      ),
     );
-    // Null in a release build, where the screen does not exist at all.
-    if (screen == null) return;
-    _push(context, (_) => screen);
+  }
+
+  void _openDeveloper(BuildContext context) {
+    // The gate is called first, because in a release build there is no screen to
+    // push and the route must not be created at all.
+    if (debugOnlyDeveloperView(controller: widget.controller) == null) return;
+    _push(
+      context,
+      // Built inside the route's own builder, and the back callback resolves its
+      // navigator from the ROUTE's context rather than from a NavigatorState
+      // captured out here. A captured state is the wrong one as soon as this
+      // screen is pushed from somewhere new, and "Back does nothing" is a
+      // maddening way to find that out.
+      (context) =>
+          debugOnlyDeveloperView(
+            controller: widget.controller,
+            onBack: () => Navigator.of(context).pop(),
+          ) ??
+          const SizedBox.shrink(),
+    );
   }
 
   @override
@@ -208,9 +235,10 @@ class _AppRootState extends State<AppRoot> {
                   recents: _entries,
                   onOpenLibrary: () => _openLibrary(context),
                   onOpenRecording: (entry) => _openPlayback(context, entry),
-                  // The entry point is compiled out with the screen itself.
-                  onOpenDeveloper:
-                      kDebugMode ? () => _openDeveloper(context) : null,
+                  // Always offered: Diagnostics is an observer's screen and
+                  // ships in release builds. The debug gate is one tap further
+                  // in, on Developer options.
+                  onOpenDiagnostics: () => _openDiagnostics(context),
                 ),
               ),
             ),

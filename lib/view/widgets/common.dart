@@ -282,6 +282,83 @@ class KeyValueRow extends StatelessWidget {
 }
 
 
+/// One segment of a two-way (or four-way) selector - the codec pick, the
+/// auto-sleep flag, the samples-per-check count.
+///
+/// Selected: purple fill with LIGHT text, per the contrast rule in `theme.dart`.
+///
+/// [enabled] false dims the segment and takes its tap away, which is how a
+/// control with nothing truthful behind it is shown: present, and visibly not
+/// answerable. That is the same three-state discipline `AppController` uses for
+/// auto-sleep and the battery, and it is why this is a shared widget rather than
+/// one each for the diagnostics and developer screens.
+class SegmentButton extends StatelessWidget {
+  const SegmentButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.semanticLabel,
+    this.enabled = true,
+    super.key,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  /// Read out instead of [label] when the visible word is too short to say
+  /// what it does on its own - "On" means nothing without "Auto-sleep".
+  final String? semanticLabel;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      selected: selected,
+      label: semanticLabel ?? label,
+      container: true,
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: enabled ? onTap : null,
+        child: Opacity(
+          opacity: enabled ? 1 : 0.45,
+          child: SizedBox(
+            height: AppShape.minTapTarget,
+            child: Center(
+              child: Container(
+                height: 38,
+                decoration: BoxDecoration(
+                  color: selected ? AppColors.primaryFill : null,
+                  border:
+                      selected ? null : Border.all(color: AppColors.border),
+                  borderRadius: AppShape.segment,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  label,
+                  style: selected
+                      ? AppText.devValue.copyWith(
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.onPrimaryFill,
+                        )
+                      : AppText.devLabel.copyWith(
+                          fontWeight: FontWeight.w400,
+                          color: AppColors.textSecondary,
+                        ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
 /// The app's ONE delete confirmation, so the library row and the playback
 /// screen cannot drift apart in how they ask.
 ///

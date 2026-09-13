@@ -22,7 +22,7 @@ import 'harness.dart';
 /// tests below would be asserting against a view that never updates.
 Widget _home(
   ViewHarness harness, {
-  VoidCallback? onOpenDeveloper,
+  VoidCallback? onOpenDiagnostics,
   VoidCallback? onOpenLibrary,
   ValueChanged<RecordingEntry>? onOpenRecording,
 }) =>
@@ -33,7 +33,7 @@ Widget _home(
         recents: PlaceholderData.library(),
         onOpenLibrary: onOpenLibrary ?? () {},
         onOpenRecording: onOpenRecording ?? (_) {},
-        onOpenDeveloper: onOpenDeveloper,
+        onOpenDiagnostics: onOpenDiagnostics,
       ),
     );
 
@@ -548,7 +548,7 @@ void main() {
 
   // Two separate tests rather than two pumps in one: pumping a second screen
   // into the same position reuses the State of the first, which hides bugs.
-  testWidgets('the developer entry point is absent when it is not supplied',
+  testWidgets('the diagnostics entry point is absent when it is not supplied',
       (tester) async {
     final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
     addTearDown(harness.dispose);
@@ -557,11 +557,15 @@ void main() {
     await harness.connect(tester);
     await pumpScreen(tester, _home(harness));
 
-    expect(find.bySemanticsLabel('Developer'), findsNothing);
+    expect(find.bySemanticsLabel('Diagnostics'), findsNothing);
   });
 
-  testWidgets('the developer entry point is present when it is supplied',
+  testWidgets('the diagnostics entry point is present when it is supplied',
       (tester) async {
+    // IN RELEASE BUILDS TOO, unlike the developer screen it replaced in this
+    // slot: everything on Diagnostics is something a user can only watch, so
+    // `AppRoot` passes this callback unconditionally. The debug gate is one tap
+    // further in, on Developer options.
     final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
     addTearDown(harness.dispose);
     var opened = false;
@@ -570,11 +574,11 @@ void main() {
     await harness.connect(tester);
     await pumpScreen(
       tester,
-      _home(harness, onOpenDeveloper: () => opened = true),
+      _home(harness, onOpenDiagnostics: () => opened = true),
     );
 
-    expect(find.bySemanticsLabel('Developer'), findsOneWidget);
-    await tester.tap(find.bySemanticsLabel('Developer'));
+    expect(find.bySemanticsLabel('Diagnostics'), findsOneWidget);
+    await tester.tap(find.bySemanticsLabel('Diagnostics'));
     await tester.pump();
     expect(opened, isTrue);
   });

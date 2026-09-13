@@ -13,11 +13,13 @@ import '../model/device_state.dart';
 import '../model/device_test_result.dart';
 import '../model/die_temperature.dart';
 import '../model/level_reading.dart';
+import '../model/link_health.dart';
 import '../model/recording_info.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
 import '../services/device_test_service.dart';
 import '../services/device_test_store.dart';
+import '../services/link_monitor.dart';
 import '../services/library_service.dart';
 import '../services/recording_service.dart';
 
@@ -45,6 +47,7 @@ class AppController extends ChangeNotifier {
     RecordingService? recordingService,
     LibraryService? libraryService,
     DeviceTestService? deviceTestService,
+    LinkMonitor? linkMonitor,
     AudioPlayer? audioPlayer,
     PlatformSettings? platformSettings,
     AudioCodec preferredCodec = AudioCodec.imaAdpcm,
@@ -54,6 +57,7 @@ class AppController extends ChangeNotifier {
     // ignore: prefer_initializing_formals
   })  : _preferredCodec = preferredCodec,
         _injectedTests = deviceTestService,
+        _injectedLinkMonitor = linkMonitor,
         _transport = transport,
         _fileStore = fileStore,
         _player = audioPlayer,
@@ -72,17 +76,17 @@ class AppController extends ChangeNotifier {
   final RecordingService _recorder;
   final LibraryService _library;
 
-  /// Supplied by tests that need shorter windows than a three-minute soak.
+  /// Supplied by tests that need shorter measurement windows than ten seconds.
   final DeviceTestService? _injectedTests;
 
-  /// The device-test harness - the five enclosure measurements and their saved
-  /// history.
+  /// Supplied by tests that need the signal polled faster than once a second.
+  final LinkMonitor? _injectedLinkMonitor;
+
+  /// The mic check and its saved history.
   ///
-  /// `late final` rather than an initializing formal because the wake test
-  /// needs [disconnect], and `this` is not available in an initializer list.
-  /// THE LINK STAYS THE CONTROLLER'S: the service is handed the one method it
-  /// must not reimplement, so nothing below `controller/` ever ends a link
-  /// behind the rest of the app's back.
+  /// `late final` rather than an initializing formal because it needs
+  /// [_fileStore] and [_recordingsDirectory], which are not available in an
+  /// initializer list that also has to fall back to [_injectedTests].
   late final DeviceTestService _tests = _injectedTests ??
       DeviceTestService(
         transport: _transport,
@@ -90,16 +94,23 @@ class AppController extends ChangeNotifier {
           fileStore: _fileStore,
           directory: _recordingsDirectory,
         ),
-        disconnectLink: disconnect,
       );
 
-  /// The harness, for the developer screen to render and drive.
+  /// The live link watcher - the signal, and the frames the phone received.
   ///
-  /// Subscribing HERE rather than in [initialise] on purpose: the developer
-  /// screen renders a running test's elapsed time and live counters, and those
-  /// arrive on the service's own stream. A subscription set up in `initialise`
-  /// would be missing in every test that builds a screen without starting the
-  /// app, and the readout would sit frozen while the test ran.
+  /// NOTHING RUNS UNLESS REQUIRED: it is started by [openDiagnostics] and
+  /// stopped by [closeDiagnostics], because subscribing to `fe01` is what makes
+  /// the recorder stream and nothing outside that screen renders these numbers.
+  late final LinkMonitor _linkMonitor =
+      _injectedLinkMonitor ?? LinkMonitor(transport: _transport);
+
+  /// The mic check, for the diagnostics screen to render and drive.
+  ///
+  /// Subscribing HERE rather than in [initialise] on purpose: the screen renders
+  /// a running check's elapsed time and live counters, and those arrive on the
+  /// service's own stream. A subscription set up in `initialise` would be
+  /// missing in every test that builds a screen without starting the app, and
+  /// the readout would sit frozen while the check ran.
   DeviceTestService get deviceTests {
     _testSubscription ??= _tests.changes.listen((_) => notifyListeners());
     return _tests;
@@ -174,6 +185,7 @@ class AppController extends ChangeNotifier {
   StreamSubscription<BatteryStatus>? _batterySubscription;
   StreamSubscription<DieTemperature>? _temperatureSubscription;
   StreamSubscription<void>? _testSubscription;
+  StreamSubscription<void>? _linkSubscription;
   StreamSubscription<BleConnectionStatus>? _connectionSubscription;
   StreamSubscription<CaptureStats>? _statsSubscription;
   StreamSubscription<LevelReading>? _levelSubscription;
@@ -327,13 +339,13 @@ class AppController extends ChangeNotifier {
 
   int _samplesPerTest = DeviceTestService.defaultRepeatCount;
 
-  /// How many samples each device test takes before it is aggregated.
+  /// How many samples each mic check takes before it is aggregated.
   ///
-  /// A SETTING AND NOT A CONSTANT, because the three tests that need somebody
-  /// walking, speaking or shaking cost real minutes each, and the person doing
-  /// that is entitled to say how many. The default and the reasoning behind it
-  /// are [DeviceTestService.defaultRepeatCount]; the choices offered are
-  /// [DeviceTestService.repeatChoices].
+  /// A SETTING AND NOT A CONSTANT, because the sensitivity check needs somebody
+  /// standing at the mark speaking, and the person doing that is entitled to say
+  /// how many times. The default and the reasoning behind it are
+  /// [DeviceTestService.defaultRepeatCount]; the choices offered are
+  /// [DeviceTestSampling.choices].
   int get samplesPerTest => _samplesPerTest;
 
   /// Changes the sample count the NEXT test will take. Never mid-batch: a batch
@@ -348,16 +360,27 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Why a streaming device test cannot run right now, or null when one can.
+  /// Runs in the saved file this build does not read - see
+  /// [DeviceTestStore.retiredKinds]. They are kept in the file untouched.
+  ///
+  /// Surfaced so a screen showing twelve runs out of a file of fifteen can
+  /// account for the other three rather than looking as though it lost them.
+  int get unreadDeviceTestRunCount => _tests.unreadRunCount;
+
+  /// How many of [unreadDeviceTestRunCount] are runs of a retired measurement,
+  /// as against rows a newer build wrote.
+  int get retiredDeviceTestRunCount => _tests.retiredRunCount;
+
+  /// Why the mic check cannot run right now, or null when it can.
   ///
   /// The three-state discipline the auto-sleep and battery readouts follow: a
-  /// test with nothing truthful behind it is offered as unavailable WITH A
+  /// check with nothing truthful behind it is offered as unavailable WITH A
   /// REASON, never as a control that produces a default result.
   DeviceTestBlocker? get testBlocker {
     // A BATCH COUNTS AS RUNNING even between its samples, when nothing is
-    // streaming: the operator is walking back, or getting ready to speak, and
-    // starting a different test then would take the frame subscription out from
-    // under the batch and abandon it half-collected.
+    // streaming: the operator is getting ready to speak again, and starting the
+    // other check then would take the frame subscription out from under the
+    // batch and abandon it half-collected.
     if (_tests.isRunning || _tests.isBatchActive) {
       return DeviceTestBlocker.testRunning;
     }
@@ -366,20 +389,6 @@ class AppController extends ChangeNotifier {
     if (isRecording || _recorder.isRecording) {
       return DeviceTestBlocker.recording;
     }
-    return null;
-  }
-
-  /// Why the wake-on-motion test cannot run right now, or null when it can.
-  ///
-  /// Everything [testBlocker] rules out, plus the two conditions only this test
-  /// has: it writes `fe04`, so firmware without auto-sleep cannot be put to
-  /// sleep on purpose; and it watches the device advertise, which needs the
-  /// scan permission.
-  DeviceTestBlocker? get wakeTestBlocker {
-    final blocker = testBlocker;
-    if (blocker != null) return blocker;
-    if (_permissionDenied) return DeviceTestBlocker.scanPermissionDenied;
-    if (!autoSleepAvailable) return DeviceTestBlocker.noAutoSleep;
     return null;
   }
 
@@ -527,6 +536,10 @@ class AppController extends ChangeNotifier {
         _temperature = null;
         unawaited(_stopBattery(device.id));
         unawaited(_stopTemperature(device.id));
+        // The live link view has nothing left to watch. `_diagnosticsOpen` is
+        // deliberately NOT cleared: the screen is still on top, and a reconnect
+        // should bring its readings back without the user leaving and returning.
+        unawaited(_linkMonitor.stop());
         _setPhase(AppPhase.idle);
       }
     });
@@ -535,11 +548,107 @@ class AppController extends ChangeNotifier {
     // survives reboots, so only the device knows what it is.
     await _readAutoSleep(device.id);
     // Read once so there is something on screen immediately, then follow the
-    // notifications so it stays live.
+    // notifications so it stays live. The battery is on the HOME screen, so it
+    // is followed for as long as the link lasts.
     await _readBattery(device.id);
     _followBattery(device.id);
-    await _readTemperature(device.id);
-    _followTemperature(device.id);
+    // THE DIE TEMPERATURE IS NOT FOLLOWED HERE, and that is the power rule
+    // rather than an omission: subscribing to `fe07` is what makes the firmware
+    // sample the sensor, and the only screen that renders the figure is
+    // diagnostics. It is read and followed by [openDiagnostics] and dropped
+    // again by [closeDiagnostics].
+    if (_diagnosticsOpen) await _startDiagnostics(device.id);
+  }
+
+  // -------------------------------------------------------------------------
+  // THE DIAGNOSTICS SCREEN'S SUBSCRIPTIONS
+  //
+  // NOTHING RUNS UNLESS REQUIRED. Two subscriptions exist only for that screen:
+  // `fe01`, because counting frames means receiving them, and `fe07`, because
+  // subscribing is what makes the firmware sample the die at all. Both cost the
+  // device power for as long as they are open, so both are owned by the screen's
+  // visibility rather than by the link:
+  //
+  //   * the screen calls [openDiagnostics] when it becomes visible - on push,
+  //     and again when the app is resumed - and [closeDiagnostics] when it stops
+  //     being visible: popped, or the app backgrounded.
+  //   * a link that drops takes them down with it, and a link that comes back
+  //     brings them back only if the screen is still open. That is what the
+  //     [_diagnosticsOpen] check in [connect] is doing.
+  //
+  // The screen is also the only thing that renders them, so nothing else goes
+  // stale when they are off.
+  // -------------------------------------------------------------------------
+
+  /// True while the diagnostics screen is visible and wants live readings.
+  bool _diagnosticsOpen = false;
+
+  /// Whether the diagnostics screen currently holds the live subscriptions.
+  bool get diagnosticsOpen => _diagnosticsOpen;
+
+  /// What the live link is doing - signal, frames received, frames lost.
+  ///
+  /// [LinkHealth.watching] is false when nothing is subscribed, which is what
+  /// separates "no frames lost" from "nothing is counting". The screen must
+  /// render the difference rather than a row of zeroes.
+  LinkHealth get linkHealth =>
+      _diagnosticsOpen ? _linkMonitor.health : LinkHealth.idle;
+
+  /// Why the live link counters are not running, or null when they are.
+  String? get linkFailure => _diagnosticsOpen ? _linkMonitor.failure : null;
+
+  /// The diagnostics screen has become visible: start the live readings.
+  ///
+  /// Idempotent, because it is called on push AND on every resume from the
+  /// background, and a second call must not open a second subscription.
+  Future<void> openDiagnostics() async {
+    _diagnosticsOpen = true;
+    _linkSubscription ??= _linkMonitor.changes.listen((_) => notifyListeners());
+    final device = _connectedDevice;
+    // NOTHING IS NOTIFIED SYNCHRONOUSLY HERE, and that is load-bearing: this is
+    // called from a `State.initState`, which runs inside a build, and notifying
+    // a listener that rebuilds an ancestor during a build is an error the
+    // framework asserts on. With no device there is nothing to report anyway -
+    // [linkHealth] reads as idle either way - and with one, every notification
+    // below happens after an await.
+    if (device == null) return;
+    await _startDiagnostics(device.id);
+  }
+
+  /// The diagnostics screen has stopped being visible: stop everything it
+  /// started.
+  ///
+  /// Called on pop and on the app going to the background. It must leave nothing
+  /// behind - a user who parks on this screen and locks the phone must not leave
+  /// the recorder streaming and sampling for hours.
+  ///
+  /// Does nothing when it was not open, so a teardown that calls it
+  /// unconditionally cannot cancel something it did not start.
+  Future<void> closeDiagnostics() async {
+    if (!_diagnosticsOpen) return;
+    _diagnosticsOpen = false;
+    // A CHECK THE USER CANNOT SEE IS STILL STREAMING, so it stops too. The
+    // samples already taken are saved and the batch is labelled as stopped
+    // early - see `DeviceTestService.cancel` - which is the honest outcome:
+    // nothing measured is lost, and the radio is not left running behind a
+    // screen that is gone.
+    _tests.cancel();
+    await _linkSubscription?.cancel();
+    _linkSubscription = null;
+    await _linkMonitor.stop();
+    final device = _connectedDevice;
+    if (device != null) await _stopTemperature(device.id);
+    // The reading described a subscription that is gone; keeping the last figure
+    // on screen would be showing a stale measurement as a live one.
+    _temperature = null;
+    notifyListeners();
+  }
+
+  Future<void> _startDiagnostics(String deviceId) async {
+    await _readTemperature(deviceId);
+    _followTemperature(deviceId);
+    await _linkMonitor.start(deviceId);
+    notifyListeners();
   }
 
   /// Records a battery reading - or its absence - and rebuckets the bars.
@@ -639,6 +748,17 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  /// Reads `fe07` once, WITHOUT subscribing.
+  ///
+  /// For a screen that wants a figure in a report rather than a live readout:
+  /// one read costs the device one sample, where a subscription makes it sample
+  /// continuously for as long as the subscription is open.
+  Future<void> refreshTemperature() async {
+    final device = _connectedDevice;
+    if (device == null) return;
+    await _readTemperature(device.id);
+  }
+
   /// Ends the `fe07` subscription, best effort.
   Future<void> _stopTemperature(String deviceId) async {
     await _temperatureSubscription?.cancel();
@@ -651,94 +771,93 @@ class AppController extends ChangeNotifier {
   }
 
   // -------------------------------------------------------------------------
-  // THE DEVICE-TEST HARNESS
+  // THE MIC CHECK
   //
   // The controller's job here is the same as everywhere else: supply the
-  // device id and the codec, refuse to start a test that cannot honestly run,
+  // device id and the codec, refuse to start a check that cannot honestly run,
   // and let `services/device_test_service.dart` do the measuring. Nothing in
   // these methods knows what a UUID is.
+  //
+  // IT ALSO ARBITRATES THE ONE FRAME SUBSCRIPTION. `subscribeFrames` takes a
+  // single subscriber, and on the diagnostics screen the live link view is
+  // normally holding it. So a check stands the live view down before it starts
+  // and brings it back when the whole BATCH is over - not after each sample, or
+  // the next sample of five would find the subscription taken by the view that
+  // was just restarted for it.
   // -------------------------------------------------------------------------
 
-  /// Starts the range walk. Does nothing when [testBlocker] says it cannot run.
-  Future<void> beginRangeWalk() async {
-    final device = _connectedDevice;
-    if (device == null || testBlocker != null) return;
-    await _tests.beginRangeWalk(
-      deviceId: device.id,
-      requestCodec: _preferredCodec,
-      repeats: _samplesPerTest,
-    );
-  }
-
-  /// Records a stop on the range walk.
-  Future<void> markRangeStep() => _tests.markRangeStep();
-
-  /// Ends the range walk and saves it.
-  Future<void> finishRangeWalk() async {
-    await _tests.finishRangeWalk();
-  }
-
   /// Ten seconds of a quiet room, reported as RMS dBFS.
-  Future<void> runNoiseFloorTest() async {
-    final device = _connectedDevice;
-    if (device == null || testBlocker != null) return;
-    await _tests.runNoiseFloor(
-      deviceId: device.id,
-      requestCodec: _preferredCodec,
-      repeats: _samplesPerTest,
-    );
-  }
+  Future<void> runNoiseFloorTest() => _micCheck(
+        (device) => _tests.runNoiseFloor(
+          deviceId: device.id,
+          requestCodec: _preferredCodec,
+          repeats: _samplesPerTest,
+        ),
+      );
 
   /// A voice at the marked distance, reported as peak and RMS dBFS.
-  Future<void> runSensitivityTest() async {
-    final device = _connectedDevice;
-    if (device == null || testBlocker != null) return;
-    await _tests.runSensitivity(
-      deviceId: device.id,
-      requestCodec: _preferredCodec,
-      repeats: _samplesPerTest,
-    );
-  }
-
-  /// Minutes of streaming, reported as dropped frames and disconnections.
-  Future<void> runLinkSoakTest() async {
-    final device = _connectedDevice;
-    if (device == null || testBlocker != null) return;
-    await _tests.runLinkSoak(
-      deviceId: device.id,
-      requestCodec: _preferredCodec,
-      repeats: _samplesPerTest,
-    );
-  }
-
-  /// Enables auto-sleep, drops the link, waits for System OFF and times a
-  /// shake. See [DeviceTestService.runWakeOnMotion] for what the figure is and
-  /// is not.
-  Future<void> runWakeOnMotionTest() async {
-    final device = _connectedDevice;
-    if (device == null || wakeTestBlocker != null) return;
-    await _tests.runWakeOnMotion(
-      deviceId: device.id,
-      repeats: _samplesPerTest,
-    );
-  }
-
-  /// The operator has just shaken the device. Starts the wake clock.
-  void confirmShaken() => _tests.confirmShaken();
-
-  /// Stops the running test. Its partial readings are still saved.
-  void cancelDeviceTest() => _tests.cancel();
+  Future<void> runSensitivityTest() => _micCheck(
+        (device) => _tests.runSensitivity(
+          deviceId: device.id,
+          requestCodec: _preferredCodec,
+          repeats: _samplesPerTest,
+        ),
+      );
 
   /// Takes the next sample of a batch that is waiting for the operator.
+  Future<void> continueDeviceTestBatch() => _micCheck(
+        (_) => _tests.continueBatch(),
+        // Needs no connection check of its own: the batch has the device id it
+        // started with. It still needs the live view stood down, because ending
+        // the previous sample brought it back.
+        requireIdle: false,
+      );
+
+  /// Runs one mic-check action with the live link view stood down around it.
+  Future<void> _micCheck(
+    Future<Object?> Function(DiscoveredDevice device) run, {
+    bool requireIdle = true,
+  }) async {
+    final device = _connectedDevice;
+    if (device == null) return;
+    if (requireIdle && testBlocker != null) return;
+    await _linkMonitor.stop();
+    notifyListeners();
+    try {
+      await run(device);
+    } finally {
+      await _resumeLinkWatch();
+    }
+  }
+
+  /// Brings the live link view back, unless something still needs the stream.
   ///
-  /// Needs no connection check: a walk-away or shake batch has the device id it
-  /// started with, and the wake test has deliberately ended the link.
-  Future<void> continueDeviceTestBatch() async {
-    await _tests.continueBatch();
+  /// Called on every path out of a check, including the failures: a link view
+  /// that stayed dark after a check went wrong would look like a dead link.
+  Future<void> _resumeLinkWatch() async {
+    final device = _connectedDevice;
+    if (!_diagnosticsOpen ||
+        device == null ||
+        _tests.isRunning ||
+        _tests.isBatchActive) {
+      notifyListeners();
+      return;
+    }
+    await _linkMonitor.start(device.id);
+    notifyListeners();
+  }
+
+  /// Stops the running check. Its partial readings are still saved.
+  void cancelDeviceTest() {
+    _tests.cancel();
+    unawaited(_resumeLinkWatch());
   }
 
   /// Stops asking for more samples and keeps the ones already taken.
-  void endDeviceTestBatch() => _tests.endBatch();
+  void endDeviceTestBatch() {
+    _tests.endBatch();
+    unawaited(_resumeLinkWatch());
+  }
 
   /// Re-reads the auto-sleep flag from the connected device.
   ///
@@ -792,11 +911,12 @@ class AppController extends ChangeNotifier {
     if (isRecording) await stopRecording();
     await _connectionSubscription?.cancel();
     _connectionSubscription = null;
-    // Stop following the battery and the die temperature before the link goes,
-    // so the last thing the radio does is not delivering a notification into a
-    // torn-down listener.
+    // Stop following the battery, the die temperature and the frame stream
+    // before the link goes, so the last thing the radio does is not delivering a
+    // notification into a torn-down listener.
     await _stopBattery(device.id);
     await _stopTemperature(device.id);
+    await _linkMonitor.stop();
     String? failure;
     try {
       await _transport.disconnect(device.id);
@@ -1068,6 +1188,8 @@ class AppController extends ChangeNotifier {
     _temperatureSubscription = null;
     await _testSubscription?.cancel();
     _testSubscription = null;
+    await _linkSubscription?.cancel();
+    _linkSubscription = null;
     await _statsSubscription?.cancel();
     _statsSubscription = null;
     await _levelSubscription?.cancel();
@@ -1076,6 +1198,7 @@ class AppController extends ChangeNotifier {
     _librarySubscription = null;
     await _playbackSubscription?.cancel();
     _playbackSubscription = null;
+    await _linkMonitor.dispose();
     await _tests.dispose();
     await _recorder.dispose();
     await _library.dispose();

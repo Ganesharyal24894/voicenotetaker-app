@@ -182,16 +182,19 @@ void main() {
       expect(batches.every((batch) => batch.isPartial), isFalse);
     });
 
-    test('two tests never share a batch, whatever the file says', () {
+    test('two checks never share a batch, whatever the file says', () {
       final batches = DeviceTestBatch.group(<DeviceTestResult>[
         sample(kind: DeviceTestKind.noiseFloor, batchId: 'same'),
-        sample(kind: DeviceTestKind.linkSoak, batchId: 'same'),
+        sample(kind: DeviceTestKind.sensitivity, batchId: 'same'),
       ]);
 
       expect(batches, hasLength(2));
       expect(
         batches.map((batch) => batch.kind).toSet(),
-        <DeviceTestKind>{DeviceTestKind.noiseFloor, DeviceTestKind.linkSoak},
+        <DeviceTestKind>{
+          DeviceTestKind.noiseFloor,
+          DeviceTestKind.sensitivity,
+        },
       );
     });
 
@@ -264,18 +267,15 @@ void main() {
       expect(DeviceTestSampling.choices, contains(DeviceTestSampling.defaultCount));
     });
 
-    test('only the tests that need nobody present repeat on their own', () {
+    test('only the check that needs nobody present repeats on its own', () {
+      // The noise floor asks for a quiet room and nothing else, so it can take
+      // its five windows back to back.
       expect(DeviceTestSampling.isAutomatic(DeviceTestKind.noiseFloor), isTrue);
-      expect(DeviceTestSampling.isAutomatic(DeviceTestKind.linkSoak), isTrue);
-      // These three ARE the operator: somebody walks, speaks, shakes. Looping
-      // them unattended would record the seconds after a walk as the walk.
-      expect(DeviceTestSampling.isAutomatic(DeviceTestKind.range), isFalse);
+      // Sensitivity IS the operator: somebody stands at the mark and speaks.
+      // Looping it unattended would record silence and report it as a quiet
+      // voice.
       expect(
         DeviceTestSampling.isAutomatic(DeviceTestKind.sensitivity),
-        isFalse,
-      );
-      expect(
-        DeviceTestSampling.isAutomatic(DeviceTestKind.wakeOnMotion),
         isFalse,
       );
     });

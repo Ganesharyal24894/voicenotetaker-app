@@ -21,7 +21,7 @@ class HomeView extends StatelessWidget {
     required this.recents,
     required this.onOpenLibrary,
     required this.onOpenRecording,
-    this.onOpenDeveloper,
+    this.onOpenDiagnostics,
     this.now,
     super.key,
   });
@@ -35,8 +35,12 @@ class HomeView extends StatelessWidget {
   final VoidCallback onOpenLibrary;
   final ValueChanged<RecordingEntry> onOpenRecording;
 
-  /// Non-null only in debug builds - see `developer_view.dart`.
-  final VoidCallback? onOpenDeveloper;
+  /// Opens Device Diagnostics. Non-null in RELEASE builds too: everything on
+  /// that screen is something the user can only watch, so there is nothing to
+  /// hide behind a debug gate. The mutating controls live one more tap in, on
+  /// Developer options, which is where the debug gate is - see
+  /// `developer_view.dart`.
+  final VoidCallback? onOpenDiagnostics;
 
   /// See [LibraryView.now]: the day labels are relative to this.
   final DateTime? now;
@@ -110,7 +114,7 @@ class HomeView extends StatelessWidget {
                         //
                         // It REPLACES "Connected" rather than being appended
                         // to it: "Connected · Charging" does not fit beside
-                        // the name, the battery and the developer entry point
+                        // the name, the battery and the diagnostics entry point
                         // at 390px, and the breathing green dot immediately to
                         // its left already says the link is up.
                         //
@@ -132,10 +136,10 @@ class HomeView extends StatelessWidget {
                   ],
                 ),
               ),
-              if (onOpenDeveloper != null)
+              if (onOpenDiagnostics != null)
                 TapTarget(
-                  onTap: onOpenDeveloper,
-                  semanticLabel: 'Developer',
+                  onTap: onOpenDiagnostics,
+                  semanticLabel: 'Diagnostics',
                   child: const AppIcon(
                     AppGlyph.more,
                     size: 19,
@@ -363,7 +367,7 @@ class _BatteryReadout extends StatelessWidget {
 ///
 /// Placed with the connection state rather than in the header: the header is
 /// only 46px tall and already carries the logo, the device name, the battery
-/// and (in debug) the developer entry point, and the sentence directly under
+/// and the diagnostics entry point, and the sentence directly under
 /// the record button - "Tap to record" / "Connect a recorder to start" - is
 /// where this screen already talks about whether a recorder is attached.
 ///

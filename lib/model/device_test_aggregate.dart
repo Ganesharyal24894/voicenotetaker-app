@@ -1,14 +1,18 @@
 /// Several samples of one device test, reduced to a figure and its spread.
 ///
-/// WHY THIS FILE EXISTS. Every measurement the harness takes is noisy. RF loss
-/// depends on who is standing where, a noise floor depends on the fridge
-/// compressor, and the wake figure carries the phone's own scan-discovery
-/// latency, which is neither small nor constant. ONE reading before the
-/// enclosure and one after cannot be compared: the difference between them is
-/// the difference between two single draws from two noisy processes, and it will
-/// happily show a 3 dB "improvement" that is nothing at all.
+/// WHY THIS FILE EXISTS. Both acoustic measurements are noisy. A noise floor
+/// depends on the fridge compressor, and a sensitivity figure depends on
+/// exactly where a head was when it spoke. ONE reading before the enclosure and
+/// one after cannot be compared: the difference between them is the difference
+/// between two single draws from two noisy processes, and it will happily show
+/// a 3 dB "improvement" that is nothing at all.
 ///
-/// So the harness takes n samples and this file reduces them. It reports:
+/// THE BARE-BOARD BASELINE IS WHAT MAKES THAT CONCRETE. Five runs on the open
+/// board put the sensitivity spread at 0.83 dB - tight enough that a real change
+/// caused by the enclosure's port will stand clear of it, but only because the
+/// spread was measured rather than assumed.
+///
+/// So the screen takes n samples and this file reduces them. It reports:
 ///
 ///   * a MEDIAN, not a mean. One bad sample - a dropout, a door slamming, a
 ///     scan the OS throttled - moves a mean of five by a fifth of its error and
@@ -17,16 +21,16 @@
 ///     known to be normally distributed and n is five, where a sample SD is
 ///     itself mostly noise. Not an inter-quartile range either, and that is a
 ///     deliberate choice - at n=5 the IQR is computed from samples 2 and 4,
-///     which means it DISCARDS exactly the extreme readings that a dropout or a
-///     resonance shows up as. The wildest sample is usually the most
+///     which means it DISCARDS exactly the extreme readings that a resonance or
+///     a slammed door shows up as. The wildest sample is usually the most
 ///     interesting one here, so the spread that is reported is the one that
 ///     contains it.
 ///
-/// NOTHING IS EXCLUDED FROM THE MEDIAN. A sample with no reading at all (a
-/// failed run, or "RSSI where drops began" on a walk where nothing dropped)
-/// cannot enter a median, so it is COUNTED and reported as [ReadingSpread
-/// .missing] instead of being quietly forgotten - the screen says "n=4 of 5,
-/// one had no reading" rather than "n=4".
+/// NOTHING IS EXCLUDED FROM THE MEDIAN. A sample with no reading at all - a
+/// failed run, or a window in which no audio arrived - cannot enter a median, so
+/// it is COUNTED and reported as [ReadingSpread.missing] instead of being
+/// quietly forgotten: the screen says "n=4 of 5, one had no reading" rather
+/// than "n=4".
 ///
 /// Pure data and pure arithmetic: no I/O, no formatting, no clock. The strings
 /// a human reads are assembled in `view/`.
@@ -34,7 +38,7 @@ library;
 
 import 'device_test_result.dart';
 
-/// How many samples a test takes, and which tests can take them unattended.
+/// How many samples a check takes, and which checks can take them unattended.
 ///
 /// IN `model/` RATHER THAN BESIDE THE LOOP THAT USES IT. The screen offers the
 /// choice, the controller holds it, the service performs it and the tests assert
@@ -48,11 +52,10 @@ abstract final class DeviceTestSampling {
   /// It is ODD, so the median is a sample somebody actually measured rather
   /// than the mean of the two middle ones. It survives two bad samples out of
   /// five without the middle value moving, which covers the ordinary disasters
-  /// here - one dropout, one slammed door, one scan the OS throttled. And it is
-  /// small enough to actually get done: five range walks, or five three-minute
-  /// soaks, is already twenty minutes of somebody's afternoon, and a default
-  /// nobody finishes yields n=2 batches - which is worse than a default of five
-  /// that they do finish.
+  /// here - one slammed door, one lorry outside, one cough. And it is small
+  /// enough to actually get done: five ten-second windows is under a minute of
+  /// somebody's afternoon, and a default nobody finishes yields n=2 batches -
+  /// which is worse than a default of five that they do finish.
   ///
   /// Three is defensible and is offered. One is offered too, because a single
   /// run is the right thing when the question is "is this board alive" rather
@@ -60,23 +63,19 @@ abstract final class DeviceTestSampling {
   /// instead of dressing one reading up as a baseline.
   static const int defaultCount = 5;
 
-  /// The counts the screen offers. Ten is for an overnight-grade baseline of
-  /// the two tests that repeat unattended.
+  /// The counts the screen offers. Ten is for the tighter baseline worth having
+  /// on the noise floor, which repeats unattended and costs nobody anything.
   static const List<int> choices = <int>[1, 3, 5, 10];
 
   /// Whether [kind] can take its next sample with nobody present.
   ///
-  /// The noise floor and the link soak only need the device left alone, so they
-  /// loop on their own. The other three ARE the operator: somebody walks away,
-  /// somebody speaks at the marked distance, somebody shakes it. Looping those
-  /// unattended would record the seconds after a walk as though they were the
-  /// walk, and report silence as a quiet voice.
+  /// The noise floor only needs the device left alone, so it loops on its own.
+  /// The sensitivity check IS the operator: somebody speaks at the marked
+  /// distance. Looping that unattended would record silence and report it as a
+  /// quiet voice.
   static bool isAutomatic(DeviceTestKind kind) => switch (kind) {
-        DeviceTestKind.noiseFloor || DeviceTestKind.linkSoak => true,
-        DeviceTestKind.range ||
-        DeviceTestKind.sensitivity ||
-        DeviceTestKind.wakeOnMotion =>
-          false,
+        DeviceTestKind.noiseFloor => true,
+        DeviceTestKind.sensitivity => false,
       };
 }
 

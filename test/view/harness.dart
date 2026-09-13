@@ -16,6 +16,7 @@ import 'package:voicenotetaker_app/model/die_temperature.dart';
 import 'package:voicenotetaker_app/model/stream_info.dart';
 import 'package:voicenotetaker_app/services/device_test_service.dart';
 import 'package:voicenotetaker_app/services/device_test_store.dart';
+import 'package:voicenotetaker_app/services/link_monitor.dart';
 import 'package:voicenotetaker_app/services/library_service.dart';
 import 'package:voicenotetaker_app/services/wav_writer.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
@@ -178,17 +179,21 @@ class ViewHarness {
                 fileStore: fileStore,
                 directory: recordingsDirectory,
               ),
-              // Milliseconds instead of the ten seconds and three minutes the
-              // real windows are, so a widget test can watch a test run
-              // without the widget test taking three minutes.
+              // Milliseconds instead of the ten seconds the real windows are, so
+              // a widget test can watch a check run without taking ten seconds
+              // over it.
               noiseFloorWindow: testWindow!,
               sensitivityWindow: testWindow!,
-              linkSoakWindow: testWindow!,
-              advertisingPollWindow: testWindow!,
-              systemOffConfirm: testWindow!,
-              systemOffTimeout: testWindow!,
-              wakeTimeout: testWindow!,
               tick: const Duration(milliseconds: 20),
+            ),
+      // Injected whenever the windows are, for the same reason: a one-second
+      // signal poll is longer than any widget test wants to wait for its first
+      // reading.
+      linkMonitor: testWindow == null
+          ? null
+          : LinkMonitor(
+              transport: transport,
+              pollInterval: const Duration(milliseconds: 20),
             ),
     );
   }
@@ -204,9 +209,10 @@ class ViewHarness {
   /// read it.
   final BleAvailability availability;
 
-  /// When set, the device-test harness runs with windows this long instead of
-  /// its real ones. Null leaves the controller building the real service, which
-  /// is what every test that only RENDERS the card wants.
+  /// When set, the mic check runs with windows this long instead of its real
+  /// ones, and the live link polls the signal every 20 ms instead of every
+  /// second. Null leaves the controller building both with their real timings,
+  /// which is what every test that only RENDERS a card wants.
   final Duration? testWindow;
 
   /// Adapter state changes, pushed by hand.
@@ -350,6 +356,22 @@ class ViewHarness {
     await flush(tester);
   }
 
+  /// Pushes one `fe01` notification, exactly as the device would.
+  ///
+  /// [sequence] is the 16-bit little-endian header the reassembler counts gaps
+  /// in - skipping one is how a test makes a frame go missing.
+  Future<void> notifyFrame(
+    WidgetTester tester, {
+    required int sequence,
+    int payloadBytes = 8,
+  }) async {
+    final notification = Uint8List(2 + payloadBytes);
+    notification[0] = sequence & 0xFF;
+    notification[1] = (sequence >> 8) & 0xFF;
+    frames.add(notification);
+    await flush(tester);
+  }
+
   /// Pushes a `fe07` notification, exactly as the device would.
   Future<void> notifyTemperature(
     WidgetTester tester, {
@@ -360,6 +382,10 @@ class ViewHarness {
   }
 
   Future<void> dispose() async {
+    // The diagnostics screen's subscriptions are the controller's, not the
+    // widget's, so a test that never unmounts the screen would otherwise leave
+    // the signal poll running past the end of the test.
+    await controller.closeDiagnostics();
     final scan = _scan;
     _scan = null;
     if (scan != null && !scan.isClosed) await scan.close();

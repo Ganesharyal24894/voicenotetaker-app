@@ -3,6 +3,8 @@ import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/view/app_root.dart';
+import 'package:voicenotetaker_app/view/developer_view.dart';
+import 'package:voicenotetaker_app/view/diagnostics_view.dart';
 import 'package:voicenotetaker_app/view/home_view.dart';
 import 'package:voicenotetaker_app/view/library_view.dart';
 import 'package:voicenotetaker_app/view/playback_view.dart';
@@ -14,6 +16,25 @@ import 'harness.dart';
 
 void main() {
   setUpAll(registerViewFallbacks);
+
+  /// Pumps past a pushed route's transition AND the frame that removes it.
+  ///
+  /// `pumpAndSettle` is not an option on these screens - the breathing dot on
+  /// Home animates forever by design - so the transition is pumped by hand. It
+  /// takes several frames rather than one: the navigator starts the animation on
+  /// the frame after the pop, the platform's own page transition decides how long
+  /// it runs, and the route only leaves the tree on the rebuild after that
+  /// finishes.
+  Future<void> settleRoute(WidgetTester tester) async {
+    await flush(tester);
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 200));
+    }
+    // And once more afterwards, because a disposed route's teardown is a chain
+    // of awaits - cancelling a stream subscription needs the real event loop,
+    // not the tester's clock.
+    await flush(tester);
+  }
 
   testWidgets('the device state chooses the screen', (tester) async {
     final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
@@ -39,6 +60,57 @@ void main() {
     await harness.stop(tester);
     await settleDock(tester);
     expect(find.byType(HomeView), findsOneWidget);
+  });
+
+  testWidgets('Home opens Diagnostics, and Diagnostics opens Developer options',
+      (tester) async {
+    // THE ROUTE ORDER IS THE OBSERVE/MUTATE SPLIT. Home's header icon goes to
+    // the screen anybody may look at; the screen that writes to the device is
+    // one tap further in, behind the debug gate.
+    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
+    addTearDown(harness.dispose);
+
+    await pumpScreen(tester, AppRoot(controller: harness.controller));
+    await harness.discover(tester);
+    await harness.connect(tester);
+    await settleDock(tester);
+
+    await tester.tap(find.bySemanticsLabel('Diagnostics'));
+    await settleRoute(tester);
+
+    expect(find.byType(DiagnosticsView), findsOneWidget);
+    // Opening it is what starts the live readings - nothing else in the app
+    // renders them, so nothing else subscribes.
+    expect(harness.controller.diagnosticsOpen, isTrue);
+    verify(() => harness.transport.subscribeFrames(knownDevice.id)).called(1);
+
+    await tester.tap(find.text('Developer options'));
+    await settleRoute(tester);
+    expect(find.byType(DeveloperView), findsOneWidget);
+
+    // Back out of both, and the subscriptions go with the diagnostics route.
+    // Each Back is addressed to its own screen: both routes are mounted, so a
+    // bare `find.bySemanticsLabel('Back')` would be ambiguous.
+    await tester.tap(
+      find.descendant(
+        of: find.byType(DeveloperView),
+        matching: find.bySemanticsLabel('Back'),
+      ),
+    );
+    await settleRoute(tester);
+    expect(find.byType(DeveloperView), findsNothing);
+    await tester.tap(
+      find.descendant(
+        of: find.byType(DiagnosticsView),
+        matching: find.bySemanticsLabel('Back'),
+      ),
+    );
+    await settleRoute(tester);
+
+    expect(find.byType(DiagnosticsView), findsNothing);
+    expect(find.byType(HomeView), findsOneWidget);
+    expect(harness.controller.diagnosticsOpen, isFalse);
+    verify(() => harness.transport.unsubscribeFrames(knownDevice.id)).called(1);
   });
 
   testWidgets('Home opens the library, and the library opens playback',

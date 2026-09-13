@@ -31,14 +31,28 @@ Widget? debugOnlyDeveloperView({
   return null;
 }
 
-/// Screen 6 - developer diagnostics. Debug builds only; reach it through
-/// [debugOnlyDeveloperView].
+/// Developer options. Debug builds only; reach it through
+/// [debugOnlyDeveloperView], which is reached from the diagnostics screen.
 ///
-/// Stateful for one reason: this screen is PUSHED, so a `setState` in
-/// [AppRoot] does not reach it. Anything here that reflects live device state
-/// - the codec selection, the auto-sleep flag the device reported - would
-/// otherwise render once and then go stale. It listens the same way the
-/// playback and recording screens do.
+/// WHAT LIVES HERE AND WHY. The split between this screen and Device
+/// Diagnostics is observe versus mutate. Everything that CHANGES the recorder
+/// is here - the codec it is asked for, the auto-sleep flag that is written into
+/// its flash - because a wrong tap on either has consequences for the device
+/// rather than for a number on a page. Everything a user can only WATCH is on
+/// the diagnostics screen, which is in release builds too: the live link, the
+/// mic check and its history, the die temperature.
+///
+/// The raw link and stream counters stay here rather than moving across, because
+/// they are the same facts the diagnostics screen states in a readable form -
+/// byte totals and malformed-frame counts belong in a report, not in front of
+/// somebody asking whether their recorder is working.
+///
+/// Stateful for two reasons: this screen is PUSHED, so a `setState` in [AppRoot]
+/// does not reach it - anything here that reflects live device state would
+/// otherwise render once and go stale - and the diagnostics report quotes the
+/// die temperature, which is read once on the way in. THAT READ IS A READ, not a
+/// subscription: `fe07` notifications are what make the firmware sample the
+/// sensor continuously, and they belong to the screen that draws a live figure.
 class DeveloperView extends StatefulWidget {
   const DeveloperView({required this.controller, this.onBack, super.key});
 
@@ -56,6 +70,10 @@ class _DeveloperViewState extends State<DeveloperView> {
   void initState() {
     super.initState();
     _controller.addListener(_onControllerChanged);
+    // One read, no subscription - see the class comment. It costs the device a
+    // single sample and it is what keeps the die line in the report from saying
+    // "unavailable" on a perfectly healthy recorder.
+    unawaited(_controller.refreshTemperature());
   }
 
   @override
@@ -72,6 +90,7 @@ class _DeveloperViewState extends State<DeveloperView> {
     final device = _controller.connectedDevice;
     final stats = _controller.stats;
     final info = _controller.streamInfo;
+    final tests = _controller.deviceTests;
     return <String>[
       'voiceNotetaker diagnostics',
       'generated: ${DateTime.now().toIso8601String()}',
@@ -104,8 +123,9 @@ class _DeveloperViewState extends State<DeveloperView> {
       'die temperature: ${_temperatureLine(_controller)}',
       'last file: ${_controller.lastRecording?.path ?? '—'}',
       'error: ${_controller.errorMessage ?? 'none'}',
-      ..._testAggregateLines(_controller.deviceTests.history),
-      ..._testHistoryLines(_controller.deviceTests.history),
+      ..._retiredRunLines(_controller),
+      ..._testAggregateLines(tests.history),
+      ..._testHistoryLines(tests.history),
     ].join('\n');
   }
 
@@ -188,8 +208,9 @@ class _DeveloperViewState extends State<DeveloperView> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Compiled out of release builds. Everything the technical '
-            'direction put on the main screen lives here instead.',
+            'Compiled out of release builds. Everything here CHANGES the '
+            'recorder; anything you can only watch is on Diagnostics, which '
+            'ships in release builds too.',
             style: AppText.footnote12,
           ),
           const SizedBox(height: 22),
@@ -208,26 +229,11 @@ class _DeveloperViewState extends State<DeveloperView> {
                         value: device?.id ?? PlaceholderData.unknownValue,
                       ),
                       const SizedBox(height: 12),
-                      // ATT MTU, interval and PHY are not exposed by
-                      // `BleTransport`; adding them is a driver change, not a
-                      // view one, so they read as unknown until it happens.
-                      const KeyValueRow(
-                        label: 'ATT MTU',
-                        value: PlaceholderData.unknownValue,
-                      ),
-                      const SizedBox(height: 12),
-                      const KeyValueRow(
-                        label: 'Interval',
-                        value: PlaceholderData.unknownValue,
-                      ),
-                      const SizedBox(height: 12),
-                      const KeyValueRow(
-                        label: 'PHY',
-                        value: PlaceholderData.unknownValue,
-                      ),
-                      const SizedBox(height: 12),
+                      // The advertising sample taken at scan time, NOT the live
+                      // link - that one is the meter on the diagnostics screen,
+                      // and the two are different numbers.
                       KeyValueRow(
-                        label: 'RSSI',
+                        label: 'RSSI at scan',
                         value: Fmt.rssi(device?.rssi),
                         valueColor: device?.rssi == null
                             ? AppColors.textPrimary
@@ -242,13 +248,6 @@ class _DeveloperViewState extends State<DeveloperView> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       const SectionCaption('Stream', small: true),
-                      const SizedBox(height: 12),
-                      // Throughput needs a capture clock, which no layer
-                      // publishes yet; the byte counters below are real.
-                      const KeyValueRow(
-                        label: 'Throughput',
-                        value: PlaceholderData.unknownValue,
-                      ),
                       const SizedBox(height: 12),
                       KeyValueRow(
                         label: 'Packets lost',
@@ -268,9 +267,10 @@ class _DeveloperViewState extends State<DeveloperView> {
                         value: Fmt.bytes(stats.decodedBytes),
                       ),
                       const SizedBox(height: 12),
-                      const KeyValueRow(
-                        label: 'Jitter buffer',
-                        value: PlaceholderData.unknownValue,
+                      const Text(
+                        'The last capture, not the live link. Nothing here '
+                        'moves unless a recording is running.',
+                        style: AppText.footnote11,
                       ),
                     ],
                   ),
@@ -285,7 +285,7 @@ class _DeveloperViewState extends State<DeveloperView> {
                       Row(
                         children: <Widget>[
                           Expanded(
-                            child: _Segment(
+                            child: SegmentButton(
                               label: 'ADPCM',
                               selected: _controller.preferredCodec ==
                                   AudioCodec.imaAdpcm,
@@ -295,7 +295,7 @@ class _DeveloperViewState extends State<DeveloperView> {
                           ),
                           const SizedBox(width: 8),
                           Expanded(
-                            child: _Segment(
+                            child: SegmentButton(
                               label: 'Raw PCM',
                               selected: _controller.preferredCodec ==
                                   AudioCodec.pcmS16le,
@@ -322,14 +322,6 @@ class _DeveloperViewState extends State<DeveloperView> {
                 // who use this screen already expect to find it.
                 const SizedBox(height: 10),
                 _BatteryCard(controller: _controller),
-                // Appended below the battery, never inserted above it. Every
-                // card on this screen is somewhere the people who use it
-                // already know to look, and a card pushed down the list is a
-                // card they have to hunt for.
-                const SizedBox(height: 10),
-                _TemperatureCard(controller: _controller),
-                const SizedBox(height: 10),
-                _DeviceTestsCard(controller: _controller),
               ],
             ),
           ),
@@ -415,7 +407,7 @@ class _BatteryCard extends StatelessWidget {
           // them: two bytes, a percentage and a flags byte. Shown as unknown
           // rather than back-calculated from the percentage through the same
           // curve that produced it, which would be a circle dressed up as a
-          // measurement. Same rule as ATT MTU above.
+          // measurement.
           const KeyValueRow(
             label: 'Cell voltage',
             value: PlaceholderData.unknownValue,
@@ -438,6 +430,10 @@ class _BatteryCard extends StatelessWidget {
 }
 
 /// The auto-sleep toggle - the `fe04` flag the device keeps in flash.
+///
+/// THE CLEAREST CASE OF A MUTATING CONTROL, which is why it is on this screen
+/// and not on Diagnostics: a tap here writes a byte into the recorder's flash
+/// that decides whether it puts itself to sleep.
 ///
 /// UNAVAILABLE IS A REAL STATE, NOT A DEFAULT. When the device has not
 /// reported the flag - nothing is connected, the read failed, or the firmware
@@ -463,7 +459,7 @@ class _AutoSleepCard extends StatelessWidget {
           Row(
             children: <Widget>[
               Expanded(
-                child: _Segment(
+                child: SegmentButton(
                   label: 'Off',
                   semanticLabel: 'Auto-sleep off',
                   selected: available && !enabled,
@@ -473,7 +469,7 @@ class _AutoSleepCard extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: _Segment(
+                child: SegmentButton(
                   label: 'On',
                   semanticLabel: 'Auto-sleep on',
                   selected: enabled,
@@ -507,723 +503,6 @@ class _AutoSleepCard extends StatelessWidget {
   }
 }
 
-/// One segment of a two-way selector - the codec pick, the auto-sleep flag.
-/// Selected: purple fill with LIGHT text, per the contrast rule in `theme.dart`.
-///
-/// [enabled] false dims the segment and takes its tap away, which is how a
-/// setting the device has not reported is shown: present, and visibly not
-/// answerable.
-class _Segment extends StatelessWidget {
-  const _Segment({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-    this.semanticLabel,
-    this.enabled = true,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  /// Read out instead of [label] when the visible word is too short to say
-  /// what it does on its own - "On" means nothing without "Auto-sleep".
-  final String? semanticLabel;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      enabled: enabled,
-      selected: selected,
-      label: semanticLabel ?? label,
-      container: true,
-      excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: enabled ? onTap : null,
-        child: Opacity(
-          opacity: enabled ? 1 : 0.45,
-          child: SizedBox(
-            height: AppShape.minTapTarget,
-            child: Center(
-              child: Container(
-                height: 38,
-                decoration: BoxDecoration(
-                  color: selected ? AppColors.primaryFill : null,
-                  border: selected
-                      ? null
-                      : Border.all(color: AppColors.border),
-                  borderRadius: AppShape.segment,
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  label,
-                  style: selected
-                      ? AppText.devValue.copyWith(
-                          fontWeight: FontWeight.w500,
-                          color: AppColors.onPrimaryFill,
-                        )
-                      : AppText.devLabel.copyWith(
-                          fontWeight: FontWeight.w400,
-                          color: AppColors.textSecondary,
-                        ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The nRF52840's own junction temperature - the `fe07` characteristic.
-///
-/// THE LABEL IS THE POINT. This is a DIE temperature: the sensor is inside the
-/// same package as the CPU and the radio, so it reads well above the room even
-/// on an open bench, and it reads higher again inside a plastic case with a LiPo
-/// cell underneath. A figure like "31.2" next to the word "temperature" will be
-/// read as the room by anyone who did not write this file, so every place it
-/// appears - here, the export, the card's own caption - says "die".
-///
-/// Three outcomes, never collapsed: a figure, a device that has the
-/// characteristic but no reading (`0x8000`), and firmware that does not have
-/// `fe07` at all. Zero would read as a freezing room, which is why the
-/// controller's getter is nullable.
-class _TemperatureCard extends StatelessWidget {
-  const _TemperatureCard({required this.controller});
-
-  final AppController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final available = controller.temperatureAvailable;
-    final celsius = controller.dieTemperatureCelsius;
-
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          const SectionCaption('Die temperature', small: true),
-          const SizedBox(height: 12),
-          KeyValueRow(
-            label: 'Die',
-            value: !available
-                ? 'unavailable'
-                : celsius == null
-                    ? 'unknown (0x8000)'
-                    : '${celsius.toStringAsFixed(1)} °C',
-          ),
-          const SizedBox(height: 12),
-          // The raw wire value beside the figure, for the same reason the
-          // battery card shows the bars beside the percentage: a report of a
-          // decoding complaint is unanswerable without it.
-          KeyValueRow(
-            label: 'Decidegrees',
-            value: controller.dieTemperature?.deciCelsius?.toString() ??
-                PlaceholderData.unknownValue,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            available
-                ? 'The chip’s own junction temperature, NOT the room. The '
-                    'sensor shares a package with the CPU and the radio, so it '
-                    'self-heats - and it will read higher again inside the '
-                    'enclosure with the cell underneath it, which is exactly '
-                    'why it is worth a figure before and after. It is captured '
-                    'on every test run below.'
-                : controller.isConnected
-                    ? 'This recorder did not report a die temperature, so '
-                        'nothing is shown. Firmware without the fe07 '
-                        'characteristic looks like this.'
-                    : 'Connect to the recorder to read this. It is measured on '
-                        'the device, not in the app.',
-            style: AppText.footnote11,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// The five enclosure tests, their controls, and the last two runs of each.
-///
-/// WHY THE LAST TWO RUNS ARE ON SCREEN. The recorder is going into a plastic
-/// case with a cell under the board, and the only question worth asking is
-/// whether that made things worse. One number cannot answer it. So each row
-/// carries the most recent run AND the one before, side by side, which is the
-/// before-and-after comparison the harness exists for; the full history, every
-/// reading and every stop of every walk, is in Export diagnostics.
-///
-/// A TEST THAT CANNOT RUN IS NOT OFFERED. The same three-state rule the
-/// auto-sleep card follows: no link, a capture already holding the exclusive
-/// frame subscription, no `fe04` for the wake test, a denied scan permission -
-/// each disables the control and says which it is. Nothing here ever shows a
-/// default result.
-class _DeviceTestsCard extends StatelessWidget {
-  const _DeviceTestsCard({required this.controller});
-
-  final AppController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final tests = controller.deviceTests;
-    final blocker = controller.testBlocker;
-    final saveFailure = tests.saveFailure;
-
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          const SectionCaption('Device tests', small: true),
-          const SizedBox(height: 8),
-          const Text(
-            'Enclosure before-and-after. Run the suite on the bare board, fit '
-            'the case, run it again, and compare by date - the app cannot know '
-            'whether the case is on, so it does not pretend to.',
-            style: AppText.footnote11,
-          ),
-          if (blocker != null &&
-              blocker != DeviceTestBlocker.testRunning) ...<Widget>[
-            const SizedBox(height: 10),
-            Text(
-              _blockerText(blocker),
-              style: AppText.footnote11.copyWith(color: AppColors.warning),
-            ),
-          ],
-          if (saveFailure != null) ...<Widget>[
-            const SizedBox(height: 10),
-            Text(
-              'The last result was measured but NOT saved: $saveFailure',
-              style: AppText.footnote11.copyWith(color: AppColors.error),
-            ),
-          ],
-          for (final kind in DeviceTestKind.values) ...<Widget>[
-            const SizedBox(height: 16),
-            _TestRow(controller: controller, kind: kind),
-          ],
-          const SizedBox(height: 18),
-          _SamplesPerTest(controller: controller),
-          const SizedBox(height: 14),
-          Text(
-            tests.isLoaded
-                ? '${tests.history.length} run'
-                    '${tests.history.length == 1 ? '' : 's'} kept on this '
-                    'phone, newest first, in ${tests.resultsFileName} '
-                    'beside the recordings. Every one of them is in Export '
-                    'diagnostics, readings and all.'
-                : 'Saved runs have not been read yet.',
-            style: AppText.footnote11,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// One test: what it measures, its controls, and its last two results.
-class _TestRow extends StatelessWidget {
-  const _TestRow({required this.controller, required this.kind});
-
-  final AppController controller;
-  final DeviceTestKind kind;
-
-  @override
-  Widget build(BuildContext context) {
-    final tests = controller.deviceTests;
-    final isRunning = tests.running == kind;
-    // A batch of this test is part-way through and waiting for the operator.
-    // Nothing is streaming, but the test is very much in progress.
-    final awaiting = tests.awaitingNextSample && tests.batchKind == kind;
-    final active = isRunning || awaiting;
-    final blocker = kind == DeviceTestKind.wakeOnMotion
-        ? controller.wakeTestBlocker
-        : controller.testBlocker;
-    final batches = tests.batchesOf(kind);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: Text(
-                _testName(kind),
-                style: AppText.devValue,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: 10),
-            SizedBox(
-              width: 96,
-              child: _Segment(
-                label: active ? 'Stop' : 'Run',
-                semanticLabel:
-                    '${active ? 'Stop' : 'Run'} the ${_testName(kind).toLowerCase()} test',
-                selected: active,
-                // An active batch's own row is never disabled by the blocker it
-                // is itself causing - see `AppController.testBlocker`.
-                enabled: active || blocker == null,
-                onTap: () => unawaited(
-                  active ? _stop(controller, kind) : _start(controller, kind),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Text(_testBlurb(kind), style: AppText.footnote11),
-        // A reason this test alone cannot run - no `fe04`, no scan permission.
-        // The card already states whatever blocks every test; repeating it on
-        // each of five rows would bury the one that is specific to this one.
-        if (blocker != null &&
-            blocker != DeviceTestBlocker.testRunning &&
-            blocker != controller.testBlocker) ...<Widget>[
-          const SizedBox(height: 4),
-          Text(
-            _blockerText(blocker),
-            style: AppText.footnote11.copyWith(color: AppColors.warning),
-          ),
-        ],
-        if (isRunning) ...<Widget>[
-          if (tests.batchTarget > 1) ...<Widget>[
-            const SizedBox(height: 8),
-            Text(
-              'Sample ${tests.sampleNumber} of ${tests.batchTarget}',
-              style: AppText.devValue,
-            ),
-          ],
-          const SizedBox(height: 8),
-          Text(
-            _phasePrompt(tests.phase, kind),
-            style: AppText.footnote11.copyWith(color: AppColors.purpleText),
-          ),
-          const SizedBox(height: 6),
-          KeyValueRow(
-            label: 'Elapsed',
-            value: Fmt.timer(tests.elapsed),
-          ),
-          // Frames while it runs, because a soak that is already shedding
-          // packets is worth seeing before its three minutes are up.
-          if (kind != DeviceTestKind.wakeOnMotion) ...<Widget>[
-            const SizedBox(height: 6),
-            KeyValueRow(
-              label: 'Frames / lost',
-              value: '${tests.liveStats.framesReceived} / '
-                  '${tests.liveStats.framesLost}',
-              valueColor: tests.liveStats.framesLost == 0
-                  ? AppColors.connected
-                  : AppColors.warning,
-            ),
-          ],
-          if (kind == DeviceTestKind.range) ...<Widget>[
-            const SizedBox(height: 8),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: _Segment(
-                    label: 'Mark step',
-                    semanticLabel: 'Mark a range step',
-                    selected: false,
-                    onTap: () => unawaited(controller.markRangeStep()),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _Segment(
-                    label: 'Finish',
-                    semanticLabel: 'Finish the range walk',
-                    selected: false,
-                    onTap: () => unawaited(controller.finishRangeWalk()),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            // One wrapping line per stop rather than a label/value row: the
-            // signal and both frame counts do not fit a phone's width side by
-            // side, and a stop that is clipped is a stop the operator cannot
-            // tell was recorded.
-            for (final step in tests.steps)
-              Text(
-                'Stop ${step.index} · '
-                '${Fmt.measurement(step.rssiDbm, 'dBm')} · '
-                '${step.framesReceived} frames, ${step.framesLost} lost',
-                style: AppText.footnote11.copyWith(
-                  color: step.dropped
-                      ? AppColors.warning
-                      : AppColors.textSecondary,
-                ),
-              ),
-          ],
-          if (tests.phase == DeviceTestPhase.waitingForShake) ...<Widget>[
-            const SizedBox(height: 8),
-            _Segment(
-              label: 'Shaken now',
-              semanticLabel: 'I have shaken the device',
-              selected: false,
-              onTap: controller.confirmShaken,
-            ),
-          ],
-        ],
-        // BETWEEN SAMPLES of a batch that needs the operator. Nothing is
-        // running, so none of the live readouts above are on screen - what is
-        // needed here is how far through the batch they are, one control to take
-        // the next sample and one to stop with what they have.
-        if (awaiting) ...<Widget>[
-          const SizedBox(height: 8),
-          Text(
-            '${tests.samplesTaken} of ${tests.batchTarget} samples taken. '
-            '${_nextSamplePrompt(kind)}',
-            style: AppText.footnote11.copyWith(color: AppColors.purpleText),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: _Segment(
-                  label: 'Next sample',
-                  semanticLabel: 'Take the next sample of the '
-                      '${_testName(kind).toLowerCase()} test',
-                  selected: false,
-                  onTap: () =>
-                      unawaited(controller.continueDeviceTestBatch()),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _Segment(
-                  label: 'Keep ${tests.samplesTaken}',
-                  semanticLabel: 'Stop the '
-                      '${_testName(kind).toLowerCase()} test and keep the '
-                      '${tests.samplesTaken} sample'
-                      '${tests.samplesTaken == 1 ? '' : 's'} already taken',
-                  selected: false,
-                  onTap: controller.endDeviceTestBatch,
-                ),
-              ),
-            ],
-          ),
-        ],
-        // The two BATCHES that make a comparison - never two single runs, which
-        // is the whole point: these measurements are noisy enough that one
-        // number against one number is a coin toss dressed up as a baseline.
-        // Nothing is shown when there has never been a run: an empty row is
-        // honest, an invented one is not.
-        //
-        // Wrapping lines rather than label/value rows for the same reason the
-        // stops are: a timestamp, an n, a median and a range do not fit a
-        // phone's width on one line, and a clipped measurement is worse than a
-        // wrapped one.
-        if (batches.isNotEmpty) ..._batchLines('Latest', batches.first),
-        if (batches.length > 1) ..._batchLines('Before', batches[1]),
-      ],
-    );
-  }
-
-  /// Ends a running test from the row's own control.
-  ///
-  /// The range walk needs BOTH halves: cancelling marks it abandoned, and only
-  /// [AppController.finishRangeWalk] closes the stream and saves what the stops
-  /// recorded. Cancelling alone would leave the walk running with its Stop
-  /// button already pressed - which is the bug this method exists to prevent.
-  Future<void> _stop(AppController controller, DeviceTestKind kind) async {
-    // A batch waiting between samples has nothing streaming to cancel, and
-    // cancelling is not what is wanted anyway: the samples already taken are
-    // kept and aggregated.
-    if (controller.deviceTests.awaitingNextSample) {
-      controller.endDeviceTestBatch();
-      return;
-    }
-    controller.cancelDeviceTest();
-    if (kind == DeviceTestKind.range) await controller.finishRangeWalk();
-  }
-
-  Future<void> _start(AppController controller, DeviceTestKind kind) =>
-      switch (kind) {
-        DeviceTestKind.range => controller.beginRangeWalk(),
-        DeviceTestKind.noiseFloor => controller.runNoiseFloorTest(),
-        DeviceTestKind.sensitivity => controller.runSensitivityTest(),
-        DeviceTestKind.linkSoak => controller.runLinkSoakTest(),
-        DeviceTestKind.wakeOnMotion => controller.runWakeOnMotionTest(),
-      };
-}
-
-/// How many samples each test takes, and why it takes more than one.
-///
-/// BELOW THE FIVE ROWS, not above them. It applies to all of them, but the rows
-/// are what people come to this card for and a control inserted above them
-/// pushes every one of them down the screen.
-class _SamplesPerTest extends StatelessWidget {
-  const _SamplesPerTest({required this.controller});
-
-  final AppController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final tests = controller.deviceTests;
-    // Mid-batch the count is fixed: a batch carries the number it was started
-    // with, or the n on the card would not be the n that was measured.
-    final locked = tests.isRunning || tests.isBatchActive;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(
-          'Samples per test · ${controller.samplesPerTest}',
-          style: AppText.devValue,
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'Every one of these measurements is noisy, so one reading before the '
-          'case and one after cannot be compared - the difference would be '
-          'noise as often as not. Each test is taken this many times and '
-          'reported as a median with the full range across the samples, so the '
-          'spread is on the screen next to the figure.',
-          style: AppText.footnote11,
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'The noise floor and the link soak repeat on their own. The walk, the '
-          'voice and the shake ask you between samples - and you can stop early '
-          'at any point, which keeps every sample already taken.',
-          style: AppText.footnote11,
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: <Widget>[
-            for (final count in DeviceTestSampling.choices) ...<Widget>[
-              if (count != DeviceTestSampling.choices.first)
-                const SizedBox(width: 8),
-              Expanded(
-                child: _Segment(
-                  label: '$count',
-                  semanticLabel: count == 1
-                      ? 'Take a single sample per test'
-                      : 'Take $count samples per test',
-                  selected: count == controller.samplesPerTest,
-                  enabled: !locked,
-                  onTap: () => controller.samplesPerTest = count,
-                ),
-              ),
-            ],
-          ],
-        ),
-        if (locked) ...<Widget>[
-          const SizedBox(height: 4),
-          const Text(
-            'Fixed while a batch is in progress. The next one can differ.',
-            style: AppText.footnote11,
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-/// One saved BATCH as the comparison reads it: when, how many samples, the
-/// median of each headline reading, the range those samples spanned, and the
-/// samples themselves.
-///
-/// THE SPREAD IS NOT A FOOTNOTE HERE. A three-decibel change after the
-/// enclosure means nothing if the five samples before it spanned ten, and the
-/// only way somebody reads that off the screen instead of deducing it is for the
-/// range to sit on the line under the median.
-///
-/// THE SAMPLES ARE PRINTED IN FULL, and no reading is ever dropped for being
-/// extreme. A single wild value is frequently the most interesting thing the
-/// batch found - a dropout, a resonance, a scan the OS throttled - and a median
-/// that quietly excluded it would hide exactly that. Nothing is excluded, so
-/// there is nothing to declare; what IS declared is the opposite case, a sample
-/// that produced no reading at all, which cannot enter a median and is counted
-/// out loud.
-List<Widget> _batchLines(String when, DeviceTestBatch batch) {
-  final colour = _batchColour(batch);
-  return <Widget>[
-    const SizedBox(height: 6),
-    Text(
-      '$when · ${Fmt.dayAndTime(batch.startedAt)} · ${_batchCount(batch)}',
-      style: AppText.devLabel.copyWith(color: colour),
-    ),
-    for (final label in _headlineLabels(batch.kind))
-      ..._spreadLines(batch.spreadOf(label), colour),
-  ];
-}
-
-List<Widget> _spreadLines(ReadingSpread spread, Color colour) {
-  final missing = spread.missing == 0
-      ? ''
-      : ' · ${spread.missing} of ${spread.sampleCount} had no reading';
-  return <Widget>[
-    const SizedBox(height: 2),
-    Text(
-      spread.hasSpread
-          ? '${spread.label}: median '
-              '${Fmt.measurement(spread.median, spread.unit)} · '
-              '${Fmt.measurement(spread.min, spread.unit)} to '
-              '${Fmt.measurement(spread.max, spread.unit)} · spread '
-              '${Fmt.measurement(spread.spread, spread.unit)}$missing'
-          : '${spread.label}: '
-              '${Fmt.measurement(spread.median, spread.unit)}$missing',
-      style: AppText.footnote11.copyWith(color: colour),
-    ),
-    // Every sample, so an outlier is visible rather than inferred.
-    if (spread.hasSpread) ...<Widget>[
-      const SizedBox(height: 2),
-      Text(
-        'samples: ${spread.values.map(
-              (value) => Fmt.measurement(value, spread.unit),
-            ).join(' · ')}',
-        style: AppText.footnote11,
-      ),
-    ],
-  ];
-}
-
-/// `n=5 of 5`, plus every caveat that belongs beside an n.
-String _batchCount(DeviceTestBatch batch) {
-  final parts = <String>[
-    'n=${batch.sampleCount}'
-        '${batch.requested > 1 ? ' of ${batch.requested}' : ''}',
-    if (batch.isPartial) 'stopped early',
-    // A COMPARISON AGAINST ONE RUN SAYS SO. It is not a baseline; it is a
-    // single draw from a noisy process, and it cannot show its own spread.
-    if (batch.isSingle) 'one run only, no spread to judge it by',
-    ..._batchOutcomes(batch),
-  ];
-  return parts.join(' · ');
-}
-
-/// The outcomes that were not `completed`, counted. Nothing is said about the
-/// ones that were: that is what a batch is supposed to look like.
-List<String> _batchOutcomes(DeviceTestBatch batch) => <String>[
-      for (final outcome in DeviceTestOutcome.values)
-        if (outcome != DeviceTestOutcome.completed &&
-            batch.countOf(outcome) > 0)
-          batch.isSingle
-              ? outcome.wireName
-              : '${batch.countOf(outcome)} ${outcome.wireName}',
-    ];
-
-Color _batchColour(DeviceTestBatch batch) {
-  if (batch.countOf(DeviceTestOutcome.failed) > 0) return AppColors.warning;
-  if (batch.countOf(DeviceTestOutcome.completed) == batch.sampleCount) {
-    return AppColors.textPrimary;
-  }
-  return AppColors.textSecondary;
-}
-
-/// What the operator has to do before the next sample can be taken.
-String _nextSamplePrompt(DeviceTestKind kind) => switch (kind) {
-      DeviceTestKind.range =>
-        'Bring the phone back to the device and walk it again.',
-      DeviceTestKind.sensitivity =>
-        'Get back to ${DeviceTestReadings.sensitivityDistanceCm} cm and speak '
-            'again when the next sample starts.',
-      DeviceTestKind.wakeOnMotion =>
-        'Put it down and leave it alone - the next sample waits for it to go '
-            'back to sleep before asking for a shake.',
-      // The two that repeat unattended never wait, so this is unreachable.
-      DeviceTestKind.noiseFloor || DeviceTestKind.linkSoak => '',
-    };
-
-String _testName(DeviceTestKind kind) => switch (kind) {
-      DeviceTestKind.range => 'Range',
-      DeviceTestKind.noiseFloor => 'Noise floor',
-      DeviceTestKind.sensitivity => 'Sensitivity',
-      DeviceTestKind.linkSoak => 'Link soak',
-      DeviceTestKind.wakeOnMotion => 'Wake on motion',
-    };
-
-String _testBlurb(DeviceTestKind kind) => switch (kind) {
-      // The dropped-frame half is said out loud, because a reading of "RSSI
-      // fine" on a link that is shedding packets is the exact mistake this
-      // test exists to prevent.
-      DeviceTestKind.range =>
-        'Walk away in steps. Records the live link RSSI and the frames lost on '
-            'each leg, because an acceptable RSSI can still be dropping frames.',
-      DeviceTestKind.noiseFloor =>
-        'Ten seconds of a quiet room, as RMS dBFS. Catches a rattle, a '
-            'resonance, or case vibration coupling into the microphone.',
-      DeviceTestKind.sensitivity =>
-        'Speak at ${DeviceTestReadings.sensitivityDistanceCm} cm. Peak and RMS '
-            'dBFS - what the enclosure’s port costs a voice.',
-      DeviceTestKind.linkSoak =>
-        'Streams for minutes and counts dropped frames and disconnections. '
-            'Enclosure RF faults are usually intermittent, not absolute.',
-      DeviceTestKind.wakeOnMotion =>
-        'Enables auto-sleep, ends the link, waits for it to stop advertising, '
-            'then times a shake. The case adds mass and damping.',
-    };
-
-String _blockerText(DeviceTestBlocker blocker) => switch (blocker) {
-      DeviceTestBlocker.notConnected =>
-        'Connect to the recorder first. Every test measures its link or its '
-            'microphone, and neither exists without one.',
-      DeviceTestBlocker.recording =>
-        'A recording is in progress. The audio notify stream takes one '
-            'subscriber, so no test can have it until the capture stops.',
-      DeviceTestBlocker.testRunning => 'Another test is running.',
-      DeviceTestBlocker.noAutoSleep =>
-        'This firmware has no auto-sleep characteristic, so the device cannot '
-            'be put to sleep on purpose and there is nothing to wake.',
-      DeviceTestBlocker.scanPermissionDenied =>
-        'Bluetooth permission was denied, and this test can only watch the '
-            'device advertise by scanning.',
-    };
-
-String _phasePrompt(DeviceTestPhase phase, DeviceTestKind kind) =>
-    switch (phase) {
-      DeviceTestPhase.idle => '',
-      DeviceTestPhase.walking =>
-        'Walk away from the device in steps. Tap Mark step at each stop, then '
-            'Finish.',
-      DeviceTestPhase.measuring => switch (kind) {
-          DeviceTestKind.noiseFloor =>
-            'Quiet room, hands off the device. Measuring…',
-          DeviceTestKind.sensitivity =>
-            'Speak now, at ${DeviceTestReadings.sensitivityDistanceCm} cm from '
-                'the microphone port.',
-          _ => 'Streaming. Leave the device where it will actually live.',
-        },
-      DeviceTestPhase.waitingForSystemOff =>
-        'Put the device down and do not touch it. Waiting for it to stop '
-            'advertising, which is System OFF.',
-      DeviceTestPhase.waitingForShake =>
-        'It is asleep. Shake it, then tap Shaken now - the clock starts on the '
-            'tap, not on this prompt.',
-      DeviceTestPhase.waitingForWake => 'Waiting for it to advertise again…',
-      DeviceTestPhase.saving => 'Saving the result…',
-      // Nothing is running between samples, so the row draws its own prompt -
-      // see [_nextSamplePrompt].
-      DeviceTestPhase.awaitingNextSample => '',
-    };
-
-/// The readings worth putting on the card, per test. Everything else is in the
-/// export.
-List<String> _headlineLabels(DeviceTestKind kind) => switch (kind) {
-      DeviceTestKind.range => const <String>[
-          DeviceTestReadings.rssiAtFirstDrop,
-          DeviceTestReadings.lossPercent,
-        ],
-      DeviceTestKind.noiseFloor => const <String>[
-          DeviceTestReadings.noiseFloorRms,
-        ],
-      DeviceTestKind.sensitivity => const <String>[
-          DeviceTestReadings.peak,
-          DeviceTestReadings.rms,
-        ],
-      DeviceTestKind.linkSoak => const <String>[
-          DeviceTestReadings.framesLost,
-          DeviceTestReadings.disconnections,
-        ],
-      DeviceTestKind.wakeOnMotion => const <String>[
-          DeviceTestReadings.wakeDelay,
-        ],
-    };
-
 /// The die temperature as the export states it - three outcomes, and the word
 /// "die" in every one of them.
 String _temperatureLine(AppController controller) {
@@ -1234,11 +513,30 @@ String _temperatureLine(AppController controller) {
       '(${controller.dieTemperature!.deciCelsius} decidegrees, NOT ambient)';
 }
 
+/// Runs in the saved file that this build does not read, accounted for out loud.
+///
+/// WHY THE EXPORT SAYS THIS. The file on the owner's phone holds a bare-board
+/// baseline, and some of those runs are of measurements that have since been
+/// retired. They are KEPT IN THE FILE and written back out untouched, but this
+/// build cannot interpret them, so they are not in the history below. A report
+/// that silently listed twelve of fifteen runs would look like data loss.
+List<String> _retiredRunLines(AppController controller) {
+  final unread = controller.unreadDeviceTestRunCount;
+  if (unread == 0) return const <String>[];
+  final retired = controller.retiredDeviceTestRunCount;
+  return <String>[
+    '',
+    'saved runs this build does not read: $unread '
+        '($retired of a retired measurement, ${unread - retired} from a newer '
+        'build). They are kept in the file untouched.',
+  ];
+}
+
 /// Every saved batch reduced to its medians and ranges, for the export.
 ///
 /// BEFORE the run-by-run list and not instead of it. This section is what
 /// somebody reading the report actually compares; the individual samples below
-/// it are what lets them check that the aggregate is not hiding a dropout.
+/// it are what lets them check that the aggregate is not hiding an outlier.
 ///
 /// Every reading is aggregated here, not just the headline ones the card has
 /// room for.
@@ -1288,8 +586,8 @@ String _aggregateLine(ReadingSpread spread) {
 
 /// The whole saved history, for the export.
 ///
-/// Not truncated. A harness whose export drops the run you wanted to compare
-/// against is not an export.
+/// Not truncated. A report that drops the run you wanted to compare against is
+/// not a report.
 List<String> _testHistoryLines(List<DeviceTestResult> history) {
   return <String>[
     '',
@@ -1303,9 +601,6 @@ List<String> _testHistoryLines(List<DeviceTestResult> history) {
           '${(result.duration.inMilliseconds / 1000).toStringAsFixed(1)}s',
       for (final reading in result.readings)
         '  ${reading.label}: ${Fmt.measurement(reading.value, reading.unit)}',
-      for (final step in result.steps)
-        '  stop ${step.index}: ${Fmt.measurement(step.rssiDbm, 'dBm')}, '
-            '${step.framesReceived} frames, ${step.framesLost} lost',
       if (result.note != null) '  note: ${result.note}',
     ],
   ];

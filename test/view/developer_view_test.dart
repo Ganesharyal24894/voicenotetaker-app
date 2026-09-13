@@ -102,6 +102,27 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('what a user can only WATCH has moved to Diagnostics',
+        (tester) async {
+      // The observe/mutate split. This screen keeps the two controls that write
+      // to the recorder plus the raw counters a bug report needs; the die
+      // temperature and the mic check are readings, so they are on the screen
+      // that ships in release builds.
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await pumpScreen(
+        tester,
+        DeveloperView(controller: harness.controller),
+      );
+
+      expect(find.text('DIE TEMPERATURE'), findsNothing);
+      expect(find.text('MIC CHECK'), findsNothing);
+      expect(find.text('DEVICE TESTS'), findsNothing);
+      // And nothing that used to run a measurement from here is offered.
+      expect(find.bySemanticsLabel(RegExp('^Run the ')), findsNothing);
+    });
+
     testWidgets('shows the link and stream readings it really has',
         (tester) async {
       final harness =
@@ -119,9 +140,25 @@ void main() {
       expect(find.text('−54 dBm'), findsOneWidget);
       expect(find.text('0 (0.00%)'), findsOneWidget);
 
-      // ATT MTU, interval, PHY, throughput and the jitter buffer are not
-      // exposed by BleTransport, so they read as unknown rather than invented.
-      expect(find.text('—'), findsNWidgets(5));
+      // THE ADVERTISING SAMPLE, NOT THE LIVE LINK, and the label says so. The
+      // live signal is the meter on Diagnostics, and the two are different
+      // numbers - one was taken once at scan time and never updated.
+      expect(find.text('RSSI at scan'), findsOneWidget);
+
+      // The five rows that always read "—" are gone: ATT MTU, interval, PHY,
+      // throughput and the jitter buffer were never exposed by BleTransport, so
+      // every one of them was a permanent dash taking up a line. Cell voltage
+      // stays, because `fe05` genuinely has a value-shaped hole where it would
+      // be.
+      expect(find.text('ATT MTU'), findsNothing);
+      expect(find.text('Interval'), findsNothing);
+      expect(find.text('PHY'), findsNothing);
+      expect(find.text('Throughput'), findsNothing);
+      expect(find.text('Jitter buffer'), findsNothing);
+      // Nothing above the fold reads as a dash any more. (Cell voltage still
+      // does, further down the list, because `fe05` really does have a
+      // value-shaped hole where the millivolts would be.)
+      expect(find.text('—'), findsNothing);
     });
 
     testWidgets('the codec selector drives the controller', (tester) async {

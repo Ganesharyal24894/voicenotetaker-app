@@ -6,23 +6,27 @@ import 'package:voicenotetaker_app/model/device_test_result.dart';
 ///
 /// Two properties matter more than the rest:
 ///
-///   * a null reading stays null. "No drops at any stop" and "drops began at
-///     0 dBm" are different facts, and JSON is where they get collapsed.
-///   * the enum names on the wire are STRINGS, not indices, so adding a sixth
-///     test later cannot silently re-label every result already on disk.
+///   * a null reading stays null. "No audio arrived" and "a level of 0 dBFS"
+///     are different facts, and JSON is where they get collapsed.
+///   * the enum names on the wire are STRINGS, not indices, so retiring a
+///     measurement cannot silently re-label every result already on disk. That
+///     property is what makes the retired-kind tests at the bottom pass.
 void main() {
   group('a reading', () {
     test('round-trips through JSON', () {
-      const reading =
-          DeviceTestReading(label: 'Noise floor (RMS)', value: -62.4, unit: 'dBFS');
+      const reading = DeviceTestReading(
+        label: 'Noise floor (RMS)',
+        value: -62.4,
+        unit: 'dBFS',
+      );
       expect(DeviceTestReading.fromJson(reading.toJson()), reading);
     });
 
     test('keeps a null value null rather than turning it into zero', () {
       const reading = DeviceTestReading(
-        label: 'RSSI where drops began',
+        label: 'Noise floor (RMS)',
         value: null,
-        unit: 'dBm',
+        unit: 'dBFS',
       );
       final back = DeviceTestReading.fromJson(reading.toJson());
       expect(back.value, isNull);
@@ -51,82 +55,17 @@ void main() {
     });
   });
 
-  group('a range step', () {
-    test('round-trips, RSSI and frame counts together', () {
-      const step = DeviceTestStep(
-        index: 3,
-        rssiDbm: -78,
-        framesReceived: 204,
-        framesLost: 11,
-      );
-      expect(DeviceTestStep.fromJson(step.toJson()), step);
-    });
-
-    test('a step with no RSSI reading keeps it null', () {
-      const step = DeviceTestStep(
-        index: 1,
-        rssiDbm: null,
-        framesReceived: 10,
-        framesLost: 0,
-      );
-      expect(DeviceTestStep.fromJson(step.toJson()).rssiDbm, isNull);
-    });
-
-    test('loss is a ratio of what the device sent, not of what arrived', () {
-      const step = DeviceTestStep(
-        index: 1,
-        rssiDbm: -70,
-        framesReceived: 90,
-        framesLost: 10,
-      );
-      expect(step.framesExpected, 100);
-      expect(step.lossRatio, closeTo(0.1, 1e-9));
-      expect(step.dropped, isTrue);
-    });
-
-    test('a leg with no traffic is not a 100% loss', () {
-      // The divide-by-zero this project has been bitten by before.
-      const step = DeviceTestStep(
-        index: 1,
-        rssiDbm: -70,
-        framesReceived: 0,
-        framesLost: 0,
-      );
-      expect(step.lossRatio, 0.0);
-      expect(step.dropped, isFalse);
-    });
-
-    test('rejects non-integer counters', () {
-      expect(
-        () => DeviceTestStep.fromJson(<String, Object?>{
-          'index': 1,
-          'rssiDbm': -70,
-          'framesReceived': 'lots',
-          'framesLost': 0,
-        }),
-        throwsFormatException,
-      );
-    });
-  });
-
   group('a result', () {
     final result = DeviceTestResult(
-      kind: DeviceTestKind.range,
+      kind: DeviceTestKind.sensitivity,
       outcome: DeviceTestOutcome.completed,
       startedAt: DateTime.utc(2026, 9, 13, 14, 2, 11),
-      duration: const Duration(seconds: 96),
+      duration: const Duration(seconds: 10),
       readings: const <DeviceTestReading>[
-        DeviceTestReading(label: 'Stops', value: 4),
-        DeviceTestReading(
-          label: 'RSSI where drops began',
-          value: -79,
-          unit: 'dBm',
-        ),
+        DeviceTestReading(label: 'Peak', value: -8.2, unit: 'dBFS'),
+        DeviceTestReading(label: 'RMS', value: -24.6, unit: 'dBFS'),
       ],
-      steps: const <DeviceTestStep>[
-        DeviceTestStep(index: 1, rssiDbm: -54, framesReceived: 300, framesLost: 0),
-      ],
-      note: 'Frames first went missing at stop 3.',
+      note: 'Spoken at 30 cm from the microphone port.',
     );
 
     test('round-trips whole', () {
@@ -136,30 +75,38 @@ void main() {
       expect(back.startedAt, result.startedAt);
       expect(back.duration, result.duration);
       expect(back.readings, result.readings);
-      expect(back.steps, result.steps);
       expect(back.note, result.note);
     });
 
     test('the kind is stored by name, never by index', () {
-      // An index would be re-pointed by inserting a value into the enum, and
+      // An index would be re-pointed by removing a value from the enum, and
       // every result already on disk would quietly change what it measured.
-      expect(result.toJson()['kind'], 'range');
+      // Retiring three kinds is exactly the event this protects against.
+      expect(result.toJson()['kind'], 'sensitivity');
       expect(result.toJson()['outcome'], 'completed');
     });
 
+    test('the two surviving kinds keep the wire names the baseline uses', () {
+      // The bare-board baseline on the owner's phone is stored under these two
+      // strings. Renaming either breaks the comparison the file exists for.
+      expect(DeviceTestKind.noiseFloor.wireName, 'noise-floor');
+      expect(DeviceTestKind.sensitivity.wireName, 'sensitivity');
+      expect(DeviceTestKind.values, hasLength(2));
+    });
+
     test('a reading can be looked up by label', () {
-      expect(result.reading('Stops')?.value, 4);
+      expect(result.reading('Peak')?.value, -8.2);
       expect(result.reading('nothing called this'), isNull);
     });
 
     test('an unavailable run records why, and has no readings', () {
       final unavailable = DeviceTestResult.unavailable(
-        kind: DeviceTestKind.wakeOnMotion,
+        kind: DeviceTestKind.sensitivity,
         at: DateTime.utc(2026, 9, 13),
-        because: 'auto-sleep could not be enabled',
+        because: 'the device did not report its stream format',
       );
       expect(unavailable.outcome, DeviceTestOutcome.unavailable);
-      expect(unavailable.note, contains('auto-sleep'));
+      expect(unavailable.note, contains('stream format'));
       expect(unavailable.hasReadings, isFalse);
       // And it survives the file, because "we could not measure it that day"
       // is part of the before-and-after story.
@@ -184,13 +131,74 @@ void main() {
       expect(() => DeviceTestResult.fromJson(json), throwsFormatException);
     });
 
-    test('absent readings and steps read as empty, not as an error', () {
-      final json = result.toJson()
-        ..remove('readings')
-        ..remove('steps');
+    test('absent readings read as empty, not as an error', () {
+      final json = result.toJson()..remove('readings');
+      expect(DeviceTestResult.fromJson(json).readings, isEmpty);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE RETIRED MEASUREMENTS
+  //
+  // The range walk, the link soak and wake-on-motion were removed. There is a
+  // phone with runs of all three in it, taken on the bare board, and those runs
+  // must not turn into a crash or a silent truncation of the file. The rule this
+  // layer keeps is narrow and deliberate: a retired kind is REJECTED here, the
+  // same way a kind from a future build is, and the store above is what keeps
+  // the row. Guessing at it - mapping `link-soak` onto something else - would
+  // put numbers measured by a different method into the same column.
+  // -------------------------------------------------------------------------
+  group('a run of a measurement that was retired', () {
+    Map<String, Object?> saved(String kind) => <String, Object?>{
+          'kind': kind,
+          'outcome': 'completed',
+          'startedAt': '2026-09-13T14:02:00.000Z',
+          'durationMs': 96000,
+          'readings': <Object?>[
+            <String, Object?>{
+              'label': 'RSSI where drops began',
+              'value': -79,
+              'unit': 'dBm',
+            },
+          ],
+          'steps': <Object?>[
+            <String, Object?>{
+              'index': 1,
+              'rssiDbm': -54,
+              'framesReceived': 300,
+              'framesLost': 0,
+            },
+          ],
+          'note': 'Frames first went missing at stop 3.',
+        };
+
+    test('is not read by this build, and is not reinterpreted either', () {
+      for (final kind in <String>['range', 'link-soak', 'wake-on-motion']) {
+        expect(
+          () => DeviceTestResult.fromJson(saved(kind)),
+          throwsFormatException,
+          reason: '$kind must not be mapped onto a surviving kind',
+        );
+      }
+    });
+
+    test('a `steps` list from the old format is ignored, not rejected', () {
+      // The range walk wrote a `steps` array. A readable run that happens to
+      // carry one - a hand-edited file, or a kind that came back - must not lose
+      // its readings over a key this build no longer has a field for.
+      final json = saved('noise-floor')
+        ..['readings'] = <Object?>[
+          <String, Object?>{
+            'label': 'Noise floor (RMS)',
+            'value': -54.2,
+            'unit': 'dBFS',
+          },
+        ];
+
       final back = DeviceTestResult.fromJson(json);
-      expect(back.readings, isEmpty);
-      expect(back.steps, isEmpty);
+
+      expect(back.kind, DeviceTestKind.noiseFloor);
+      expect(back.reading('Noise floor (RMS)')?.value, -54.2);
     });
   });
 
@@ -204,23 +212,15 @@ void main() {
   // honestly is, a batch of one.
   // -------------------------------------------------------------------------
   group('a run in a batch', () {
-    final walk = DeviceTestResult(
-      kind: DeviceTestKind.range,
+    final voice = DeviceTestResult(
+      kind: DeviceTestKind.sensitivity,
       outcome: DeviceTestOutcome.completed,
       startedAt: DateTime.utc(2026, 9, 13, 14, 2, 11),
-      duration: const Duration(seconds: 96),
+      duration: const Duration(seconds: 10),
       readings: const <DeviceTestReading>[
-        DeviceTestReading(label: 'Stops', value: 4),
+        DeviceTestReading(label: 'Peak', value: -8.2, unit: 'dBFS'),
       ],
-      steps: const <DeviceTestStep>[
-        DeviceTestStep(
-          index: 1,
-          rssiDbm: -54,
-          framesReceived: 300,
-          framesLost: 0,
-        ),
-      ],
-      note: 'Frames first went missing at stop 3.',
+      note: 'Spoken at 30 cm from the microphone port.',
     );
 
     DeviceTestResult inBatch({
@@ -276,7 +276,7 @@ void main() {
 
     test('a lone run is sample one of one, not sample zero', () {
       final lone = DeviceTestResult(
-        kind: DeviceTestKind.range,
+        kind: DeviceTestKind.noiseFloor,
         outcome: DeviceTestOutcome.completed,
         startedAt: DateTime.utc(2026, 9, 13),
         duration: Duration.zero,
@@ -305,26 +305,25 @@ void main() {
     });
 
     test('inBatch stamps the fields and changes nothing else', () {
-      final stamped = walk.inBatch(
-        batchId: 'range-1-0',
+      final stamped = voice.inBatch(
+        batchId: 'sensitivity-1-0',
         repeatIndex: 3,
         repeatTarget: 5,
       );
 
-      expect(stamped.batchId, 'range-1-0');
+      expect(stamped.batchId, 'sensitivity-1-0');
       expect(stamped.repeatIndex, 3);
       expect(stamped.repeatTarget, 5);
-      expect(stamped.kind, walk.kind);
-      expect(stamped.outcome, walk.outcome);
-      expect(stamped.startedAt, walk.startedAt);
-      expect(stamped.duration, walk.duration);
-      expect(stamped.readings, walk.readings);
-      expect(stamped.steps, walk.steps);
-      expect(stamped.note, walk.note);
+      expect(stamped.kind, voice.kind);
+      expect(stamped.outcome, voice.outcome);
+      expect(stamped.startedAt, voice.startedAt);
+      expect(stamped.duration, voice.duration);
+      expect(stamped.readings, voice.readings);
+      expect(stamped.note, voice.note);
     });
 
     test('inBatch can measure the duration a run did not know', () {
-      final stamped = walk.inBatch(
+      final stamped = voice.inBatch(
         batchId: null,
         repeatIndex: 1,
         repeatTarget: 1,
