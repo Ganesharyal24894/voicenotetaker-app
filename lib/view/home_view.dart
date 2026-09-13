@@ -46,10 +46,28 @@ class HomeView extends StatelessWidget {
     final connected = controller.isConnected && device != null;
     final shown = recents.take(3).toList();
 
+    // Scrollable ONLY when it has to be. At a normal portrait height the
+    // minHeight equals the viewport, IntrinsicHeight resolves to exactly
+    // that, and the Expanded below takes up the slack -- identical to a
+    // plain Column. Turn the phone to landscape and the fixed rows (header,
+    // "Recent", three entries) leave far less room than the record block
+    // needs, so the intrinsic height exceeds the viewport and the page
+    // scrolls instead of overflowing.
+    //
+    // The bug this fixes rendered as a black-and-yellow "BOTTOM OVERFLOWED
+    // BY 201 PIXELS" banner across the record button in debug, and would
+    // have silently CLIPPED the Disconnect button in release -- which is
+    // worse, because nothing would have said so.
     return ScreenScaffold(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          return SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: IntrinsicHeight(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
@@ -176,7 +194,12 @@ class HomeView extends StatelessWidget {
               onTap: () => onOpenRecording(shown[i]),
               now: now,
             ),
-        ],
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -276,6 +299,7 @@ class _BatteryReadout extends StatelessWidget {
             // `BatteryIcon`.
             level: percent == null ? null : percent / 100,
             color: colour,
+            charging: charging,
           ),
           const SizedBox(width: 6),
           // A RESERVED width, wide enough for "100%", right-aligned. The
@@ -327,13 +351,20 @@ class _DisconnectChip extends StatelessWidget {
     return TapTarget(
       onTap: onTap,
       semanticLabel: 'Disconnect',
+      // Red, because this is the one control on Home that takes something
+      // away. It stays an outline rather than a filled button: destructive
+      // AND quiet, so it reads as available without competing with the
+      // record button it sits under.
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          border: Border.all(color: AppColors.border),
+          border: Border.all(color: AppColors.errorBorder),
           borderRadius: AppShape.pill,
         ),
-        child: Text('Disconnect', style: AppText.label13),
+        child: Text(
+          'Disconnect',
+          style: AppText.label13.copyWith(color: AppColors.error),
+        ),
       ),
     );
   }

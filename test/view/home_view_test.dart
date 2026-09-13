@@ -9,6 +9,7 @@ import 'package:voicenotetaker_app/view/home_view.dart';
 import 'package:voicenotetaker_app/view/placeholder_data.dart';
 import 'package:voicenotetaker_app/view/recording_entry.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
+import 'package:voicenotetaker_app/view/widgets/app_icons.dart';
 
 import 'harness.dart';
 
@@ -429,4 +430,83 @@ void main() {
     await tester.pump();
     expect(opened, isTrue);
   });
+
+  group('short viewports and status affordances', () {
+    // The bug: in landscape the fixed rows (header, "Recent", three
+    // entries) leave far less height than the record block needs, and Home
+    // overflowed by 201 physical pixels -- a black-and-yellow banner across
+    // the record button in debug, and a SILENTLY CLIPPED Disconnect button
+    // in release, which is worse because nothing says so.
+    testWidgets('landscape does not overflow, and Disconnect stays reachable',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await pumpScreen(tester, _home(harness),
+          size: const Size(873, 393));
+      await harness.connect(tester);
+      await tester.pump();
+
+      expect(tester.takeException(), isNull,
+          reason: 'a RenderFlex overflow raises here');
+
+      // Present in the tree, and reachable by scrolling to it.
+      expect(find.text('Disconnect'), findsOneWidget);
+      await tester.ensureVisible(find.text('Disconnect'));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('portrait still lays out without scrolling', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await pumpScreen(tester, _home(harness));
+      await harness.connect(tester);
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      final scroll = tester.widget<SingleChildScrollView>(
+        find.byType(SingleChildScrollView).first,
+      );
+      expect(scroll, isNotNull);
+      // At the design height the content exactly fills, so there is nothing
+      // to scroll: position stays at zero extent.
+      final state = tester.state<ScrollableState>(find.byType(Scrollable).first);
+      expect(state.position.maxScrollExtent, 0,
+          reason: 'portrait must not become a scrolling screen');
+    });
+
+    testWidgets('Disconnect is red -- the one control that takes something away',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await pumpScreen(tester, _home(harness));
+      await harness.connect(tester);
+      await tester.pump();
+
+      final label = tester.widget<Text>(find.text('Disconnect'));
+      expect(label.style?.color, AppColors.error);
+    });
+
+    testWidgets('the battery glyph carries a bolt only while charging',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await pumpScreen(tester, _home(harness));
+      await harness.connect(tester);
+
+      await harness.notifyBattery(tester, percent: 62, charging: false);
+      expect(
+        tester.widget<BatteryIcon>(find.byType(BatteryIcon)).charging,
+        isFalse,
+      );
+
+      await harness.notifyBattery(tester, percent: 62, charging: true);
+      expect(
+        tester.widget<BatteryIcon>(find.byType(BatteryIcon)).charging,
+        isTrue,
+        reason: 'same percentage, so the SHAPE is what distinguishes them',
+      );
+      expect(tester.takeException(), isNull);
+    });
+  });
+
 }

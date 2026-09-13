@@ -100,6 +100,11 @@ abstract final class AppColors {
   static const Color purpleChipBorder = Color(0x4DA78BFA);
 
   /// `rgba(251, 191, 36, 0.14)` - the DEBUG ONLY badge fill.
+  /// Outline for a destructive control. The full-strength [error] would
+  /// shout next to the record button; this is the same hue at a border's
+  /// weight, matching how [border] relates to the fills around it.
+  static const Color errorBorder = Color(0x66F87171);
+
   static const Color warningBadgeFill = Color(0x24FBBF24);
 
   /// `rgba(251, 191, 36, 0.32)` - the DEBUG ONLY badge hairline.

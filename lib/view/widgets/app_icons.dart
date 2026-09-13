@@ -150,6 +150,7 @@ class _GlyphPainter extends CustomPainter {
     for (final path in _pathsFor(glyph)) {
       canvas.drawPath(path, stroke);
     }
+
     canvas.restore();
   }
 
@@ -474,6 +475,7 @@ class BatteryIcon extends StatelessWidget {
     required this.level,
     this.size = 18,
     this.color = AppColors.textTertiary,
+    this.charging = false,
     super.key,
   });
 
@@ -481,12 +483,21 @@ class BatteryIcon extends StatelessWidget {
   final double size;
   final Color color;
 
+  /// Draws the bolt inside the shell, the way a phone's own indicator does.
+  /// Deliberately a SHAPE and not only a colour change: charging at 40% and
+  /// draining at 40% have to be tellable apart without relying on the tint.
+  final bool charging;
+
   @override
   Widget build(BuildContext context) {
     return SizedBox.square(
       dimension: size,
       child: CustomPaint(
-        painter: _BatteryPainter(level: level, color: color),
+        painter: _BatteryPainter(
+          level: level,
+          color: color,
+          charging: charging,
+        ),
         size: Size.square(size),
       ),
     );
@@ -494,10 +505,15 @@ class BatteryIcon extends StatelessWidget {
 }
 
 class _BatteryPainter extends CustomPainter {
-  const _BatteryPainter({required this.level, required this.color});
+  const _BatteryPainter({
+    required this.level,
+    required this.color,
+    required this.charging,
+  });
 
   final double? level;
   final Color color;
+  final bool charging;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -536,10 +552,41 @@ class _BatteryPainter extends CustomPainter {
           ..isAntiAlias = true,
       );
     }
+    if (charging) {
+      // A bolt centred in the shell's inner track (3.5..15.5), drawn twice:
+      // once as a fat stroke in the SCREEN colour to knock a gap out of
+      // whatever is behind it, then filled. Without the knockout it
+      // disappears into the charge bar at a high level and into the empty
+      // shell at a low one -- it has to read against both.
+      final bolt = Path()
+        ..moveTo(10.9, 8.2)
+        ..lineTo(7.5, 12.6)
+        ..lineTo(9.6, 12.6)
+        ..lineTo(8.3, 16.0)
+        ..lineTo(11.7, 11.6)
+        ..lineTo(9.6, 11.6)
+        ..close();
+      canvas.drawPath(
+        bolt,
+        Paint()
+          ..color = AppColors.screen
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6
+          ..strokeJoin = StrokeJoin.round
+          ..isAntiAlias = true,
+      );
+      canvas.drawPath(
+        bolt,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.fill
+          ..isAntiAlias = true,
+      );
+    }
     canvas.restore();
   }
 
   @override
   bool shouldRepaint(_BatteryPainter old) =>
-      old.level != level || old.color != color;
+      old.level != level || old.color != color || old.charging != charging;
 }
