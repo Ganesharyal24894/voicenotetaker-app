@@ -1,0 +1,114 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Bluetooth off"
+    },
+    {
+      "file": "PermissionDenied.dc.html",
+      "x": 480,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Permission denied"
+    },
+    {
+      "file": "Unsupported.dc.html",
+      "x": 960,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Unsupported"
+    },
+    {
+      "file": "NoDevices.dc.html",
+      "x": 1440,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "No devices found"
+    },
+    {
+      "file": "ConnectionFailed.dc.html",
+      "x": 0,
+      "y": 994,
+      "w": 390,
+      "h": 844,
+      "title": "Connection failed"
+    },
+    {
+      "file": "ConnectionLost.dc.html",
+      "x": 480,
+      "y": 994,
+      "w": 390,
+      "h": 844,
+      "title": "Connection lost"
+    },
+    {
+      "file": "EmptyLibrary.dc.html",
+      "x": 960,
+      "y": 994,
+      "w": 390,
+      "h": 844,
+      "title": "Empty library"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "n-main",
+      "x": 0,
+      "y": -112,
+      "w": 390,
+      "text": "Android can offer a one-tap enable; iOS can only deep-link to Settings. Copy is written so one button works for both."
+    },
+    {
+      "id": "n-permissiondenied",
+      "x": 480,
+      "y": -112,
+      "w": 390,
+      "text": "Android 12+ needs BLUETOOTH_SCAN/CONNECT; earlier versions need Location. Same screen, one action."
+    },
+    {
+      "id": "n-unsupported",
+      "x": 960,
+      "y": -112,
+      "w": 390,
+      "text": "A dead end - no retry offered, because retrying cannot help. It points at what still works."
+    },
+    {
+      "id": "n-nodevices",
+      "x": 1440,
+      "y": -112,
+      "w": 390,
+      "text": "Not an error - a result. Purple, not amber. The hint names the two things that are actually usually wrong."
+    },
+    {
+      "id": "n-connectionfailed",
+      "x": 0,
+      "y": 882,
+      "w": 390,
+      "text": "Names the specific failure - found it, couldn't finish - so it is not confused with 'not found'."
+    },
+    {
+      "id": "n-connectionlost",
+      "x": 480,
+      "y": 882,
+      "w": 390,
+      "text": "The reassurance is the point: the device keeps recording without the phone, so a dropped link is not lost audio."
+    },
+    {
+      "id": "n-emptylibrary",
+      "x": 960,
+      "y": 882,
+      "w": 390,
+      "text": "NOT an error state. Purple, inviting, no apology - nothing has gone wrong."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

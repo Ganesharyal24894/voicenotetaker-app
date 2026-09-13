@@ -147,7 +147,16 @@ void main() {
     await flush(tester);
     await tester.pumpAndSettle();
 
-    expect(find.text('No recordings yet.'), findsOneWidget);
+    // The empty library is an INVITATION, not an apology: the headline has no
+    // full stop, no "sorry", and the call to action is right there.
+    expect(find.text('No recordings yet'), findsOneWidget);
+    expect(
+      find.text(
+        'Notes you capture on the recorder show up here once they sync.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('New recording'), findsOneWidget);
     expect(find.text('0 items'), findsOneWidget);
   });
 

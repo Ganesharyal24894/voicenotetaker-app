@@ -41,6 +41,32 @@ enum AppGlyph {
 
   /// Waste bin - deleting a recording.
   trash,
+
+  // ---------------------------------------------------------------------
+  // The edge states, transcribed from `design/edge-states/*.dc.html` in the
+  // same 24x24 view box as everything above.
+  // ---------------------------------------------------------------------
+
+  /// The Bluetooth rune struck through - the adapter is off.
+  bluetoothOff,
+
+  /// Padlock - a permission the app has not been granted.
+  lock,
+
+  /// Circle with a diagonal - this phone cannot do it at all.
+  circleSlash,
+
+  /// Concentric arcs radiating from a dot - listening, and nothing answered.
+  broadcast,
+
+  /// Two chain ends pulled apart - the handshake did not complete.
+  linkBroken,
+
+  /// Signal arcs with a cross where the bars would be - the link dropped.
+  signalLost,
+
+  /// Five bars of a level meter - recordings, and the invitation to make one.
+  levels,
 }
 
 /// A stroke-based vector icon drawn with a [CustomPainter].
@@ -281,6 +307,149 @@ class _GlyphPainter extends CustomPainter {
           Path()
             ..moveTo(13.7, 10)
             ..lineTo(13.4, 16),
+        ];
+      case AppGlyph.bluetoothOff:
+        return <Path>[
+          // M7 7l10 10-5 4V3l5 4L7 17
+          Path()
+            ..moveTo(7, 7)
+            ..lineTo(17, 17)
+            ..lineTo(12, 21)
+            ..lineTo(12, 3)
+            ..lineTo(17, 7)
+            ..lineTo(7, 17),
+          // The strike-through.
+          Path()
+            ..moveTo(3.5, 3.5)
+            ..lineTo(20.5, 20.5),
+        ];
+      case AppGlyph.lock:
+        return <Path>[
+          Path()
+            ..addRRect(
+              RRect.fromRectAndRadius(
+                const Rect.fromLTWH(4.5, 10.5, 15, 10.5),
+                const Radius.circular(2.5),
+              ),
+            ),
+          // Shackle: M8 10.5 V7 a4 4 0 0 1 8 0 v3.5
+          Path()
+            ..moveTo(8, 10.5)
+            ..lineTo(8, 7)
+            ..arcToPoint(
+              const Offset(16, 7),
+              radius: const Radius.circular(4),
+              clockwise: true,
+            )
+            ..lineTo(16, 10.5),
+        ];
+      case AppGlyph.circleSlash:
+        return <Path>[
+          Path()
+            ..addOval(
+              Rect.fromCircle(center: const Offset(12, 12), radius: 8.75),
+            ),
+          Path()
+            ..moveTo(6, 6)
+            ..lineTo(18, 18),
+        ];
+      case AppGlyph.broadcast:
+        return <Path>[
+          Path()
+            ..addOval(
+              Rect.fromCircle(center: const Offset(12, 12), radius: 2.25),
+            ),
+          // M12 6.25 a5.75 5.75 0 0 1 5.75 5.75
+          Path()
+            ..moveTo(12, 6.25)
+            ..arcToPoint(
+              const Offset(17.75, 12),
+              radius: const Radius.circular(5.75),
+              clockwise: true,
+            ),
+          // M12 2.5 A9.5 9.5 0 0 1 21.5 12
+          Path()
+            ..moveTo(12, 2.5)
+            ..arcToPoint(
+              const Offset(21.5, 12),
+              radius: const Radius.circular(9.5),
+              clockwise: true,
+            ),
+        ];
+      case AppGlyph.linkBroken:
+        return <Path>[
+          // M10.5 6.5 L8.75 4.75 a3.75 3.75 0 0 0 -5.3 5.3 L5.2 11.8
+          Path()
+            ..moveTo(10.5, 6.5)
+            ..lineTo(8.75, 4.75)
+            ..arcToPoint(
+              const Offset(3.45, 10.05),
+              radius: const Radius.circular(3.75),
+              clockwise: false,
+            )
+            ..lineTo(5.2, 11.8),
+          // M13.5 17.5 l1.75 1.75 a3.75 3.75 0 0 0 5.3 -5.3 L18.8 12.2
+          Path()
+            ..moveTo(13.5, 17.5)
+            ..lineTo(15.25, 19.25)
+            ..arcToPoint(
+              const Offset(20.55, 13.95),
+              radius: const Radius.circular(3.75),
+              clockwise: false,
+            )
+            ..lineTo(18.8, 12.2),
+          // The break itself.
+          Path()
+            ..moveTo(9.5, 14.5)
+            ..lineTo(14.5, 9.5),
+        ];
+      case AppGlyph.signalLost:
+        return <Path>[
+          // M3 8.5 a14 14 0 0 1 18 0
+          Path()
+            ..moveTo(3, 8.5)
+            ..arcToPoint(
+              const Offset(21, 8.5),
+              radius: const Radius.circular(14),
+              clockwise: true,
+            ),
+          // M6.5 12.5 a9 9 0 0 1 5.5 -2
+          Path()
+            ..moveTo(6.5, 12.5)
+            ..arcToPoint(
+              const Offset(12, 10.5),
+              radius: const Radius.circular(9),
+              clockwise: true,
+            ),
+          Path()
+            ..addOval(
+              Rect.fromCircle(center: const Offset(12, 18), radius: 1.1),
+            ),
+          // The cross over the innermost arc.
+          Path()
+            ..moveTo(15.5, 12)
+            ..lineTo(21, 17.5),
+          Path()
+            ..moveTo(21, 12)
+            ..lineTo(15.5, 17.5),
+        ];
+      case AppGlyph.levels:
+        return <Path>[
+          Path()
+            ..moveTo(4, 11)
+            ..lineTo(4, 13),
+          Path()
+            ..moveTo(8, 8.5)
+            ..lineTo(8, 15.5),
+          Path()
+            ..moveTo(12, 5)
+            ..lineTo(12, 19),
+          Path()
+            ..moveTo(16, 9)
+            ..lineTo(16, 15),
+          Path()
+            ..moveTo(20, 11.5)
+            ..lineTo(20, 12.5),
         ];
       case AppGlyph.play:
         return const <Path>[];

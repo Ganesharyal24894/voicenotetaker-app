@@ -5,6 +5,7 @@ import 'drivers/app_directories.dart';
 import 'drivers/audio_player_just_audio.dart';
 import 'drivers/ble_transport_universal.dart';
 import 'drivers/file_store.dart';
+import 'drivers/platform_settings_channel.dart';
 import 'view/app_root.dart';
 import 'view/theme.dart';
 
@@ -28,6 +29,7 @@ Future<void> main() async {
     transport: UniversalBleTransport(),
     fileStore: fileStore,
     audioPlayer: JustAudioPlayer(),
+    platformSettings: const MethodChannelPlatformSettings(),
     recordingsDirectory: fileStore.join(documents, 'recordings'),
   );
 

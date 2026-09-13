@@ -6,6 +6,7 @@ import 'recording_entry.dart';
 import 'theme.dart';
 import 'widgets/app_icons.dart';
 import 'widgets/common.dart';
+import 'widgets/edge_state.dart';
 
 /// Screen 4 - the recordings library.
 ///
@@ -101,6 +102,9 @@ class _LibraryViewState extends State<LibraryView> {
   Widget build(BuildContext context) {
     final matches = _matches;
     final groups = _grouped(matches);
+    // No recordings AT ALL is a different thing from a search that matched
+    // nothing, and only the first one gets the invitation below.
+    final empty = widget.entries.isEmpty;
 
     return ScreenScaffold(
       child: Column(
@@ -137,55 +141,74 @@ class _LibraryViewState extends State<LibraryView> {
               ),
             ],
           ),
-          const SizedBox(height: 18),
-          _SearchField(
-            controller: _search,
-            onChanged: (_) => setState(() {}),
-          ),
-          const SizedBox(height: 22),
-          Expanded(
-            child: ListView(
-              padding: EdgeInsets.zero,
-              children: <Widget>[
-                for (final MapEntry<String, List<RecordingEntry>> group
-                    in groups.entries) ...<Widget>[
-                  SectionCaption(group.key),
-                  const SizedBox(height: 8),
-                  for (var i = 0; i < group.value.length; i++)
-                    _LibraryRow(
-                      entry: group.value[i],
-                      lastInGroup: i == group.value.length - 1 &&
-                          group.key == groups.keys.last,
-                      onTap: () => widget.onOpen(group.value[i]),
-                      // A row with no file behind it has nothing to delete,
-                      // so it gets no delete control rather than a dead one.
-                      onDelete: widget.onDelete == null ||
-                              group.value[i].path == null
-                          ? null
-                          : () => unawaited(
-                                _confirmDelete(context, group.value[i]),
-                              ),
-                    ),
-                  const SizedBox(height: 18),
-                ],
-                if (matches.isEmpty)
-                  Text(
-                    _search.text.isEmpty
-                        ? 'No recordings yet.'
-                        : 'Nothing matches “${_search.text}”.',
-                    style: AppText.meta13,
-                  ),
-              ],
+          if (empty)
+            // AN INVITATION, NOT AN APOLOGY. Purple, because nothing has gone
+            // wrong: a library with no recordings in it is what a new app
+            // looks like. There is no search field either - there is nothing
+            // to search - and the call to action is the only one on screen
+            // rather than being repeated at the bottom.
+            Expanded(
+              child: EdgeState(
+                glyph: AppGlyph.levels,
+                tint: AppColors.purpleText,
+                headline: 'No recordings yet',
+                body: 'Notes you capture on the recorder show up here once '
+                    'they sync.',
+                primaryLabel: 'New recording',
+                onPrimary: widget.onNewRecording,
+              ),
+            )
+          else ...<Widget>[
+            const SizedBox(height: 18),
+            _SearchField(
+              controller: _search,
+              onChanged: (_) => setState(() {}),
             ),
-          ),
-          const SizedBox(height: 12),
-          PrimaryButton(
-            label: 'New recording',
-            glyph: AppGlyph.mic,
-            height: 50,
-            borderRadius: AppShape.cta,
-            onPressed: widget.onNewRecording,
-          ),
+            const SizedBox(height: 22),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: <Widget>[
+                  for (final MapEntry<String, List<RecordingEntry>> group
+                      in groups.entries) ...<Widget>[
+                    SectionCaption(group.key),
+                    const SizedBox(height: 8),
+                    for (var i = 0; i < group.value.length; i++)
+                      _LibraryRow(
+                        entry: group.value[i],
+                        lastInGroup: i == group.value.length - 1 &&
+                            group.key == groups.keys.last,
+                        onTap: () => widget.onOpen(group.value[i]),
+                        // A row with no file behind it has nothing to delete,
+                        // so it gets no delete control rather than a dead one.
+                        onDelete: widget.onDelete == null ||
+                                group.value[i].path == null
+                            ? null
+                            : () => unawaited(
+                                  _confirmDelete(context, group.value[i]),
+                                ),
+                      ),
+                    const SizedBox(height: 18),
+                  ],
+                  // Reachable only with a query in the field: an empty library
+                  // took the branch above.
+                  if (matches.isEmpty)
+                    Text(
+                      'Nothing matches “${_search.text}”.',
+                      style: AppText.meta13,
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            PrimaryButton(
+              label: 'New recording',
+              glyph: AppGlyph.mic,
+              height: 50,
+              borderRadius: AppShape.cta,
+              onPressed: widget.onNewRecording,
+            ),
+          ],
         ],
       ),
     );

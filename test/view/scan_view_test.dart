@@ -4,6 +4,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/view/scan_view.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
+import 'package:voicenotetaker_app/view/widgets/edge_state.dart';
 
 import 'harness.dart';
 
@@ -108,7 +109,11 @@ void main() {
     expect(button.height, greaterThanOrEqualTo(AppShape.minTapTarget));
   });
 
-  testWidgets('surfaces a controller error', (tester) async {
+  // What used to be a bare red line under the title. A refused permission now
+  // gets the whole screen and an action, because a line of red text tells the
+  // user what happened and nothing about what to do next.
+  testWidgets('a refused scan permission gets the permission screen, not a '
+      'red line', (tester) async {
     final harness = ViewHarness();
     addTearDown(harness.dispose);
 
@@ -117,9 +122,31 @@ void main() {
     await harness.controller.startScan();
     await pumpScreen(tester, ScanView(controller: harness.controller));
 
-    expect(find.text('Bluetooth permission was denied.'), findsOneWidget);
+    expect(find.text('Bluetooth permission needed'), findsOneWidget);
+    expect(find.text('Open app settings'), findsOneWidget);
+    expect(find.text('Bluetooth permission was denied.'), findsNothing);
+    // The device list and the scan control are gone: scanning cannot work.
+    expect(find.text('Tap to scan'), findsNothing);
+  });
+
+  // A failure NO edge state covers must still be visible somewhere, so the
+  // line survives for exactly those - it is no longer where categorised
+  // failures are reported.
+  testWidgets('a failure with no edge state of its own still surfaces as a '
+      'line', (tester) async {
+    final harness = ViewHarness();
+    addTearDown(harness.dispose);
+
+    final path = await harness.seedRecording();
+    harness.fileStore.undeletable.add(path);
+    await harness.controller.deleteRecording(
+      harness.controller.recordings.single,
+    );
+    await pumpScreen(tester, ScanView(controller: harness.controller));
+
+    expect(find.byType(EdgeState), findsNothing);
     final message = tester.widget<Text>(
-      find.text('Bluetooth permission was denied.'),
+      find.textContaining('Could not delete'),
     );
     expect(message.style?.color, AppColors.error);
   });

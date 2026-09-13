@@ -79,8 +79,11 @@ class UniversalBleTransport implements BleTransport {
   Stream<DiscoveredDevice> scan() {
     late final StreamController<DiscoveredDevice> controller;
     StreamSubscription<ub.BleDevice>? subscription;
+    Timer? window;
 
     Future<void> stop() async {
+      window?.cancel();
+      window = null;
       await subscription?.cancel();
       subscription = null;
       await stopScan();
@@ -103,6 +106,19 @@ class UniversalBleTransport implements BleTransport {
             ),
           );
           _scanning = true;
+          // `UniversalBle.scanStream` runs until it is told to stop, so the
+          // window is imposed here. Closing the controller is what tells the
+          // caller the scan FINISHED - see `BleTransport.scan`.
+          window = Timer(BleTransport.scanWindow, () async {
+            try {
+              await stop();
+            } on BleTransportException {
+              // The radio refusing to stop does not change the fact that the
+              // window is over, and a throw out of a timer callback has
+              // nowhere to go. Closing the stream is what the caller needs.
+            }
+            if (!controller.isClosed) await controller.close();
+          });
         } catch (e) {
           controller.addError(BleTransportException('scan failed', e));
           await controller.close();

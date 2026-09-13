@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../drivers/audio_player.dart';
 import '../drivers/ble_transport.dart';
 import '../drivers/file_store.dart';
+import '../drivers/platform_settings.dart';
 import '../model/audio_codec.dart';
 import '../model/battery_status.dart';
 import '../model/device_state.dart';
@@ -39,6 +40,7 @@ class AppController extends ChangeNotifier {
     RecordingService? recordingService,
     LibraryService? libraryService,
     AudioPlayer? audioPlayer,
+    PlatformSettings? platformSettings,
     AudioCodec preferredCodec = AudioCodec.imaAdpcm,
     // The public parameter name `preferredCodec:` is part of the existing API,
     // while the field behind it is private because it is now reached through a
@@ -48,6 +50,7 @@ class AppController extends ChangeNotifier {
         _transport = transport,
         _fileStore = fileStore,
         _player = audioPlayer,
+        _settings = platformSettings,
         _library = libraryService ??
             LibraryService(
               fileStore: fileStore,
@@ -65,6 +68,11 @@ class AppController extends ChangeNotifier {
   /// Null when the app was built without a playback driver; every playback
   /// method is then a no-op rather than a crash.
   final AudioPlayer? _player;
+
+  /// Null when the app was built without a way into the OS settings pages;
+  /// [openBluetoothSettings] and [openAppSettings] then answer false rather
+  /// than pretending, and the screen says so.
+  final PlatformSettings? _settings;
 
   AudioCodec _preferredCodec;
 
@@ -120,9 +128,33 @@ class AppController extends ChangeNotifier {
   PlaybackState _playback = PlaybackState.idle;
   RecordingInfo? _nowPlaying;
   String? _playbackError;
+  ScanOutcome _scanOutcome = ScanOutcome.pending;
+  LinkOutcome _linkOutcome = LinkOutcome.none;
+  bool _permissionDenied = false;
+  DiscoveredDevice? _lastDevice;
 
   AppPhase get phase => _phase;
   BleAvailability get availability => _availability;
+
+  /// What became of the last scan window - see [ScanOutcome]. This is how
+  /// "finished, nothing there" is told apart from "still looking".
+  ScanOutcome get scanOutcome => _scanOutcome;
+
+  /// Why there is no link, when the reason is worth telling the user - see
+  /// [LinkOutcome]. A failed handshake and a dropped link are separate values
+  /// because they are separate situations.
+  LinkOutcome get linkOutcome => _linkOutcome;
+
+  /// True when the OS refused the permissions a scan needs.
+  ///
+  /// Separate from [availability] on purpose: the adapter can be powered on
+  /// and perfectly healthy while this app is not allowed to use it, which is
+  /// exactly what a denied Android runtime permission looks like.
+  bool get permissionDenied => _permissionDenied;
+
+  /// The recorder the app last connected to, or last tried to. This is what
+  /// "Try again" and "Reconnect" act on.
+  DiscoveredDevice? get lastDevice => _lastDevice;
   List<DiscoveredDevice> get devices => List.unmodifiable(_devices);
   DiscoveredDevice? get connectedDevice => _connectedDevice;
   CaptureStats get stats => _stats;
@@ -235,10 +267,16 @@ class AppController extends ChangeNotifier {
   Future<void> startScan() async {
     if (_phase == AppPhase.scanning) return;
     _errorMessage = null;
+    _permissionDenied = false;
+    // A new scan supersedes whatever the last link did; the user is starting
+    // over, and the failure screen must not outlive the attempt it described.
+    _linkOutcome = LinkOutcome.none;
+    _scanOutcome = ScanOutcome.pending;
     _devices.clear();
 
     try {
       if (!await _transport.ensurePermissions()) {
+        _permissionDenied = true;
         _fail('Bluetooth permission was denied.');
         return;
       }
@@ -255,8 +293,26 @@ class AppController extends ChangeNotifier {
           notifyListeners();
         }
       },
+      // The stream closing IS the end of the scan window - the transport owns
+      // the clock, see `BleTransport.scanWindow`. The controller therefore
+      // holds no timer of its own, and there is nothing here to leave pending.
+      onDone: () => unawaited(_closeScanWindow()),
       onError: (Object e) => _fail('$e'),
     );
+  }
+
+  /// The scan window ended by itself; records what it found.
+  ///
+  /// Only a window that ran to its end may conclude "nothing answered". A scan
+  /// the user cut short says nothing either way, so [stopScan] leaves the
+  /// outcome [ScanOutcome.pending].
+  Future<void> _closeScanWindow() async {
+    if (_phase != AppPhase.scanning) return;
+    final foundNothing = _devices.isEmpty;
+    await stopScan();
+    _scanOutcome =
+        foundNothing ? ScanOutcome.nothingFound : ScanOutcome.devicesFound;
+    notifyListeners();
   }
 
   Future<void> stopScan() async {
@@ -275,10 +331,18 @@ class AppController extends ChangeNotifier {
 
   Future<void> connect(DiscoveredDevice device) async {
     await stopScan();
+    // Remembered before the attempt, so "Try again" has something to try even
+    // when the attempt is what failed.
+    _lastDevice = device;
+    _linkOutcome = LinkOutcome.none;
     _setPhase(AppPhase.connecting);
     try {
       await _transport.connect(device.id);
     } on BleTransportException catch (e) {
+      // The recorder was found and the handshake did not complete. That is a
+      // different fact from a link dropping later, and from nothing being
+      // there at all.
+      _linkOutcome = LinkOutcome.connectFailed;
       _fail(e.message);
       return;
     }
@@ -286,6 +350,10 @@ class AppController extends ChangeNotifier {
     _connectionSubscription =
         _transport.connectionState(device.id).listen((status) {
       if (status == BleConnectionStatus.disconnected) {
+        // Nobody asked for this: a working link went away. `disconnect()`
+        // cancels this subscription before it ends the link, so a deliberate
+        // disconnect never arrives here.
+        _linkOutcome = LinkOutcome.connectionLost;
         _connectedDevice = null;
         _autoSleep = null;
         // The reading described a link that is gone; keeping the last
@@ -418,8 +486,45 @@ class AppController extends ChangeNotifier {
     _autoSleep = null;
     _battery = null;
     _errorMessage = failure;
+    // The user ended this, so there is nothing to explain and nothing to
+    // offer a retry for.
+    _linkOutcome = LinkOutcome.none;
     _setPhase(AppPhase.idle);
   }
+
+  /// Connects to [lastDevice] again - the action behind both "Try again" after
+  /// a failed handshake and "Reconnect" after a dropped link.
+  ///
+  /// One method for two screens because the ACTION is the same one; the two
+  /// situations stay distinct in [linkOutcome], which is what the screens are
+  /// chosen by. With no device to return to it falls back to a fresh scan,
+  /// which is the only honest thing left to do.
+  Future<void> retryConnection() {
+    final device = _lastDevice;
+    if (device == null) return startScan();
+    return connect(device);
+  }
+
+  /// Clears a link failure the user has acknowledged - "Choose another device".
+  ///
+  /// It drops the explanation, not the discovered devices, so the screen it
+  /// returns to is the list the user was choosing from.
+  void dismissLinkFailure() {
+    if (_linkOutcome == LinkOutcome.none) return;
+    _linkOutcome = LinkOutcome.none;
+    _errorMessage = null;
+    _setPhase(_connectedDevice == null ? AppPhase.idle : AppPhase.connected);
+  }
+
+  /// Opens the system Bluetooth settings. False when the platform has no such
+  /// destination - see [PlatformSettings], which documents what each platform
+  /// can actually reach.
+  Future<bool> openBluetoothSettings() async =>
+      await _settings?.openBluetoothSettings() ?? false;
+
+  /// Opens this app's own settings page, where its permissions live.
+  Future<bool> openAppSettings() async =>
+      await _settings?.openAppSettings() ?? false;
 
   Future<void> startRecording() async {
     final device = _connectedDevice;

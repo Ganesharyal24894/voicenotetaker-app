@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; background: #0B0A0F; font-family: 'Sora', system-ui, -apple-system, sans-serif; }
+    a { color: #A78BFA; text-decoration: none; }
+    a:hover { color: #C4B5FD; }
+    * { box-sizing: border-box; }
+  </style>
+</helmet>
+
+<div style="width: 390px; height: 844px; background: #0B0A0F; display: flex; flex-direction: column; padding: 0 24px;">
+
+  <div style="height: 64px; flex-shrink: 0;"></div>
+
+  <div style="display: flex; align-items: baseline; gap: 12px; flex-shrink: 0;">
+    <div style="font-size: 26px; font-weight: 500; letter-spacing: -0.52px; color: #F4F1FB;">Devices</div>
+    <div style="flex-grow: 1;"></div>
+    <div style="font-size: 13px; font-weight: 300; color: #665F78;">Not connected</div>
+  </div>
+
+  <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; padding-bottom: 72px;">
+
+    <div style="width: 64px; height: 64px; border-radius: 16px; background: #14121B; border: 1px solid #2C2738; display: flex; align-items: center; justify-content: center;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#F87171" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 6.5 8.75 4.75a3.75 3.75 0 0 0-5.3 5.3L5.2 11.8"/><path d="M13.5 17.5l1.75 1.75a3.75 3.75 0 0 0 5.3-5.3L18.8 12.2"/><path d="M9.5 14.5 14.5 9.5"/></svg>
+    </div>
+
+    <div style="height: 22px;"></div>
+
+    <div style="font-size: 21px; font-weight: 500; letter-spacing: -0.42px; color: #F4F1FB; text-align: center; text-wrap: pretty;">Couldn't connect</div>
+
+    <div style="height: 10px;"></div>
+
+    <div style="max-width: 292px; font-size: 14px; font-weight: 300; line-height: 1.5; color: #665F78; text-align: center; text-wrap: pretty;">voiceNotetaker found the recorder but the connection didn't complete. This usually clears on a second try.</div>
+
+    <div style="height: 28px;"></div>
+
+    <div style="width: 100%; height: 48px; border-radius: 12px; background: #6D28D9; display: flex; align-items: center; justify-content: center;">
+      <div style="font-size: 15px; font-weight: 500; color: #F4F1FB;">Try again</div>
+    </div>
+    <div style="height: 44px; display: flex; align-items: center; justify-content: center;">
+      <div style="font-size: 13px; font-weight: 400; color: #A78BFA;">Choose another device</div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

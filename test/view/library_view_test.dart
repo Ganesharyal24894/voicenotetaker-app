@@ -4,6 +4,7 @@ import 'package:voicenotetaker_app/view/library_view.dart';
 import 'package:voicenotetaker_app/view/placeholder_data.dart';
 import 'package:voicenotetaker_app/view/recording_entry.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
+import 'package:voicenotetaker_app/view/widgets/app_icons.dart';
 
 import 'harness.dart';
 
@@ -92,11 +93,31 @@ void main() {
     expect(find.text('YESTERDAY'), findsNothing);
   });
 
-  testWidgets('builds empty', (tester) async {
+  testWidgets('builds empty, as an invitation rather than an error',
+      (tester) async {
     await pumpScreen(tester, _library(entries: const <RecordingEntry>[]));
 
     expect(find.text('0 items'), findsOneWidget);
-    expect(find.text('No recordings yet.'), findsOneWidget);
+    expect(find.text('No recordings yet'), findsOneWidget);
+    expect(
+      find.text(
+        'Notes you capture on the recorder show up here once they sync.',
+      ),
+      findsOneWidget,
+    );
+    // PURPLE, not amber and not red: nothing has gone wrong here.
+    final glyph = tester.widget<AppIcon>(
+      find.byWidgetPredicate(
+        (w) => w is AppIcon && w.glyph == AppGlyph.levels,
+      ),
+    );
+    expect(glyph.color, AppColors.purpleText);
+    expect(glyph.color, isNot(AppColors.error));
+    expect(glyph.color, isNot(AppColors.warning));
+    // There is nothing to search, so there is no search field either.
+    expect(find.byType(TextField), findsNothing);
+    // And the call to action is not repeated at the bottom of the screen.
+    expect(find.text('New recording'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

@@ -8,6 +8,7 @@ import 'package:voicenotetaker_app/controller/app_controller.dart';
 import 'package:voicenotetaker_app/drivers/audio_player.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/drivers/file_store.dart';
+import 'package:voicenotetaker_app/drivers/platform_settings.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
@@ -19,6 +20,10 @@ import 'package:voicenotetaker_app/view/theme.dart';
 /// Fake radio. The view tests never touch real BLE - `universal_ble` is not
 /// even importable from `view/`.
 class MockBleTransport extends Mock implements BleTransport {}
+
+/// Fake way into the OS settings pages. The view tests never open a real
+/// Settings app; they check that the button ASKED to.
+class MockPlatformSettings extends Mock implements PlatformSettings {}
 
 /// Fake player. The view tests never touch `just_audio`, and never need audio
 /// hardware: everything the playback screen renders arrives on [FakePlayback].
@@ -92,18 +97,34 @@ class ViewHarness {
   ViewHarness({
     List<DiscoveredDevice> devices = const <DiscoveredDevice>[],
     AudioPlayer? audioPlayer,
+    this.availability = BleAvailability.poweredOn,
   }) : transport = MockBleTransport() {
     when(() => transport.currentAvailability())
-        .thenAnswer((_) async => BleAvailability.poweredOn);
-    when(() => transport.availability)
-        .thenAnswer((_) => const Stream<BleAvailability>.empty());
+        .thenAnswer((_) async => availability);
+    when(() => transport.availability).thenAnswer((_) => adapter.stream);
+    when(() => settings.openBluetoothSettings()).thenAnswer((_) async => true);
+    when(() => settings.openAppSettings()).thenAnswer((_) async => true);
     when(() => transport.ensurePermissions()).thenAnswer((_) async => true);
-    when(() => transport.scan())
-        .thenAnswer((_) => Stream<DiscoveredDevice>.fromIterable(devices));
+    // A scan stream that STAYS OPEN, the way a real one does: the radio keeps
+    // listening after it has reported a device. The stream closing means the
+    // scan window ended (see `BleTransport.scan`), so it must not close on its
+    // own here - `endScan` is what a test uses to end the window.
+    when(() => transport.scan()).thenAnswer((_) {
+      final scan = StreamController<DiscoveredDevice>.broadcast();
+      _scan = scan;
+      // After the caller has attached its listener, never before.
+      scheduleMicrotask(() {
+        for (final device in devices) {
+          if (!scan.isClosed) scan.add(device);
+        }
+      });
+      return scan.stream;
+    });
     when(() => transport.stopScan()).thenAnswer((_) async {});
     when(() => transport.connect(any())).thenAnswer((_) async {});
-    when(() => transport.connectionState(any()))
-        .thenAnswer((_) => const Stream<BleConnectionStatus>.empty());
+    // An OPEN link stream, so a test can drop the link the way the radio does
+    // - see [dropLink]. Nothing arrives unless a test sends it.
+    when(() => transport.connectionState(any())).thenAnswer((_) => link.stream);
     when(() => transport.disconnect(any())).thenAnswer((_) async {});
     when(() => transport.selectCodec(any(), any())).thenAnswer((_) async {});
     // The device's own default: auto-sleep off. Tests that care re-stub this
@@ -129,6 +150,7 @@ class ViewHarness {
       transport: transport,
       fileStore: fileStore,
       audioPlayer: audioPlayer,
+      platformSettings: settings,
       recordingsDirectory: recordingsDirectory,
     );
   }
@@ -137,7 +159,20 @@ class ViewHarness {
   static const String recordingsDirectory = '/tmp/voicenotetaker-test';
 
   final MockBleTransport transport;
+  final MockPlatformSettings settings = MockPlatformSettings();
   final MemoryFileStore fileStore = MemoryFileStore();
+
+  /// What `currentAvailability()` answers. [begin] is what makes the controller
+  /// read it.
+  final BleAvailability availability;
+
+  /// Adapter state changes, pushed by hand.
+  final StreamController<BleAvailability> adapter =
+      StreamController<BleAvailability>.broadcast();
+
+  /// Link state for the connected device, pushed by hand.
+  final StreamController<BleConnectionStatus> link =
+      StreamController<BleConnectionStatus>.broadcast();
   final StreamController<Uint8List> frames =
       StreamController<Uint8List>.broadcast();
 
@@ -145,6 +180,11 @@ class ViewHarness {
   /// it, so a readout that moves on its own cannot pass unnoticed.
   final StreamController<BatteryStatus> battery =
       StreamController<BatteryStatus>.broadcast();
+
+  /// The scan stream handed out by the most recent `scan()` call, so a test can
+  /// end its window.
+  StreamController<DiscoveredDevice>? _scan;
+
   late final AppController controller;
 
   /// Writes a real WAV file into the store, exactly as a finished capture
@@ -177,9 +217,57 @@ class ViewHarness {
     return path;
   }
 
+  /// Starts the controller, which is what makes it read the adapter state.
+  ///
+  /// Most view tests do not need this - they render a screen against state they
+  /// set directly - but anything about [BleAvailability] does, because
+  /// `initialise()` is where the adapter is first read.
+  Future<void> begin(WidgetTester tester) async {
+    final done = controller.initialise();
+    await flush(tester);
+    await done;
+  }
+
+  /// Pushes an adapter state change, exactly as the platform would.
+  Future<void> notifyAvailability(
+    WidgetTester tester,
+    BleAvailability state,
+  ) async {
+    adapter.add(state);
+    await flush(tester);
+  }
+
+  /// Drops the link WITHOUT the user asking - the radio reporting that the
+  /// peripheral went away.
+  Future<void> dropLink(WidgetTester tester) async {
+    link.add(BleConnectionStatus.disconnected);
+    await flush(tester);
+  }
+
   /// Runs a scan to completion so [AppController.devices] is populated.
   Future<void> discover(WidgetTester tester) async {
     final done = controller.startScan();
+    await flush(tester);
+    await done;
+  }
+
+  /// Ends the scan window, exactly as the transport does when its ten seconds
+  /// are up: the stream closes.
+  ///
+  /// This is the ONLY way a scan reports "finished", which is what separates a
+  /// scan that found nothing from one that has not found anything yet.
+  Future<void> endScanWindow(WidgetTester tester) async {
+    await _scan?.close();
+    _scan = null;
+    await flush(tester);
+  }
+
+  /// Stops the scan the way the user does, by tapping the control again.
+  ///
+  /// Goes through [flush] rather than being awaited directly: cancelling a
+  /// stream subscription needs the real event loop, not the tester's clock.
+  Future<void> stopScan(WidgetTester tester) async {
+    final done = controller.stopScan();
     await flush(tester);
     await done;
   }
@@ -216,6 +304,11 @@ class ViewHarness {
   }
 
   Future<void> dispose() async {
+    final scan = _scan;
+    _scan = null;
+    if (scan != null && !scan.isClosed) await scan.close();
+    if (!adapter.isClosed) await adapter.close();
+    if (!link.isClosed) await link.close();
     await frames.close();
     if (!battery.isClosed) await battery.close();
     await controller.teardown();

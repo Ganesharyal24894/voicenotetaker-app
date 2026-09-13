@@ -12,6 +12,15 @@ import '../model/stream_info.dart';
 /// interface, so replacing `universal_ble` - or targeting a platform it does
 /// not cover - is confined to `lib/drivers/`.
 abstract class BleTransport {
+  /// How long one [scan] runs before its stream closes by itself.
+  ///
+  /// A BOUNDED scan is what makes "nothing answered" a statement the app can
+  /// make at all: a scan that runs until the user stops it can only ever be
+  /// reported as "still looking". The number is user-visible - the empty-state
+  /// copy says "Nothing answered in 10 seconds" - so the two must agree, and
+  /// this is the one place it is written down.
+  static const Duration scanWindow = Duration(seconds: 10);
+
   /// Adapter power/permission state, pushed as it changes.
   Stream<BleAvailability> get availability;
 
@@ -22,8 +31,12 @@ abstract class BleTransport {
   /// Returns `true` when scanning is permitted afterwards.
   Future<bool> ensurePermissions();
 
-  /// Emits peripherals matching the voiceNotetaker profile until
-  /// [stopScan] is called or the returned subscription is cancelled.
+  /// Emits peripherals matching the voiceNotetaker profile until [scanWindow]
+  /// elapses, [stopScan] is called, or the returned subscription is cancelled.
+  ///
+  /// THE STREAM CLOSING MEANS THE SCAN WINDOW ENDED. That is the only signal
+  /// callers get for "the scan finished", and it is what tells a finished scan
+  /// that saw nothing apart from one that has not seen anything yet.
   Stream<DiscoveredDevice> scan();
 
   Future<void> stopScan();

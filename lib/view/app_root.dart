@@ -4,7 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../model/device_state.dart';
 import '../model/recording_info.dart';
+import 'connection_lost_view.dart';
 import 'developer_view.dart';
 import 'home_view.dart';
 import 'library_view.dart';
@@ -163,6 +165,12 @@ class _AppRootState extends State<AppRoot> {
     final recording =
         controller.isRecording || controller.phase == AppPhase.stopping;
     final connected = controller.connectedDevice != null;
+    // A link that dropped by itself gets Home's slot, not the scan screen's:
+    // see `ConnectionLostView`. A disconnect the user asked for leaves
+    // `linkOutcome` at `none` and so lands back on the scan screen as before.
+    final lost = !connected &&
+        !recording &&
+        controller.linkOutcome == LinkOutcome.connectionLost;
     final instant = AppMotion.isReduced(context);
 
     return HeroControllerScope(
@@ -172,11 +180,23 @@ class _AppRootState extends State<AppRoot> {
         // nothing for the navigator to remove on its own account.
         onDidRemovePage: (_) {},
         pages: <Page<void>>[
-          if (!connected && !recording)
+          if (!connected && !recording && !lost)
             _DockPage(
               key: const ValueKey<String>('scan'),
               instant: instant,
-              child: ScanView(controller: controller),
+              child: Builder(
+                builder: (context) => ScanView(
+                  controller: controller,
+                  // The unsupported-phone screen's only action.
+                  onOpenLibrary: () => _openLibrary(context),
+                ),
+              ),
+            ),
+          if (lost)
+            _DockPage(
+              key: const ValueKey<String>('connection-lost'),
+              instant: instant,
+              child: ConnectionLostView(controller: controller),
             ),
           if (connected)
             _DockPage(

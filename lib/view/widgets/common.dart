@@ -131,7 +131,17 @@ class PrimaryButton extends StatelessWidget {
                   ),
                   const SizedBox(width: 10),
                 ],
-                Text(label, style: AppText.buttonLabel),
+                // Flexible, because the edge states put long labels here -
+                // "Open Bluetooth settings" - and a large text scale or a
+                // narrow phone must ellipsise rather than overflow the button.
+                Flexible(
+                  child: Text(
+                    label,
+                    style: AppText.buttonLabel,
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ],
             ),
           ),
