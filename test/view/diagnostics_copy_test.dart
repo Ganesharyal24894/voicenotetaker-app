@@ -1,10 +1,16 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:voicenotetaker_app/model/device_test_aggregate.dart';
+import 'package:voicenotetaker_app/model/device_test_comparison.dart';
+import 'package:voicenotetaker_app/model/device_test_result.dart';
+import 'package:voicenotetaker_app/view/mic_check_copy.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
+import 'package:voicenotetaker_app/view/widgets/common.dart';
 
 /// The copy on Device Diagnostics, measured rather than eyeballed.
 ///
@@ -54,12 +60,21 @@ void main() {
   /// and the Run control (96, plus the 4px between them).
   const double checkRowHeadingWidth = cardWidth - 44 - 4 - 96;
 
-  int linesOf(String text, TextStyle style, double width) {
+  int linesOfSpan(InlineSpan span, double width) {
+    final painter = TextPainter(text: span, textDirection: ui.TextDirection.ltr)
+      ..layout(maxWidth: width);
+    return painter.computeLineMetrics().length;
+  }
+
+  int linesOf(String text, TextStyle style, double width) =>
+      linesOfSpan(TextSpan(text: text, style: style), width);
+
+  double widthOf(String text, TextStyle style) {
     final painter = TextPainter(
       text: TextSpan(text: text, style: style),
       textDirection: ui.TextDirection.ltr,
-    )..layout(maxWidth: width);
-    return painter.computeLineMetrics().length;
+    )..layout();
+    return painter.width;
   }
 
   void fitsOneLine(
@@ -93,13 +108,163 @@ void main() {
     fitsOneLine('How loudly your voice reaches the recorder.');
   });
 
-  test('the repeat heading fits beside its own circled i', () {
-    fitsOneLine(
-      'Each check is taken several times',
-      style: AppText.devValue,
-      width: cardWidth - 44,
+  // -------------------------------------------------------------------------
+  // THE TWO LINES A CHECK NOW SHOWS WITHOUT BEING TAPPED
+  //
+  // This is the measurement that makes the condensing real. The card used to
+  // print six things per reading and they were allowed to wrap, because at that
+  // volume wrapping was the least of the problem. Two lines that wrap are a
+  // different matter: the headline IS the answer, and an answer on three lines
+  // has not been condensed, it has been rearranged.
+  // -------------------------------------------------------------------------
+
+  /// The disclosure control's own width, derived from its parts rather than
+  /// assumed: its word in [AppText.label13], the gap, the chevron - and never
+  /// less than the 44px hit target every control on this screen clears.
+  ///
+  /// A FUNCTION, NOT A FINAL. Anything measured at the top of `main` is measured
+  /// before [setUpAll] has loaded Sora, which is the one mistake this whole file
+  /// exists to avoid: the fallback face is about twice the advance and the
+  /// derived width comes out 70px too wide.
+  double detailsControlWidth() => math.max(
+        AppShape.minTapTarget,
+        widthOf(DetailsDisclosure.label, AppText.label13) +
+            DetailsDisclosure.glyphGap +
+            DetailsDisclosure.glyphSize,
+      );
+
+  /// What is left of a card's width for the line beside that control.
+  double summaryWidth() => cardWidth - detailsControlWidth();
+
+  /// The headline exactly as `_Headline` assembles it: the figure in
+  /// [AppText.rowTitle], the comparison in [AppText.devLabel]. Measured as the
+  /// two spans the widget really builds, because measuring the whole string in
+  /// one style would be measuring a line the screen never draws.
+  void headlineFitsOneLine(ReadingComparison comparison) {
+    final text = MicCheckCopy.value(comparison) +
+        MicCheckCopy.separator +
+        MicCheckCopy.change(comparison);
+    expect(
+      linesOfSpan(
+        TextSpan(
+          children: <InlineSpan>[
+            TextSpan(
+              text: MicCheckCopy.value(comparison),
+              style: AppText.rowTitle,
+            ),
+            TextSpan(
+              text: MicCheckCopy.separator + MicCheckCopy.change(comparison),
+              style: AppText.devLabel,
+            ),
+          ],
+        ),
+        cardWidth,
+      ),
+      1,
+      reason: 'wraps at ${cardWidth.toStringAsFixed(0)}px: "$text"',
     );
-    fitsOneLine('Noise floor 7 times, voice 3 times.');
+  }
+
+  ReadingComparison comparison(ReadingChange change, {num? latest = -100}) =>
+      ReadingComparison(change: change, unit: 'dBFS', latest: latest);
+
+  test('every comparison a check can lead with is one line', () {
+    // EVERY ONE OF THEM, not the one a happy path produces. Each replaces the
+    // others in the same slot, so each is measured on its own - and the figure
+    // is the widest a dBFS reading can be, three digits and a minus sign.
+    for (final change in ReadingChange.values) {
+      headlineFitsOneLine(
+        comparison(
+          change,
+          latest: change == ReadingChange.notMeasured ? null : -100,
+        ),
+      );
+    }
+  });
+
+  test('the summary beside Details is one line, in every state', () {
+    // The date on its own, and the date with every tag a batch that did not go
+    // to plan can earn beside it. `12 Mar` is the widest form of the date.
+    final now = DateTime(2026, 9, 14, 9, 14);
+    for (final at in <DateTime>[
+      now,
+      now.subtract(const Duration(days: 1)),
+      now.subtract(const Duration(days: 3)),
+      DateTime(2026, 3, 12, 18, 2),
+    ]) {
+      fitsOneLine(
+        MicCheckCopy.measuredWhen(at, now: now),
+        width: summaryWidth(),
+      );
+    }
+
+    /// A batch of [taken] samples out of [requested], every one of them [outcome].
+    DeviceTestBatch batch(
+      int taken,
+      int requested,
+      DeviceTestOutcome outcome,
+    ) =>
+        DeviceTestBatch(
+          kind: DeviceTestKind.noiseFloor,
+          runs: <DeviceTestResult>[
+            for (var i = 0; i < taken; i++)
+              DeviceTestResult(
+                kind: DeviceTestKind.noiseFloor,
+                outcome: outcome,
+                startedAt: DateTime(2026, 3, 12, 18, 2 + i),
+                duration: const Duration(seconds: 10),
+                readings: const <DeviceTestReading>[
+                  DeviceTestReading(
+                    label: 'Noise floor (RMS)',
+                    value: -100,
+                    unit: 'dBFS',
+                  ),
+                ],
+                batchId: 'b',
+                repeatIndex: i + 1,
+                repeatTarget: requested,
+              ),
+          ],
+        );
+
+    // The noise floor asks for seven, which is the widest count either check
+    // produces, and `could not run` is the longest tag.
+    for (final outcome in DeviceTestOutcome.values) {
+      fitsOneLine(
+        MicCheckCopy.taken(batch(1, 7, outcome), now: now),
+        width: summaryWidth(),
+      );
+      fitsOneLine(
+        MicCheckCopy.taken(batch(6, 7, outcome), now: now),
+        width: summaryWidth(),
+      );
+      fitsOneLine(
+        MicCheckCopy.taken(batch(7, 7, outcome), now: now),
+        width: summaryWidth(),
+      );
+    }
+  });
+
+  test('what a change is measured against fits inside the details', () {
+    // PROSE, AND INSIDE THE DISCLOSURE, so this one is allowed to wrap - but not
+    // to balloon. Two lines is the budget: a third would put the sentence back in
+    // the same territory the card was condensed out of.
+    for (final threshold in <num?>[null, 0.83, 1.6, 12]) {
+      final text = MicCheckCopy.basis(
+        ReadingComparison(
+          change: ReadingChange.same,
+          unit: 'dBFS',
+          latest: -100,
+          previous: -100,
+          threshold: threshold,
+        ),
+      );
+      expect(
+        linesOf(text, AppText.footnote11, cardWidth),
+        lessThanOrEqualTo(2),
+        reason: 'runs past two lines: "$text"',
+      );
+    }
   });
 
   test('every live state line is one line', () {

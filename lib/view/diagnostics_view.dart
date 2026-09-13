@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
 import '../model/device_test_aggregate.dart';
+import '../model/device_test_comparison.dart';
 import '../model/device_test_result.dart';
 import '../model/link_health.dart';
 import 'format.dart';
+import 'mic_check_copy.dart';
 import 'placeholder_data.dart';
 import 'theme.dart';
 import 'widgets/app_icons.dart';
@@ -351,7 +353,7 @@ class _RssiMeter extends StatelessWidget {
   }
 }
 
-/// The microphone check, its controls, and the last two batches of each reading.
+/// The microphone check, its controls, and one line per check.
 ///
 /// WHY THIS ONE SURVIVED AND THE LINK TESTS DID NOT. The enclosure puts plastic
 /// between a voice and a MEMS microphone, and a bad port degrades a recording
@@ -364,6 +366,20 @@ class _RssiMeter extends StatelessWidget {
 /// spread at 0.83 dB. That is what makes the batching worth its time: a change
 /// caused by the enclosure will stand clear of a spread that narrow, and the
 /// only reason anybody can say so is that the spread was measured.
+///
+/// WHAT IT SHOWS WITHOUT BEING TAPPED IS ONE LINE PER CHECK, and the card was
+/// rewritten to get there. It used to print, per check, a date, a sample count,
+/// a status phrase, a median, a range and every individual sample - twice over
+/// for sensitivity, which gave two readings equal weight - which is about fifteen
+/// numbers in answer to "is my mic OK?". Every one of them was true and none of
+/// them was the answer. Now each check leads with its figure and how that figure
+/// compares with the run before it, and the rest is behind [DetailsDisclosure].
+/// See [_Headline] and `mic_check_copy.dart`.
+///
+/// THE COMPARISON IS THE ONLY THING A SINGLE READING CAN HONESTLY SUPPORT, and
+/// what counts as a change is measured rather than chosen - see
+/// `model/device_test_comparison.dart`. There is no verdict anywhere on this
+/// card: nothing is good, bad, fine or a problem.
 ///
 /// A CHECK THAT CANNOT RUN IS NOT OFFERED. The same three-state rule the
 /// auto-sleep control follows: no link, or a capture already holding the
@@ -414,8 +430,6 @@ class _MicCheckCard extends StatelessWidget {
             _CheckRow(controller: controller, kind: kind),
           ],
           const SizedBox(height: 18),
-          const _WhyItRepeats(),
-          const SizedBox(height: 14),
           Text(_historyLine(controller), style: AppText.footnote11),
         ],
       ),
@@ -465,6 +479,7 @@ class _CheckRow extends StatelessWidget {
     final active = isRunning || awaiting;
     final blocker = controller.testBlocker;
     final batches = tests.batchesOf(kind);
+    final comparison = batches.isEmpty ? null : _comparisonOf(batches, kind);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -562,18 +577,60 @@ class _CheckRow extends StatelessWidget {
             ],
           ),
         ],
-        // The two BATCHES that make a comparison - never two single runs, which
-        // is the whole point: these measurements are noisy enough that one
-        // number against one number is a coin toss dressed up as a baseline.
-        // Nothing is shown when there has never been a run: an empty row is
-        // honest, an invented one is not.
+        // WHAT A USER CAME FOR, ON ONE LINE: the figure, and how it sits
+        // against the run before it. Everything that used to be on the face of
+        // this card - the range, every sample, the second reading, the sample
+        // count, the account of a run that stopped short - is behind Details,
+        // which is closed until somebody asks.
         //
-        // Wrapping lines rather than label/value rows: a timestamp, an n, a
-        // median and a range do not fit a phone's width on one line, and a
-        // clipped measurement is worse than a wrapped one.
-        if (batches.isNotEmpty) ..._batchLines('Latest', batches.first),
-        if (batches.length > 1) ..._batchLines('Before', batches[1]),
+        // Nothing at all is shown when there has never been a run: an empty row
+        // is honest, an invented one is not.
+        if (comparison != null) ...<Widget>[
+          const SizedBox(height: 12),
+          _Headline(comparison: comparison),
+          const SizedBox(height: 2),
+          DetailsDisclosure(
+            semanticSubject: 'the ${_checkName(kind).toLowerCase()} check',
+            // The one thing kept beside Details: WHEN, and - for a batch that
+            // did not finish - a two-word tag saying so. A partial run has to
+            // stay visibly partial with the disclosure shut.
+            summary: Text(
+              MicCheckCopy.taken(batches.first),
+              style: AppText.footnote11.copyWith(
+                color: _summaryColour(batches.first),
+              ),
+            ),
+            details: <Widget>[
+              ..._batchLines('Latest', batches.first),
+              if (batches.length > 1) ..._batchLines('Before', batches[1]),
+              const SizedBox(height: 8),
+              // What "about the same" was measured against, so the threshold
+              // reads as derived rather than decided.
+              Text(
+                MicCheckCopy.basis(comparison),
+                style: AppText.footnote11,
+              ),
+            ],
+          ),
+        ],
       ],
+    );
+  }
+
+  /// The lead reading of the newest batch against the one before it.
+  ///
+  /// Every batch older than those two is passed as the fallback pool the
+  /// threshold can be derived from when neither of the compared two took more
+  /// than one sample - see `model/device_test_comparison.dart`.
+  ReadingComparison _comparisonOf(
+    List<DeviceTestBatch> batches,
+    DeviceTestKind kind,
+  ) {
+    final label = _leadLabel(kind);
+    return ReadingComparison.between(
+      latest: batches.first.spreadOf(label),
+      previous: batches.length > 1 ? batches[1].spreadOf(label) : null,
+      fallback: batches.skip(2).map((batch) => batch.spreadOf(label)),
     );
   }
 
@@ -596,56 +653,39 @@ class _CheckRow extends StatelessWidget {
       };
 }
 
-/// Why each check is taken several times, and how many times each one takes.
+/// The figure, and how it sits against the run before it - the whole of what a
+/// check says without being tapped.
 ///
-/// PROSE, NOT A CONTROL. There WAS a segmented "samples per check" selector
-/// here, and it was the wrong thing on this screen twice over. Diagnostics is
-/// for OBSERVERS - everything else on it is something to look at, not something
-/// to set - and a sample-count selector asks somebody to reason about sampling
-/// statistics before they are allowed to read their own microphone. It also let
-/// two batches on one phone be taken at different n, which quietly breaks the
-/// comparison the card exists for: the spread reported is a RANGE, and a range
-/// is only comparable against another range of similar size.
+/// TWO WEIGHTS ON ONE LINE, not two lines. The value is the answer and carries
+/// [AppText.rowTitle]; the comparison is what makes the value mean anything and
+/// carries [AppText.devLabel], a footnote's weight beside it. Splitting them
+/// over two lines was tried in the layout this replaced and it reads as two
+/// facts rather than one sentence.
 ///
-/// So the counts are fixed in [DeviceTestSampling] and this says what they are.
-/// It reads the numbers from there rather than spelling them out, so the screen
-/// and the measurement cannot disagree.
-///
-/// WHAT IS VISIBLE IS ONE LINE OF IT. The reasoning above is exactly the kind of
-/// paragraph this screen was rewritten to stop putting in front of people, so
-/// the card names the two counts and the circled i explains, in plain words, why
-/// one go is not enough to compare - see [_repeatsInfo].
-///
-/// BELOW THE ROWS, where the old control was, and for the same reason: the rows
-/// are what people come to this card for, and anything inserted above them
-/// pushes every one of them down the screen.
-class _WhyItRepeats extends StatelessWidget {
-  const _WhyItRepeats();
+/// IT WRAPS RATHER THAN CLIPS. `test/view/diagnostics_copy_test.dart` holds
+/// every one of these to a single line at 390px in the real Sora, but a phone at
+/// a large text scale has less room than that - and a measurement cut off
+/// mid-digit is worse than a measurement on two lines.
+class _Headline extends StatelessWidget {
+  const _Headline({required this.comparison});
+
+  final ReadingComparison comparison;
 
   @override
   Widget build(BuildContext context) {
-    final noise = DeviceTestSampling.noiseFloorSamples;
-    final voice = DeviceTestSampling.sensitivitySamples;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Row(
-          children: const <Widget>[
-            Expanded(
-              child: Text(
-                'Each check is taken several times',
-                style: AppText.devValue,
-              ),
-            ),
-            InfoButton(title: 'Repeated checks', body: _repeatsInfo),
-          ],
-        ),
-        Text(
-          'Noise floor $noise times, voice $voice times.',
-          style: AppText.footnote11,
-        ),
-      ],
+    return Text.rich(
+      TextSpan(
+        children: <InlineSpan>[
+          TextSpan(
+            text: MicCheckCopy.value(comparison),
+            style: AppText.rowTitle,
+          ),
+          TextSpan(
+            text: '${MicCheckCopy.separator}${MicCheckCopy.change(comparison)}',
+            style: AppText.devLabel,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -712,9 +752,13 @@ class _DieTemperatureCard extends StatelessWidget {
   }
 }
 
-/// One saved BATCH as the comparison reads it: when, how many samples, the
-/// median of each headline reading, the range those samples spanned, and the
-/// samples themselves.
+/// One saved BATCH in full, inside Details: when, how many samples, the median
+/// of each reading, the range those samples spanned, and the samples themselves.
+///
+/// NOTHING WAS DELETED WHEN THE CARD WAS CONDENSED, it was folded. Every figure
+/// this function has ever printed still prints, at full precision, one tap
+/// behind [DetailsDisclosure] - and the export, which is what a bug report
+/// carries, never went through here at all.
 ///
 /// THE SPREAD IS NOT A FOOTNOTE HERE. A three-decibel change after the
 /// enclosure means nothing if the five samples before it spanned ten, and the
@@ -739,7 +783,7 @@ List<Widget> _batchLines(String when, DeviceTestBatch batch) {
       '$when · ${Fmt.dayAndTime(batch.startedAt)} · ${_batchCount(batch)}',
       style: AppText.devLabel.copyWith(color: colour),
     ),
-    for (final label in _headlineLabels(batch.kind))
+    for (final label in _detailLabels(batch.kind))
       ..._spreadLines(batch.spreadOf(label), colour),
   ];
 }
@@ -804,6 +848,30 @@ List<String> _batchOutcomes(DeviceTestBatch batch) => <String>[
               : '${batch.countOf(outcome)} ${outcome.wireName}',
     ];
 
+/// The colour of the one line that stays beside Details.
+///
+/// A BATCH THAT DID NOT GO TO PLAN HAS TO LOOK DIFFERENT, not just read
+/// differently: the tag beside the date is two or three words, and two or three
+/// words in the same tertiary grey as everything else is how a partial run gets
+/// skimmed past. A sample that failed takes [AppColors.warning] - the same
+/// colour the link card gives a lost frame, for the same reason - and a run that
+/// simply stopped short takes [AppColors.textSecondary], a step up from the
+/// footnote grey without shouting. A batch that completed keeps the footnote's
+/// own colour, because there is nothing to notice.
+///
+/// NEITHER COLOUR IS A VERDICT about the microphone. They mark how much of the
+/// measurement happened, which is a fact about the run.
+Color? _summaryColour(DeviceTestBatch batch) {
+  if (batch.countOf(DeviceTestOutcome.failed) > 0 ||
+      batch.countOf(DeviceTestOutcome.unavailable) > 0) {
+    return AppColors.warning;
+  }
+  if (MicCheckCopy.condition(batch).isNotEmpty) {
+    return AppColors.textSecondary;
+  }
+  return null;
+}
+
 Color _batchColour(DeviceTestBatch batch) {
   if (batch.countOf(DeviceTestOutcome.failed) > 0) return AppColors.warning;
   if (batch.countOf(DeviceTestOutcome.completed) == batch.sampleCount) {
@@ -822,16 +890,31 @@ String _nextSamplePrompt(DeviceTestKind kind) => switch (kind) {
       DeviceTestKind.noiseFloor => '',
     };
 
-/// The readings worth putting on the card, per check. Everything else - the
-/// frames lost during the window, the seconds of audio actually measured, the
-/// die temperature - is in Export diagnostics.
-List<String> _headlineLabels(DeviceTestKind kind) => switch (kind) {
+/// The ONE reading each check leads with.
+///
+/// SENSITIVITY USED TO LEAD WITH TWO, Loudest and Average, at equal weight -
+/// which left a user working out which of them to believe before they could read
+/// either. Average is the honest measure of how loudly a voice ARRIVES: it is
+/// the level sustained across the whole spoken window, where Loudest is one
+/// instant and moves with a plosive or a chair. So Average leads and Loudest
+/// goes into the details, where it is still printed in full.
+///
+/// The noise floor has only ever had one.
+String _leadLabel(DeviceTestKind kind) => switch (kind) {
+      DeviceTestKind.noiseFloor => DeviceTestReadings.noiseFloorRms,
+      DeviceTestKind.sensitivity => DeviceTestReadings.rms,
+    };
+
+/// The readings the DETAILS print, per check, lead reading first. Everything
+/// else - the frames lost during the window, the seconds of audio actually
+/// measured, the die temperature - is in Export diagnostics.
+List<String> _detailLabels(DeviceTestKind kind) => switch (kind) {
       DeviceTestKind.noiseFloor => const <String>[
           DeviceTestReadings.noiseFloorRms,
         ],
       DeviceTestKind.sensitivity => const <String>[
-          DeviceTestReadings.peak,
           DeviceTestReadings.rms,
+          DeviceTestReadings.peak,
         ],
     };
 
@@ -865,8 +948,8 @@ String _checkBlurb(DeviceTestKind kind) => switch (kind) {
 /// What each circled i on this screen says.
 ///
 /// GATHERED IN ONE PLACE, and deliberately. This is the copy of the screen, it
-/// is reviewed as writing rather than as code, and six sentences scattered
-/// through six widgets cannot be read end to end to check that they sound like
+/// is reviewed as writing rather than as code, and five sentences scattered
+/// through five widgets cannot be read end to end to check that they sound like
 /// one voice.
 ///
 /// THE RULE THEY ARE ALL WRITTEN TO: plain in BOTH layers. Moving jargon behind
@@ -904,13 +987,6 @@ const String _sensitivityInfo =
     'away and speak at a normal level until it stops. Keep to the same '
     'distance every time, or two runs cannot be compared. A reading lower than '
     'last time can mean the case is covering the microphone opening.';
-
-const String _repeatsInfo =
-    'These readings move around a little from one go to the next, so a single '
-    'go is not enough to compare. Taking several and reporting the middle one '
-    'is what tells a real change apart from ordinary wobble. The quiet-room '
-    'check repeats on its own; the voice one waits for you before each go, and '
-    'you can stop early and keep what it already has.';
 
 const String _temperatureInfo =
     'The sensor sits inside the chip that does the recording, so it always '

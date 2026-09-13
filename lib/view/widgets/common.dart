@@ -288,6 +288,117 @@ class KeyValueRow extends StatelessWidget {
 }
 
 
+/// A summary line with everything else folded behind one tap.
+///
+/// THE ANSWER TO A CARD THAT SHOWED TOO MUCH. The mic check used to print a
+/// date, a sample count, a status phrase, a median, a range and every
+/// individual sample for each of its readings - about fifteen numbers in front
+/// of somebody who wanted one. The numbers were all true and none of them was
+/// the headline, so they are here instead: present, one tap away, and closed
+/// until asked for.
+///
+/// COLLAPSED BY DEFAULT, AND IT STAYS THAT WAY between rebuilds of the parent.
+/// Diagnostics rebuilds on every controller notification - the signal poll
+/// alone is several a second - so the open flag lives in this [State] rather
+/// than in anything the parent recreates. A [DetailsDisclosure] that reset
+/// itself as the link ticked would be unusable.
+///
+/// IT GROWS THE CARD RATHER THAN FLOATING ABOVE IT, which is the opposite
+/// choice from [InfoButton], and deliberately: an info sheet explains a reading
+/// that is still moving, so it must not shove the readings off screen, while
+/// these details are the SAME saved figures the summary above them came from.
+/// Reading them against each other is the point, and that needs them on one
+/// page.
+///
+/// REACHABLE WITHOUT SIGHT. [TapTarget] supplies the 44px hit area and the
+/// spoken label, and the label says which way the tap goes - "Show"/"Hide" -
+/// rather than leaving a screen reader to infer it from a chevron it cannot
+/// see.
+class DetailsDisclosure extends StatefulWidget {
+  const DetailsDisclosure({
+    required this.summary,
+    required this.details,
+    required this.semanticSubject,
+    super.key,
+  });
+
+  /// The one line that stays visible, left of the control.
+  final Widget summary;
+
+  /// Everything folded away. Laid out as rows of a column when open.
+  final List<Widget> details;
+
+  /// What the details are OF, for the spoken label: "the noise floor check"
+  /// becomes "Show the details of the noise floor check".
+  final String semanticSubject;
+
+  /// The control's own word, its glyph size and the gap between them.
+  ///
+  /// PUBLIC SO THE COPY TEST CAN DERIVE THE WIDTH IT TAKES rather than guessing
+  /// one. The control sizes itself to its content - a fixed slot overflowed the
+  /// moment a wider font or a larger text scale got hold of it - so the width
+  /// the summary beside it actually gets is a function of these three values and
+  /// of [AppText.label13], and the test computes it from exactly these.
+  static const String label = 'Details';
+  static const double glyphSize = 14;
+  static const double glyphGap = 5;
+
+  @override
+  State<DetailsDisclosure> createState() => _DetailsDisclosureState();
+}
+
+class _DetailsDisclosureState extends State<DetailsDisclosure> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(child: widget.summary),
+            TapTarget(
+              onTap: () => setState(() => _open = !_open),
+              semanticLabel: '${_open ? 'Hide' : 'Show'} the details of '
+                  '${widget.semanticSubject}',
+              child: Row(
+                // SIZED TO ITS CONTENT, never to a reserved slot. A fixed width
+                // here overflowed its own row the moment the text was set in a
+                // wider face than Sora, which is exactly what a widget test
+                // does; the summary is the [Expanded] one, so it absorbs
+                // whatever this needs.
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  const Text(
+                    DetailsDisclosure.label,
+                    style: AppText.label13,
+                  ),
+                  const SizedBox(width: DetailsDisclosure.glyphGap),
+                  // The app's own chevron, turned. A glyph that points down when
+                  // closed and up when open says which way the tap goes without
+                  // a second icon to keep in step with this one.
+                  Transform.rotate(
+                    angle: _open ? -math.pi / 2 : math.pi / 2,
+                    child: const AppIcon(
+                      AppGlyph.chevronRight,
+                      size: DetailsDisclosure.glyphSize,
+                      color: AppColors.textSecondary,
+                      strokeWidth: 1.7,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        if (_open) ...widget.details,
+      ],
+    );
+  }
+}
+
+
 /// One segment of a two-way (or four-way) selector - the codec pick, the
 /// auto-sleep flag, the samples-per-check count.
 ///

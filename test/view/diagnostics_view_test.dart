@@ -134,6 +134,116 @@ void main() {
         readings: readings,
       );
 
+  /// Opens the Details disclosure of one check.
+  ///
+  /// EVERY FIGURE THAT IS NOT THE HEADLINE IS BEHIND THIS, which is the whole
+  /// point of the layout: the card answers "did it move?" in one line and keeps
+  /// the range, the individual samples and the second reading one tap away. So
+  /// every test that asserts on those has to open it, and a test that finds them
+  /// without opening it has found a regression.
+  Future<void> openDetails(WidgetTester tester, String check) async {
+    final finder = find.bySemanticsLabel('Show the details of the $check check');
+    // The control sits well down the mic check card, and `scrollUntilVisible`
+    // needs an element that already exists: a widget the viewport has not
+    // reached has not been laid out and therefore has no semantics to find. So
+    // the list is dragged until it does exist, and only then scrolled to.
+    for (var i = 0; i < 20 && finder.evaluate().isEmpty; i++) {
+      await tester.drag(find.byType(ListView), const Offset(0, -120));
+      await tester.pump();
+    }
+    await tester.scrollUntilVisible(finder, 120);
+    await tester.pump();
+    await tester.tap(finder);
+    await tester.pumpAndSettle();
+  }
+
+  /// One sample of a batch, exactly as the service would have saved it.
+  DeviceTestResult sample(
+    DeviceTestKind kind, {
+    required DateTime at,
+    required String? batchId,
+    required int index,
+    required int target,
+    required List<DeviceTestReading> readings,
+    DeviceTestOutcome outcome = DeviceTestOutcome.completed,
+  }) =>
+      DeviceTestResult(
+        kind: kind,
+        outcome: outcome,
+        startedAt: at,
+        duration: const Duration(seconds: 10),
+        readings: readings,
+        batchId: batchId,
+        repeatIndex: index,
+        repeatTarget: target,
+      );
+
+  /// A batch of noise-floor samples, NEWEST FIRST the way the file keeps them.
+  List<DeviceTestResult> noiseFloorBatch({
+    required String batchId,
+    required List<num?> values,
+    required int target,
+    required DateTime at,
+  }) =>
+      <DeviceTestResult>[
+        for (var i = values.length - 1; i >= 0; i--)
+          sample(
+            DeviceTestKind.noiseFloor,
+            at: at.add(Duration(minutes: i)),
+            batchId: batchId,
+            index: i + 1,
+            target: target,
+            readings: <DeviceTestReading>[
+              DeviceTestReading(
+                label: 'Noise floor (RMS)',
+                value: values[i],
+                unit: 'dBFS',
+              ),
+            ],
+            outcome: values[i] == null
+                ? DeviceTestOutcome.failed
+                : DeviceTestOutcome.completed,
+          ),
+      ];
+
+  /// A batch of sensitivity samples, which carry BOTH readings - Average, the
+  /// one the card leads with, and Loudest, which lives in the details.
+  List<DeviceTestResult> sensitivityBatch({
+    required String batchId,
+    required List<num?> average,
+    required List<num?> loudest,
+    required int target,
+    required DateTime at,
+  }) =>
+      <DeviceTestResult>[
+        for (var i = average.length - 1; i >= 0; i--)
+          sample(
+            DeviceTestKind.sensitivity,
+            at: at.add(Duration(minutes: i)),
+            batchId: batchId,
+            index: i + 1,
+            target: target,
+            readings: <DeviceTestReading>[
+              DeviceTestReading(label: 'Peak', value: loudest[i], unit: 'dBFS'),
+              DeviceTestReading(label: 'RMS', value: average[i], unit: 'dBFS'),
+            ],
+          ),
+      ];
+
+  /// A lone noise-floor run with no batch id - what every result saved before
+  /// batching existed looks like, and what the bare-board baseline is made of.
+  DeviceTestResult lone(num value, DateTime at) => run(
+        DeviceTestKind.noiseFloor,
+        at: at,
+        readings: <DeviceTestReading>[
+          DeviceTestReading(
+            label: 'Noise floor (RMS)',
+            value: value,
+            unit: 'dBFS',
+          ),
+        ],
+      );
+
   // -------------------------------------------------------------------------
   group('the screen', () {
     testWidgets('builds with nothing connected and says what it is',
@@ -800,7 +910,6 @@ void main() {
         'About Mic check',
         'About Noise floor',
         'About Sensitivity',
-        'About Repeated checks',
         'About Temperature',
       ]) {
         final finder = find.bySemanticsLabel(label);
@@ -1057,13 +1166,28 @@ void main() {
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
 
-      // This is the whole point of saving anything: the enclosure raised the
-      // noise floor by 14 dB, and both figures are on the screen to say so.
+      // WHAT THE CARD LEADS WITH is the latest figure, rounded, and the one
+      // honest thing this history supports. Both runs are lone ones - no batch
+      // id, which is what everything saved before batching existed looks like -
+      // so neither measured a wobble and there is nothing to size 14 dB against.
+      // The card says that rather than calling it a change.
+      expect(find.textContaining('−54 dBFS'), findsOneWidget);
+      expect(find.textContaining('not enough to compare with'), findsOneWidget);
+      expect(find.textContaining('2 runs saved'), findsOneWidget);
+      // The previous run's figure is NOT on the face of the card - that is what
+      // made it unreadable.
+      expect(find.textContaining('−68.9 dBFS'), findsNothing);
+      expect(find.textContaining('Latest ·'), findsNothing);
+
+      await openDetails(tester, 'noise floor');
+
+      // And it is all still there, at full precision, one tap away. This is the
+      // whole point of saving anything: the enclosure raised the noise floor by
+      // 14 dB, and both figures say so.
       expect(find.textContaining('−54.2 dBFS'), findsOneWidget);
       expect(find.textContaining('−68.9 dBFS'), findsOneWidget);
       expect(find.textContaining('Latest ·'), findsOneWidget);
       expect(find.textContaining('Before ·'), findsOneWidget);
-      expect(find.textContaining('2 runs saved'), findsOneWidget);
 
       await leave(tester);
     });
@@ -1115,8 +1239,11 @@ void main() {
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
 
-      // A failed run's blank reading must not be mistaken for a finished run's.
+      // A failed run's blank reading must not be mistaken for a finished run's,
+      // and the word survives the condensing: it sits beside the date, with the
+      // disclosure still shut.
       expect(find.textContaining('failed'), findsOneWidget);
+      expect(find.textContaining('measured today · failed'), findsOneWidget);
 
       await leave(tester);
     });
@@ -1206,54 +1333,6 @@ void main() {
   // baseline at all.
   // -------------------------------------------------------------------------
   group('the aggregate comparison', () {
-    /// One sample of a batch, exactly as the service would have saved it.
-    DeviceTestResult sample(
-      DeviceTestKind kind, {
-      required DateTime at,
-      required String? batchId,
-      required int index,
-      required int target,
-      required String label,
-      required num? value,
-      String unit = 'dBFS',
-      DeviceTestOutcome outcome = DeviceTestOutcome.completed,
-    }) =>
-        DeviceTestResult(
-          kind: kind,
-          outcome: outcome,
-          startedAt: at,
-          duration: const Duration(seconds: 10),
-          readings: <DeviceTestReading>[
-            DeviceTestReading(label: label, value: value, unit: unit),
-          ],
-          batchId: batchId,
-          repeatIndex: index,
-          repeatTarget: target,
-        );
-
-    /// A batch of noise-floor samples, NEWEST FIRST the way the file keeps them.
-    List<DeviceTestResult> noiseFloorBatch({
-      required String batchId,
-      required List<num?> values,
-      required int target,
-      required DateTime at,
-    }) =>
-        <DeviceTestResult>[
-          for (var i = values.length - 1; i >= 0; i--)
-            sample(
-              DeviceTestKind.noiseFloor,
-              at: at.add(Duration(minutes: i)),
-              batchId: batchId,
-              index: i + 1,
-              target: target,
-              label: 'Noise floor (RMS)',
-              value: values[i],
-              outcome: values[i] == null
-                  ? DeviceTestOutcome.failed
-                  : DeviceTestOutcome.completed,
-            ),
-        ];
-
     testWidgets('a batch reads as a median with the spread beside it',
         (tester) async {
       final harness = ViewHarness();
@@ -1270,6 +1349,12 @@ void main() {
 
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
+
+      // Not on the face of the card any more: the sample count, the range and
+      // every individual reading are what made it unreadable.
+      expect(find.textContaining('5 of 5 samples'), findsNothing);
+      expect(find.textContaining('middle'), findsNothing);
+      await openDetails(tester, 'noise floor');
 
       // How many samples, so nobody has to guess how much the figure is worth.
       // Spelled out rather than written n=5 of 5, which is the same fact in a
@@ -1311,6 +1396,7 @@ void main() {
 
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
+      await openDetails(tester, 'noise floor');
 
       expect(find.textContaining('samples:'), findsOneWidget);
       // Never silently dropped: it is in the sample list and in the range.
@@ -1338,12 +1424,20 @@ void main() {
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
 
+      // The failures survive the condensing: the count sits beside the date with
+      // the disclosure still shut, because a batch that half worked must not
+      // look like one that worked.
+      expect(find.textContaining('measured today · 2 failed'), findsOneWidget);
+
+      await openDetails(tester, 'noise floor');
+
       // The only thing ever left out of a median is a sample that had no number
-      // to contribute, and the card says how many that was.
+      // to contribute, and the details say how many that was.
       expect(find.textContaining('2 of 5 had no reading'), findsOneWidget);
       expect(find.textContaining('middle −61.0 dBFS'), findsOneWidget);
-      // The two failures are named rather than averaged away.
-      expect(find.textContaining('2 failed'), findsOneWidget);
+      // The two failures are named rather than averaged away - once in the
+      // condensed line above, once in the batch's own full account.
+      expect(find.textContaining('2 failed'), findsNWidgets(2));
 
       await leave(tester);
     });
@@ -1365,9 +1459,18 @@ void main() {
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
 
+      // A PARTIAL BATCH STAYS VISIBLY PARTIAL with the disclosure shut. Short,
+      // beside the date, rather than the four-clause run-on it used to be.
+      expect(
+        find.textContaining('measured today · 3 of 5 samples'),
+        findsOneWidget,
+      );
+
+      await openDetails(tester, 'noise floor');
+
       // Three of five is a usable baseline. It is NOT five, and it is not
-      // discarded either.
-      expect(find.textContaining('3 of 5 samples'), findsOneWidget);
+      // discarded either. Once in the condensed line, once in the full account.
+      expect(find.textContaining('3 of 5 samples'), findsNWidgets(2));
       expect(find.textContaining('stopped early'), findsOneWidget);
       expect(find.textContaining('middle −60.0 dBFS'), findsOneWidget);
 
@@ -1396,6 +1499,7 @@ void main() {
 
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
+      await openDetails(tester, 'noise floor');
 
       expect(find.textContaining('1 sample'), findsOneWidget);
       expect(
@@ -1432,6 +1536,7 @@ void main() {
 
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
+      await openDetails(tester, 'noise floor');
 
       expect(find.textContaining('Latest ·'), findsOneWidget);
       expect(find.textContaining('Before ·'), findsOneWidget);
@@ -1456,6 +1561,504 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
+  // THE ONE LINE EACH CHECK LEADS WITH
+  //
+  // The feedback that produced this layout was "look how much data is shown in a
+  // very scattered way user can never understand this", and it was right: one
+  // check printed a date, a sample count, a status phrase, a median, a range and
+  // every individual sample, twice over for sensitivity. About fifteen numbers
+  // in answer to "is my mic OK?".
+  //
+  // What is left on the face of the card is the figure and how it sits against
+  // the run before it, because the comparison is the ONLY thing a single
+  // acoustic reading can honestly support. Three rules are protected here:
+  //
+  //   1. NO VERDICT. Not good, bad, fine, healthy, or a problem - ever.
+  //   2. THE THRESHOLD IS DERIVED from the spread the saved samples actually
+  //      showed, so the same difference reads as a change beside tight samples
+  //      and as noise beside loose ones. A test that only checked one difference
+  //      against one answer could not tell a derivation from a constant.
+  //   3. NOTHING IS INVENTED when there is nothing to compare with.
+  // -------------------------------------------------------------------------
+  group('the headline each check leads with', () {
+    testWidgets('with no earlier run it says so rather than comparing',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await seedHistory(
+        harness,
+        noiseFloorBatch(
+          batchId: 'nf-first',
+          values: <num?>[-60, -61, -59],
+          target: 3,
+          at: DateTime.now().subtract(const Duration(minutes: 10)),
+        ),
+      );
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      expect(find.textContaining('−60 dBFS'), findsOneWidget);
+      expect(
+        find.textContaining('nothing earlier to compare with'),
+        findsOneWidget,
+      );
+      // No invented comparison, in either direction.
+      expect(find.textContaining('than before'), findsNothing);
+      expect(find.textContaining('about the same'), findsNothing);
+
+      await leave(tester);
+    });
+
+    testWidgets('a difference inside the measured wobble is about the same',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      final now = DateTime.now();
+      // Medians −60 and −58: two decibels apart, and each batch's own samples
+      // spanned two decibels. Two is not more than two, so nothing moved.
+      await seedHistory(harness, <DeviceTestResult>[
+        ...noiseFloorBatch(
+          batchId: 'nf-after',
+          values: <num?>[-60, -61, -59],
+          target: 3,
+          at: now.subtract(const Duration(minutes: 20)),
+        ),
+        ...noiseFloorBatch(
+          batchId: 'nf-before',
+          values: <num?>[-58, -57, -59],
+          target: 3,
+          at: now.subtract(const Duration(days: 1)),
+        ),
+      ]);
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      expect(find.textContaining('−60 dBFS'), findsOneWidget);
+      expect(
+        find.textContaining('about the same as before'),
+        findsOneWidget,
+      );
+
+      // And the details say what "about the same" was measured against, so the
+      // threshold reads as derived rather than decided.
+      await openDetails(tester, 'noise floor');
+      expect(
+        find.textContaining('Counted as a change only past 2.0 dBFS'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('the widest these samples wobbled on their own'),
+        findsOneWidget,
+      );
+
+      await leave(tester);
+    });
+
+    testWidgets('a difference that clears the wobble reads as louder',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      final now = DateTime.now();
+      // −56 against −60: four decibels, against samples that spanned two.
+      await seedHistory(harness, <DeviceTestResult>[
+        ...noiseFloorBatch(
+          batchId: 'nf-after',
+          values: <num?>[-56, -57, -55],
+          target: 3,
+          at: now.subtract(const Duration(minutes: 20)),
+        ),
+        ...noiseFloorBatch(
+          batchId: 'nf-before',
+          values: <num?>[-60, -61, -59],
+          target: 3,
+          at: now.subtract(const Duration(days: 1)),
+        ),
+      ]);
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      expect(find.textContaining('−56 dBFS'), findsOneWidget);
+      expect(find.textContaining('louder than before'), findsOneWidget);
+      // "Louder" is a direction, not a judgement. More hiss in a quiet room is
+      // not called worse, because the app cannot know what caused it.
+      for (final verdict in const <String>[
+        'good',
+        'bad',
+        'fine',
+        'healthy',
+        'problem',
+        'worse',
+        'better',
+      ]) {
+        expect(find.textContaining(verdict), findsNothing, reason: verdict);
+      }
+
+      await leave(tester);
+    });
+
+    testWidgets('the other direction reads as quieter', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      final now = DateTime.now();
+      await seedHistory(harness, <DeviceTestResult>[
+        ...noiseFloorBatch(
+          batchId: 'nf-after',
+          values: <num?>[-64, -65, -63],
+          target: 3,
+          at: now.subtract(const Duration(minutes: 20)),
+        ),
+        ...noiseFloorBatch(
+          batchId: 'nf-before',
+          values: <num?>[-60, -61, -59],
+          target: 3,
+          at: now.subtract(const Duration(days: 1)),
+        ),
+      ]);
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      expect(find.textContaining('−64 dBFS'), findsOneWidget);
+      expect(find.textContaining('quieter than before'), findsOneWidget);
+
+      await leave(tester);
+    });
+
+    testWidgets('THE SAME difference reads differently beside looser samples',
+        (tester) async {
+      // THE TEST THAT PROVES THE THRESHOLD IS DERIVED. Identical medians to the
+      // "louder" case above - −56 against −60, four decibels - but this batch's
+      // own samples spanned twelve. Four decibels of movement inside a
+      // twelve-decibel wobble is not evidence of anything, and a hard-coded
+      // threshold could not tell the two cases apart.
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      final now = DateTime.now();
+      await seedHistory(harness, <DeviceTestResult>[
+        ...noiseFloorBatch(
+          batchId: 'nf-after',
+          values: <num?>[-56, -50, -62],
+          target: 3,
+          at: now.subtract(const Duration(minutes: 20)),
+        ),
+        ...noiseFloorBatch(
+          batchId: 'nf-before',
+          values: <num?>[-60, -61, -59],
+          target: 3,
+          at: now.subtract(const Duration(days: 1)),
+        ),
+      ]);
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      expect(find.textContaining('−56 dBFS'), findsOneWidget);
+      expect(find.textContaining('about the same as before'), findsOneWidget);
+      expect(find.textContaining('louder than before'), findsNothing);
+
+      await openDetails(tester, 'noise floor');
+      expect(
+        find.textContaining('Counted as a change only past 12.0 dBFS'),
+        findsOneWidget,
+      );
+
+      await leave(tester);
+    });
+
+    testWidgets('two single runs cannot be compared, and it says so',
+        (tester) async {
+      // WHAT THE BARE-BOARD BASELINE ACTUALLY LOOKS LIKE: runs saved before
+      // batching existed have no batch id, so each is a batch of one and neither
+      // measured a wobble. There is no honest threshold, so there is no
+      // comparison - rather than a threshold picked to produce one.
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      final now = DateTime.now();
+      await seedHistory(harness, <DeviceTestResult>[
+        lone(-56, now.subtract(const Duration(minutes: 20))),
+        lone(-60, now.subtract(const Duration(days: 1))),
+      ]);
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      expect(find.textContaining('−56 dBFS'), findsOneWidget);
+      expect(find.textContaining('not enough to compare with'), findsOneWidget);
+
+      await openDetails(tester, 'noise floor');
+      expect(
+        find.textContaining('No run of this check has taken two samples'),
+        findsOneWidget,
+      );
+
+      await leave(tester);
+    });
+
+    testWidgets('an older batch lends its wobble to two single runs',
+        (tester) async {
+      // The same two lone runs, with one older batch behind them that DID take
+      // several samples. Its spread is a measurement of this check on this
+      // hardware, so it is the threshold rather than nothing.
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      final now = DateTime.now();
+      await seedHistory(harness, <DeviceTestResult>[
+        lone(-56, now.subtract(const Duration(minutes: 20))),
+        lone(-60, now.subtract(const Duration(days: 1))),
+        ...noiseFloorBatch(
+          batchId: 'nf-oldest',
+          values: <num?>[-60, -61, -59.5],
+          target: 3,
+          at: now.subtract(const Duration(days: 5)),
+        ),
+      ]);
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      // A 1.5 dB wobble, and four decibels clears it.
+      expect(find.textContaining('louder than before'), findsOneWidget);
+
+      await openDetails(tester, 'noise floor');
+      expect(
+        find.textContaining('Counted as a change only past 1.5 dBFS'),
+        findsOneWidget,
+      );
+
+      await leave(tester);
+    });
+
+    testWidgets('the headline drops the decimal and the details keep it',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await seedHistory(
+        harness,
+        noiseFloorBatch(
+          batchId: 'nf-tenths',
+          values: <num?>[-39.2, -40.1, -38.5],
+          target: 3,
+          at: DateTime.now().subtract(const Duration(minutes: 10)),
+        ),
+      );
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      // The samples spanned 1.6 dB, so the tenth in −39.2 is wobble wearing the
+      // clothes of precision. It is not on the face of the card.
+      expect(find.textContaining('−39 dBFS'), findsOneWidget);
+      expect(find.textContaining('−39.2 dBFS'), findsNothing);
+
+      await openDetails(tester, 'noise floor');
+
+      // Kept in full where somebody has asked for detail, and kept in the
+      // export, which this change did not touch.
+      expect(find.textContaining('middle −39.2 dBFS'), findsOneWidget);
+      expect(
+        find.textContaining('ranged −40.1 dBFS to −38.5 dBFS'),
+        findsOneWidget,
+      );
+
+      await leave(tester);
+    });
+
+    testWidgets('sensitivity leads with Average, and Loudest moves to details',
+        (tester) async {
+      // ONE METRIC LEADS. Loudest and Average used to sit on the card at equal
+      // weight, which left a user deciding which of them to believe before they
+      // could read either. Average is the level a voice actually arrives at;
+      // Loudest is one instant and moves with a plosive.
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await seedHistory(
+        harness,
+        sensitivityBatch(
+          batchId: 'sens-one',
+          average: <num?>[-27, -28, -26],
+          loudest: <num?>[-9, -10, -8],
+          target: 3,
+          at: DateTime.now().subtract(const Duration(minutes: 10)),
+        ),
+      );
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      expect(find.textContaining('−27 dBFS'), findsOneWidget);
+      // Loudest is nowhere on the face of the card.
+      expect(find.textContaining('Loudest'), findsNothing);
+      expect(find.textContaining('−9 dBFS'), findsNothing);
+
+      await openDetails(tester, 'sensitivity');
+
+      // Both readings, Average first because it is the one the card led with.
+      expect(find.textContaining('Average: middle −27.0 dBFS'), findsOneWidget);
+      expect(find.textContaining('Loudest: middle −9.0 dBFS'), findsOneWidget);
+
+      await leave(tester);
+    });
+
+    testWidgets('a cancelled batch stays visibly cancelled, condensed',
+        (tester) async {
+      // The run-on this replaced read "1 of 5 samples · stopped early · one run
+      // only, so there is no range to compare · cancelled" - four clauses saying
+      // two things. Short on the card, complete in the details.
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await seedHistory(harness, <DeviceTestResult>[
+        sample(
+          DeviceTestKind.noiseFloor,
+          at: DateTime.now().subtract(const Duration(minutes: 10)),
+          batchId: 'nf-cancelled',
+          index: 1,
+          target: 5,
+          outcome: DeviceTestOutcome.cancelled,
+          readings: const <DeviceTestReading>[
+            DeviceTestReading(
+              label: 'Noise floor (RMS)',
+              value: -57.4,
+              unit: 'dBFS',
+            ),
+          ],
+        ),
+      ]);
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      expect(
+        find.textContaining('measured today · 1 of 5 · stopped early'),
+        findsOneWidget,
+      );
+      // Not the run-on.
+      expect(
+        find.textContaining('one run only, so there is no range to compare'),
+        findsNothing,
+      );
+
+      await openDetails(tester, 'noise floor');
+
+      // Every clause is still on record where somebody asked for it.
+      expect(find.textContaining('1 of 5 samples'), findsOneWidget);
+      expect(
+        find.textContaining('one run only, so there is no range to compare'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('cancelled'), findsOneWidget);
+
+      await leave(tester);
+    });
+
+    testWidgets('Details is closed until tapped, and closes again',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await seedHistory(
+        harness,
+        noiseFloorBatch(
+          batchId: 'nf-toggle',
+          values: <num?>[-60, -61, -59],
+          target: 3,
+          at: DateTime.now().subtract(const Duration(minutes: 10)),
+        ),
+      );
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      final show =
+          find.bySemanticsLabel('Show the details of the noise floor check');
+      for (var i = 0; i < 20 && show.evaluate().isEmpty; i++) {
+        await tester.drag(find.byType(ListView), const Offset(0, -120));
+        await tester.pump();
+      }
+      await tester.scrollUntilVisible(show, 120);
+      await tester.pump();
+
+      // COLLAPSED BY DEFAULT.
+      expect(find.textContaining('samples:'), findsNothing);
+      // And a real 44px button to a screen reader, with a label that says which
+      // way the tap goes.
+      final size = tester.getSize(show);
+      expect(size.width, greaterThanOrEqualTo(AppShape.minTapTarget));
+      expect(size.height, greaterThanOrEqualTo(AppShape.minTapTarget));
+
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('samples:'), findsOneWidget);
+
+      final hide =
+          find.bySemanticsLabel('Hide the details of the noise floor check');
+      expect(hide, findsOneWidget);
+      await tester.tap(hide);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('samples:'), findsNothing);
+
+      await leave(tester);
+    });
+
+    testWidgets('each check has its own disclosure, opened independently',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      final now = DateTime.now();
+      await seedHistory(harness, <DeviceTestResult>[
+        ...noiseFloorBatch(
+          batchId: 'nf-only',
+          values: <num?>[-60, -61, -59],
+          target: 3,
+          at: now.subtract(const Duration(minutes: 20)),
+        ),
+        ...sensitivityBatch(
+          batchId: 'sens-only',
+          average: <num?>[-27, -28, -26],
+          loudest: <num?>[-9, -10, -8],
+          target: 3,
+          at: now.subtract(const Duration(minutes: 40)),
+        ),
+      ]);
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+      await openDetails(tester, 'noise floor');
+
+      // The noise floor's samples are out; sensitivity's are not.
+      expect(find.textContaining('Hiss level: middle'), findsOneWidget);
+      expect(find.textContaining('Average: middle'), findsNothing);
+
+      await leave(tester);
+    });
+
+    testWidgets('a reading that was never taken leads with a dash, not a zero',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await seedHistory(
+        harness,
+        noiseFloorBatch(
+          batchId: 'nf-nothing',
+          values: <num?>[null, null],
+          target: 2,
+          at: DateTime.now().subtract(const Duration(minutes: 10)),
+        ),
+      );
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      expect(find.textContaining('— dBFS'), findsOneWidget);
+      expect(find.textContaining('no reading this time'), findsOneWidget);
+      expect(find.textContaining('0 dBFS'), findsNothing);
+
+      await leave(tester);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // THE BATCHING, WHICH IS WHAT EARNS THE MIC CHECK ITS PLACE
   //
   // Five runs on the bare board put the sensitivity spread at 0.83 dB. That is
@@ -1464,7 +2067,7 @@ void main() {
   // spread was measured rather than assumed.
   // -------------------------------------------------------------------------
   group('the fixed sample counts', () {
-    testWidgets('there is NO control for them, only an explanation',
+    testWidgets('there is neither a control for them nor an explanation',
         (tester) async {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
@@ -1482,51 +2085,25 @@ void main() {
         findsNothing,
       );
 
-      // What stays is WHY it repeats, which is an observer's business - one
-      // short line, and the reasoning behind the circled i.
+      // AND SO IS THE EXPLANATION THAT REPLACED IT. A heading, a line naming
+      // both counts and a circled i about sampling statistics were three more
+      // things on a card whose whole problem was how much it showed - and the
+      // counts are fixed internally, so the machinery is not a user's business.
+      // `DeviceTestSampling` still governs the runs; it is just not narrated.
       expect(
         find.text('Each check is taken several times'),
-        findsOneWidget,
+        findsNothing,
       );
-      expect(find.textContaining('median'), findsNothing);
-
-      await tester.tap(find.bySemanticsLabel('About Repeated checks'));
-      await tester.pumpAndSettle();
-
+      expect(find.bySemanticsLabel('About Repeated checks'), findsNothing);
       expect(
-        find.textContaining('a single go is not enough to compare'),
-        findsOneWidget,
+        find.textContaining('Noise floor ${DeviceTestSampling.noiseFloorSamples} times'),
+        findsNothing,
       );
-      expect(find.textContaining('reporting the middle one'), findsOneWidget);
-      expect(find.textContaining('stop early'), findsOneWidget);
-      // Plain here too: no median, no n, no spread.
       expect(find.textContaining('median'), findsNothing);
       expect(find.textContaining('spread'), findsNothing);
 
-      await tester.tap(find.text('Close'));
-      await tester.pumpAndSettle();
-
       await leave(tester);
     });
-
-    testWidgets('the screen names the two counts, and reads them from the model',
-        (tester) async {
-      final harness = ViewHarness();
-      addTearDown(harness.dispose);
-
-      await open(tester, harness);
-      await reveal(tester, 'MIC CHECK');
-
-      final noise = DeviceTestSampling.noiseFloorSamples;
-      final voice = DeviceTestSampling.sensitivitySamples;
-      expect(
-        find.text('Noise floor $noise times, voice $voice times.'),
-        findsOneWidget,
-      );
-
-      await leave(tester);
-    });
-
 
     testWidgets('a running check says which sample of how many it is on',
         (tester) async {

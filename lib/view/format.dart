@@ -85,6 +85,29 @@ abstract final class Fmt {
     return '${text.replaceFirst('-', '−')}$suffix';
   }
 
+  /// The same measurement with the decimal dropped: `−39 dBFS`, `— dBFS`.
+  ///
+  /// FOR THE ONE FIGURE A CARD LEADS WITH, and nowhere else. The acoustic
+  /// readings move about a decibel from one sample of a batch to the next, so
+  /// the tenth in `−39.2 dBFS` is noise wearing the clothes of precision: it
+  /// invites somebody to read a change the next run would not reproduce.
+  /// [measurement] keeps the tenth, and it is what the details and the export
+  /// still use - nothing is lost, it is just not the first thing shown.
+  ///
+  /// Only the decibel units round; anything else defers to [measurement],
+  /// because `0.41%` rounded to a whole number is `0%`, which is not the same
+  /// fact.
+  static String headline(num? value, String unit) {
+    if (unit != 'dBFS' && unit != 'dBm') return measurement(value, unit);
+    final suffix = unit.isEmpty ? '' : ' $unit';
+    if (value == null) return '—$suffix';
+    final text = value.toDouble().toStringAsFixed(0);
+    // `(-0.4).toStringAsFixed(0)` is `-0`, and a signed zero reads as a
+    // measurement rather than as rounding.
+    final signed = text == '-0' ? '0' : text.replaceFirst('-', '−');
+    return '$signed$suffix';
+  }
+
   /// `16 kHz mono` / `48 kHz stereo`.
   static String streamSummary(int sampleRateHz, int channels) {
     final khz = sampleRateHz / 1000;
