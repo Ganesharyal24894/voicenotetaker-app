@@ -9,6 +9,8 @@ import '../model/audio_codec.dart';
 import '../model/battery_bars.dart';
 import '../model/device_test_aggregate.dart';
 import '../model/device_test_result.dart';
+import '../model/recording_info.dart';
+import '../services/transcription/speech_model_store.dart';
 import 'format.dart';
 import 'placeholder_data.dart';
 import 'theme.dart';
@@ -323,6 +325,10 @@ class _DeveloperViewState extends State<DeveloperView> {
                 // who use this screen already expect to find it.
                 const SizedBox(height: 10),
                 _BatteryCard(controller: _controller),
+                if (_controller.transcriptionAvailable) ...<Widget>[
+                  const SizedBox(height: 10),
+                  _TranscriptionSpikeCard(controller: _controller),
+                ],
               ],
             ),
           ),
@@ -672,4 +678,186 @@ List<String> _testHistoryLines(List<DeviceTestResult> history) {
       if (result.note != null) '  note: ${result.note}',
     ],
   ];
+}
+
+/// On-device speech-to-text, as a MEASUREMENT - the feasibility spike.
+///
+/// Not the transcription feature: that UI is still to be designed with the
+/// owner. This card exists to answer one question on real hardware - how long
+/// does the model take to load and decode on this phone - and to show the
+/// words it produced. It lives on this debug-only screen for that reason, even
+/// though it does not change the recorder.
+///
+/// Pick a saved recording, pick a thread count, run. The model is loaded for
+/// the run and released after it; nothing stays in memory between taps.
+class _TranscriptionSpikeCard extends StatefulWidget {
+  const _TranscriptionSpikeCard({required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<_TranscriptionSpikeCard> createState() =>
+      _TranscriptionSpikeCardState();
+}
+
+class _TranscriptionSpikeCardState extends State<_TranscriptionSpikeCard> {
+  AppController get _controller => widget.controller;
+
+  String? _selectedPath;
+  int _threads = 2;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_controller.refreshSpeechModelStatus());
+  }
+
+  RecordingInfo? _selected(List<RecordingInfo> recordings) {
+    if (recordings.isEmpty) return null;
+    for (final recording in recordings) {
+      if (recording.path == _selectedPath) return recording;
+    }
+    return recordings.first;
+  }
+
+  static String _ms(Duration d) => '${d.inMilliseconds} ms';
+
+  static String _mb(int? kb) =>
+      kb == null ? PlaceholderData.unknownValue : '${(kb / 1024).round()} MB';
+
+  @override
+  Widget build(BuildContext context) {
+    final recordings = _controller.recordings;
+    final selected = _selected(recordings);
+    final status = _controller.speechModelStatus;
+    final result = _controller.lastTranscription;
+    final error = _controller.transcriptionError;
+    final busy = _controller.isTranscribing;
+    final ready = status?.isReady ?? false;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const SectionCaption('Transcription spike', small: true),
+          const SizedBox(height: 12),
+          KeyValueRow(
+            label: 'Model',
+            value: status == null
+                ? 'checking'
+                : switch (status.availability) {
+                    SpeechModelAvailability.ready => 'installed',
+                    SpeechModelAvailability.missing => 'not installed',
+                    SpeechModelAvailability.incomplete => 'incomplete',
+                  },
+            valueColor: ready ? AppColors.connected : AppColors.warning,
+          ),
+          if (status != null && !ready) ...<Widget>[
+            const SizedBox(height: 8),
+            SelectableText(
+              '${status.directory}\n${status.problems.join('\n')}',
+              style: AppText.footnote11,
+            ),
+          ],
+          const SizedBox(height: 12),
+          if (recordings.isEmpty)
+            const Text('No recordings to transcribe.',
+                style: AppText.footnote12)
+          else
+            DropdownButton<String>(
+              key: const ValueKey<String>('stt-recording'),
+              isExpanded: true,
+              value: selected!.path,
+              dropdownColor: AppColors.card,
+              style: AppText.label13,
+              onChanged: busy
+                  ? null
+                  : (path) => setState(() => _selectedPath = path),
+              items: <DropdownMenuItem<String>>[
+                for (final recording in recordings)
+                  DropdownMenuItem<String>(
+                    value: recording.path,
+                    child: Text(
+                      '${recording.name}  '
+                      '${recording.duration == null ? '' : Fmt.duration(recording.duration!)}',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+            ),
+          const SizedBox(height: 12),
+          Row(
+            children: <Widget>[
+              for (final threads in const <int>[2, 4]) ...<Widget>[
+                if (threads != 2) const SizedBox(width: 8),
+                Expanded(
+                  child: SegmentButton(
+                    label: '$threads threads',
+                    selected: _threads == threads,
+                    enabled: !busy,
+                    onTap: () => setState(() => _threads = threads),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 12),
+          QuietButton(
+            label: busy
+                ? 'Transcribing ${_controller.transcriptionDone}'
+                    '/${_controller.transcriptionTotal}'
+                : 'Transcribe',
+            onPressed: busy || !ready || selected == null
+                ? null
+                : () => _controller.transcribe(selected, numThreads: _threads),
+          ),
+          if (error != null) ...<Widget>[
+            const SizedBox(height: 12),
+            SelectableText(
+              error,
+              style: AppText.footnote11.copyWith(color: AppColors.warning),
+            ),
+          ],
+          if (result != null) ...<Widget>[
+            const SizedBox(height: 12),
+            KeyValueRow(label: 'Threads', value: '${result.numThreads}'),
+            const SizedBox(height: 8),
+            KeyValueRow(label: 'Audio', value: _ms(result.audioDuration)),
+            const SizedBox(height: 8),
+            KeyValueRow(label: 'Load', value: _ms(result.loadTime)),
+            const SizedBox(height: 8),
+            KeyValueRow(label: 'Decode', value: _ms(result.decodeTime)),
+            const SizedBox(height: 8),
+            KeyValueRow(
+              label: 'Real-time factor',
+              value: result.realTimeFactor == null
+                  ? PlaceholderData.unknownValue
+                  : result.realTimeFactor!.toStringAsFixed(3),
+            ),
+            const SizedBox(height: 8),
+            KeyValueRow(label: 'Wall', value: _ms(result.wallTime)),
+            const SizedBox(height: 8),
+            KeyValueRow(
+              label: 'Memory',
+              value: '${_mb(result.rssBeforeLoadKb)} → '
+                  '${_mb(result.peakRssKb)} → '
+                  '${_mb(result.rssAfterReleaseKb)}',
+            ),
+            const SizedBox(height: 12),
+            SelectableText(
+              result.text.isEmpty ? '(no speech recognised)' : result.text,
+              key: const ValueKey<String>('stt-text'),
+              style: AppText.body13,
+            ),
+          ],
+          const SizedBox(height: 12),
+          const Text(
+            'Memory is the whole app, before load → peak → after release. '
+            'The model is loaded for each run and released after it.',
+            style: AppText.footnote11,
+          ),
+        ],
+      ),
+    );
+  }
 }

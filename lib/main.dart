@@ -6,6 +6,9 @@ import 'drivers/audio_player_just_audio.dart';
 import 'drivers/ble_transport_universal.dart';
 import 'drivers/file_store.dart';
 import 'drivers/platform_settings_channel.dart';
+import 'drivers/speech_recognizer_sherpa.dart';
+import 'services/transcription/speech_model_store.dart';
+import 'services/transcription/transcription_service.dart';
 import 'view/app_root.dart';
 import 'view/theme.dart';
 
@@ -25,11 +28,24 @@ Future<void> main() async {
   // is free to evict those, and a deleted voice note is not recoverable.
   final documents = await directories.documentsDirectory();
 
+  // Speech models are app data, not the user's documents, and far too large
+  // to bundle: they are installed into the support directory (for now by
+  // `adb push`, later by a download) and loaded only for a transcription.
+  final support = await directories.supportDirectory();
+
   final controller = AppController(
     transport: UniversalBleTransport(),
     fileStore: fileStore,
     audioPlayer: JustAudioPlayer(),
     platformSettings: const MethodChannelPlatformSettings(),
+    transcriptionService: TranscriptionService(
+      fileStore: fileStore,
+      models: SpeechModelStore(
+        fileStore: fileStore,
+        modelsDirectory: fileStore.join(support, 'models'),
+      ),
+      recognizer: const SherpaOnnxSpeechRecognizer(),
+    ),
     recordingsDirectory: fileStore.join(documents, 'recordings'),
   );
 

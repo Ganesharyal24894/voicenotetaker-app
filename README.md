@@ -75,6 +75,11 @@ lib/
                                                + IoFileStore (dart:io)
                  app_directories.dart          abstract "where may I write?"
                                                + path_provider implementation
+                 speech_recognizer.dart        abstract offline STT: one job =
+                                               load, decode windows, release
+                 speech_recognizer_sherpa.dart sherpa_onnx implementation, in
+                                               its own isolate per job
+                 process_memory.dart           /proc RSS probe (Linux/Android)
 
   services/    Domain logic on top of the driver interfaces. No package
                imports, no dart:io.
@@ -90,6 +95,11 @@ lib/
                                            first, with real metadata; delete
                  level_meter.dart          peak / RMS dBFS of the PCM the
                                            app already decodes
+                 transcription/            offline speech-to-text: window
+                                           planning (8 s), model presence
+                                           check, the transcription service.
+                                           SPIKE - see doc/agentFindings/
+                                           on-device-stt.md
 
   controller/  app_controller.dart — orchestration and app state.
   view/        THE UI, built to `design/Main.dc.html`. May use controller/

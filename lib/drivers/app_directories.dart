@@ -24,6 +24,15 @@ abstract class AppDirectories {
   /// directory is not acceptable, because recordings there are evicted under
   /// storage pressure.
   Future<String> documentsDirectory();
+
+  /// Directory for files the APP needs and the user never sees - downloaded
+  /// speech models, for one.
+  ///
+  /// Kept until uninstall like [documentsDirectory], but not the user's
+  /// documents: on iOS it is not exposed through the Files app, and on
+  /// Android it is the app's private `files` directory, which is where
+  /// `adb shell run-as` can place a model during development.
+  Future<String> supportDirectory();
 }
 
 /// `path_provider` implementation.
@@ -42,6 +51,19 @@ class PathProviderAppDirectories implements AppDirectories {
     } on Object catch (error) {
       throw AppDirectoriesException(
         'the platform did not provide a documents directory',
+        error,
+      );
+    }
+  }
+
+  @override
+  Future<String> supportDirectory() async {
+    try {
+      final directory = await getApplicationSupportDirectory();
+      return directory.path;
+    } on Object catch (error) {
+      throw AppDirectoriesException(
+        'the platform did not provide a support directory',
         error,
       );
     }

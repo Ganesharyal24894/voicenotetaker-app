@@ -18,11 +18,14 @@ import '../model/link_health.dart';
 import '../model/recording_info.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
+import '../model/transcription.dart';
 import '../services/device_test_service.dart';
 import '../services/device_test_store.dart';
 import '../services/link_monitor.dart';
 import '../services/library_service.dart';
 import '../services/recording_service.dart';
+import '../services/transcription/speech_model_store.dart';
+import '../services/transcription/transcription_service.dart';
 
 /// What the app is doing right now, as one flat enum the placeholder view can
 /// render without any further interpretation.
@@ -68,6 +71,7 @@ class AppController extends ChangeNotifier {
     LinkMonitor? linkMonitor,
     AudioPlayer? audioPlayer,
     PlatformSettings? platformSettings,
+    TranscriptionService? transcriptionService,
     AudioCodec preferredCodec = AudioCodec.imaAdpcm,
     // The public parameter name `preferredCodec:` is part of the existing API,
     // while the field behind it is private because it is now reached through a
@@ -80,6 +84,7 @@ class AppController extends ChangeNotifier {
         _fileStore = fileStore,
         _player = audioPlayer,
         _settings = platformSettings,
+        _transcription = transcriptionService,
         _library = libraryService ??
             LibraryService(
               fileStore: fileStore,
@@ -132,6 +137,84 @@ class AppController extends ChangeNotifier {
   DeviceTestService get deviceTests {
     _testSubscription ??= _tests.changes.listen((_) => notifyListeners());
     return _tests;
+  }
+
+  /// Offline speech-to-text. Null when the app was built without an engine;
+  /// every transcription member then reports it as unavailable.
+  ///
+  /// FEASIBILITY SPIKE. Reached only from Developer options while the product
+  /// UI for transcripts is still to be designed with the owner. The service
+  /// loads the model per job and releases it afterwards, so holding this
+  /// reference costs nothing between jobs.
+  final TranscriptionService? _transcription;
+
+  bool _transcribing = false;
+  int _transcriptionDone = 0;
+  int _transcriptionTotal = 0;
+  SpeechModelStatus? _speechModelStatus;
+  TranscriptionResult? _lastTranscription;
+  String? _transcriptionError;
+
+  bool get transcriptionAvailable => _transcription != null;
+
+  bool get isTranscribing => _transcribing;
+
+  /// Windows decoded so far, and of how many, for the job in progress.
+  int get transcriptionDone => _transcriptionDone;
+  int get transcriptionTotal => _transcriptionTotal;
+
+  /// As of the last [refreshSpeechModelStatus]; null before it.
+  SpeechModelStatus? get speechModelStatus => _speechModelStatus;
+
+  TranscriptionResult? get lastTranscription => _lastTranscription;
+
+  String? get transcriptionError => _transcriptionError;
+
+  /// Re-checks whether the speech model is installed. Cheap: two `stat`s.
+  Future<void> refreshSpeechModelStatus() async {
+    final service = _transcription;
+    if (service == null) return;
+    _speechModelStatus = await service.modelStatus();
+    notifyListeners();
+  }
+
+  /// Transcribes [recording] with [numThreads] threads and keeps the result.
+  ///
+  /// Failures land in [transcriptionError] rather than being thrown: this is
+  /// driven straight from a button.
+  Future<void> transcribe(
+    RecordingInfo recording, {
+    required int numThreads,
+  }) async {
+    final service = _transcription;
+    if (service == null || _transcribing) return;
+    _transcribing = true;
+    _transcriptionDone = 0;
+    _transcriptionTotal = 0;
+    _transcriptionError = null;
+    notifyListeners();
+    try {
+      final result = await service.transcribe(
+        recording.path,
+        numThreads: numThreads,
+        onProgress: (done, total) {
+          _transcriptionDone = done;
+          _transcriptionTotal = total;
+          notifyListeners();
+        },
+      );
+      _lastTranscription = result;
+      // Logged whole, so a measurement taken on a phone can be read back over
+      // adb without transcribing it off the screen.
+      debugPrint('STT $result');
+      debugPrint('STT text: ${result.text}');
+    } on TranscriptionException catch (error) {
+      _transcriptionError = error.toString();
+      debugPrint('STT failed: $error');
+    } finally {
+      _transcribing = false;
+      notifyListeners();
+    }
   }
 
   /// Null when the app was built without a playback driver; every playback

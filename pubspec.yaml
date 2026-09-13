@@ -24,8 +24,18 @@ dependencies:
   # team. Named in lib/drivers/app_directories.dart and nowhere else.
   path_provider: ^2.1.6
 
+  # Offline speech-to-text runtime (k2-fsa, Apache-2.0). Runs ONNX models on
+  # the CPU with no network. Pinned exactly: the Dart bindings mirror a native
+  # C API whose config structs change between releases. Named in
+  # lib/drivers/speech_recognizer_sherpa.dart and nowhere else.
+  sherpa_onnx: 1.13.8
+
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+
+  # On-device tests: runs service + engine inside the app on a real phone.
+  integration_test:
     sdk: flutter
 
   # Codegen-free mocking, used for the fake BleTransport in tests.

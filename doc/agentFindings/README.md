@@ -25,6 +25,7 @@ post. Treat **[V]** with a citation as reliable, **[I]** as a starting point,
 |---|---|
 | `flutter-ble-audio.md` | BLE package choice and its licensing trap, permissions, MTU, playback, background execution |
 | `ios-without-mac.md` | Building, signing and shipping iOS with no Apple hardware |
+| `on-device-stt.md` | Offline Hindi speech-to-text on the phone: sherpa_onnx + IndicConformer, measured on a Xiaomi |
 
 The firmware repo has its own `doc/agentFindings/` covering the nRF52840,
 the PDM microphone, and IMU/ML/power.
