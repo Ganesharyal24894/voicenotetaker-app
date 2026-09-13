@@ -43,6 +43,14 @@ abstract class AudioPlayer {
   Future<void> stop();
   Future<void> seek(Duration position);
 
+  /// Sets the playback rate, `1.0` being normal speed.
+  ///
+  /// Pitch-corrected where the platform supports it, which is what makes
+  /// 1.5x usable on speech. Implementations must keep the rate across a
+  /// later [load]: a listener who chose a speed means it for the next
+  /// recording too, not just this one.
+  Future<void> setSpeed(double speed);
+
   /// Releases platform resources. The player is unusable afterwards.
   Future<void> dispose();
 }

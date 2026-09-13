@@ -100,6 +100,17 @@ class FakeAudioPlayer implements AudioPlayer {
     _emit();
   }
 
+  /// Recorded so tests can assert the rate really reached the driver --
+  /// the chip used to cycle a label and stop there.
+  double speed = 1.0;
+
+  @override
+  Future<void> setSpeed(double value) async {
+    _check();
+    speed = value;
+    calls.add('setSpeed($value)');
+  }
+
   @override
   Future<void> seek(Duration position) async {
     _check();
@@ -396,7 +407,12 @@ void main() {
       await controller.playRecording(recording);
       await Future<void>.delayed(Duration.zero);
 
-      expect(player.calls, <String>['load($path1)', 'play']);
+      // setSpeed sits between them on purpose: the rate is re-applied after
+      // every load so opening another note cannot silently reset it.
+      expect(
+        player.calls,
+        <String>['load($path1)', 'setSpeed(1.0)', 'play'],
+      );
       expect(controller.nowPlaying, recording);
       expect(controller.isPlaying, isTrue);
       expect(

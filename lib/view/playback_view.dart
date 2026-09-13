@@ -60,9 +60,9 @@ class PlaybackView extends StatefulWidget {
 }
 
 class _PlaybackViewState extends State<PlaybackView> {
+  /// Cycle order for the speed chip. The rate itself lives on the
+  /// controller; this is only the order the chip walks through.
   static const List<double> _speeds = <double>[1.0, 1.5, 2.0, 0.5];
-
-  int _speedIndex = 0;
 
   /// True while a controller call is in flight, so the screen can say
   /// "Loading" instead of drawing a stopped transport over a file that is
@@ -353,9 +353,11 @@ class _PlaybackViewState extends State<PlaybackView> {
             children: <Widget>[
               TapTarget(
                 semanticLabel: 'Playback speed',
-                onTap: () => setState(
-                  () => _speedIndex = (_speedIndex + 1) % _speeds.length,
-                ),
+                onTap: () {
+                  final current = _speeds.indexOf(widget.controller.playbackSpeed);
+                  final next = _speeds[(current + 1) % _speeds.length];
+                  unawaited(widget.controller.setPlaybackSpeed(next));
+                },
                 child: Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -364,7 +366,7 @@ class _PlaybackViewState extends State<PlaybackView> {
                     borderRadius: AppShape.pill,
                   ),
                   child: Text(
-                    '${_speeds[_speedIndex].toStringAsFixed(1)}×',
+                    '${widget.controller.playbackSpeed.toStringAsFixed(1)}×',
                     style: AppText.label13,
                   ),
                 ),

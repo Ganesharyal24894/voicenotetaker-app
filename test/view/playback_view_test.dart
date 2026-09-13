@@ -363,12 +363,54 @@ void main() {
     verifyNever(() => screen.player.play());
   });
 
-  testWidgets('the speed chip cycles', (tester) async {
-    await _open(tester);
+  // The chip used to cycle its own label and nothing else: there was no
+  // speed on the controller and none on the driver interface, so every
+  // rate but 1.0x was a lie told by a button. These assert it reaches the
+  // player, which is the part that was missing.
+  testWidgets('the speed chip cycles AND drives the player', (tester) async {
+    final fake = FakePlayback();
+    final screen = await _open(tester, fake: fake);
 
     await tester.tap(find.text('1.0×'));
     await tester.pump();
     expect(find.text('1.5×'), findsOneWidget);
+    verify(() => fake.player.setSpeed(1.5)).called(1);
+    expect(screen.harness.controller.playbackSpeed, 1.5);
+
+    await tester.tap(find.text('1.5×'));
+    await tester.pump();
+    expect(find.text('2.0×'), findsOneWidget);
+    verify(() => fake.player.setSpeed(2.0)).called(1);
+
+    // Wraps past the end of the list to the slow option.
+    await tester.tap(find.text('2.0×'));
+    await tester.pump();
+    expect(find.text('0.5×'), findsOneWidget);
+    verify(() => fake.player.setSpeed(0.5)).called(1);
+  });
+
+  testWidgets('the chosen rate survives opening another recording',
+      (tester) async {
+    final fake = FakePlayback();
+    final screen = await _open(tester, fake: fake);
+
+    await tester.tap(find.text('1.0×'));
+    await tester.pump();
+    expect(screen.harness.controller.playbackSpeed, 1.5);
+
+    // A different file: the rate must be re-applied, not quietly reset.
+    final other = RecordingInfo(
+      path: '/tmp/another.wav',
+      name: 'Another note',
+      recordedAt: DateTime.now(),
+      duration: const Duration(seconds: 30),
+      sizeBytes: 1000,
+    );
+    await screen.harness.controller.playRecording(other);
+    await tester.pump();
+
+    verify(() => fake.player.setSpeed(1.5)).called(greaterThanOrEqualTo(1));
+    expect(screen.harness.controller.playbackSpeed, 1.5);
   });
 
   testWidgets('transcription is a placeholder and says so', (tester) async {

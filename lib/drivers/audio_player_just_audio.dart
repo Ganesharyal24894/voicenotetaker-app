@@ -124,6 +124,19 @@ class JustAudioPlayer implements AudioPlayer {
   }
 
   @override
+  Future<void> setSpeed(double speed) async {
+    _ensureUsable();
+    try {
+      // just_audio applies this to the player, not to the item, so it
+      // survives a later setFilePath -- which is the behaviour the
+      // interface asks for.
+      await _player.setSpeed(speed);
+    } on Object catch (e) {
+      throw AudioPlayerException('could not change playback speed', e);
+    }
+  }
+
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;

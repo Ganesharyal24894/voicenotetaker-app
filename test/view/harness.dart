@@ -49,6 +49,7 @@ class FakePlayback {
     when(() => player.pause()).thenAnswer((_) async {});
     when(() => player.stop()).thenAnswer((_) async {});
     when(() => player.seek(any())).thenAnswer((_) async {});
+    when(() => player.setSpeed(any())).thenAnswer((_) async {});
     when(() => player.dispose()).thenAnswer((_) async {});
   }
 

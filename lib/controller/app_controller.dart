@@ -126,6 +126,7 @@ class AppController extends ChangeNotifier {
   LevelReading? _level;
   List<RecordingInfo> _recordings = const <RecordingInfo>[];
   PlaybackState _playback = PlaybackState.idle;
+  double _playbackSpeed = 1.0;
   RecordingInfo? _nowPlaying;
   String? _playbackError;
   ScanOutcome _scanOutcome = ScanOutcome.pending;
@@ -175,6 +176,14 @@ class AppController extends ChangeNotifier {
 
   /// Position, duration and playing/paused of the loaded recording.
   PlaybackState get playbackState => _playback;
+
+  /// Playback rate, `1.0` being normal speed.
+  ///
+  /// Held HERE and not in the playback screen, because a rate that lives in
+  /// view state is lost the moment the screen is popped -- and a listener who
+  /// chose 1.5x means it for the next recording too. The screen renders this
+  /// rather than remembering its own.
+  double get playbackSpeed => _playbackSpeed;
 
   /// The recording [playbackState] describes, when it was opened through
   /// [playRecording].
@@ -622,6 +631,10 @@ class AppController extends ChangeNotifier {
     try {
       if (_nowPlaying?.path != recording.path) {
         await player.load(recording.path);
+        // Re-applied rather than assumed: the interface promises the rate
+        // survives a load, but a future implementation that resets it would
+        // otherwise silently drop the listener's choice.
+        await player.setSpeed(_playbackSpeed);
         _nowPlaying = recording;
       }
       await player.play();
@@ -678,6 +691,24 @@ class AppController extends ChangeNotifier {
       return pausePlayback();
     }
     return playRecording(recording);
+  }
+
+  /// Changes the playback rate and keeps it for later recordings.
+  ///
+  /// Applied to the player immediately when one exists, and re-applied after
+  /// every load, so the rate is not silently reset by opening another note.
+  Future<void> setPlaybackSpeed(double speed) async {
+    if (speed <= 0) return;
+    _playbackSpeed = speed;
+    notifyListeners();
+    final player = _player;
+    if (player == null) return;
+    try {
+      await player.setSpeed(speed);
+    } on AudioPlayerException catch (e) {
+      _playbackError = e.message;
+      notifyListeners();
+    }
   }
 
   Future<void> seekPlayback(Duration position) async {
