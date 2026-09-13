@@ -10,10 +10,14 @@ import '../model/audio_codec.dart';
 import '../model/battery_bars.dart';
 import '../model/battery_status.dart';
 import '../model/device_state.dart';
+import '../model/device_test_result.dart';
+import '../model/die_temperature.dart';
 import '../model/level_reading.dart';
 import '../model/recording_info.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
+import '../services/device_test_service.dart';
+import '../services/device_test_store.dart';
 import '../services/library_service.dart';
 import '../services/recording_service.dart';
 
@@ -40,6 +44,7 @@ class AppController extends ChangeNotifier {
     required this._recordingsDirectory,
     RecordingService? recordingService,
     LibraryService? libraryService,
+    DeviceTestService? deviceTestService,
     AudioPlayer? audioPlayer,
     PlatformSettings? platformSettings,
     AudioCodec preferredCodec = AudioCodec.imaAdpcm,
@@ -48,6 +53,7 @@ class AppController extends ChangeNotifier {
     // notifying setter - so an initializing formal is not available here.
     // ignore: prefer_initializing_formals
   })  : _preferredCodec = preferredCodec,
+        _injectedTests = deviceTestService,
         _transport = transport,
         _fileStore = fileStore,
         _player = audioPlayer,
@@ -65,6 +71,39 @@ class AppController extends ChangeNotifier {
   final String _recordingsDirectory;
   final RecordingService _recorder;
   final LibraryService _library;
+
+  /// Supplied by tests that need shorter windows than a three-minute soak.
+  final DeviceTestService? _injectedTests;
+
+  /// The device-test harness - the five enclosure measurements and their saved
+  /// history.
+  ///
+  /// `late final` rather than an initializing formal because the wake test
+  /// needs [disconnect], and `this` is not available in an initializer list.
+  /// THE LINK STAYS THE CONTROLLER'S: the service is handed the one method it
+  /// must not reimplement, so nothing below `controller/` ever ends a link
+  /// behind the rest of the app's back.
+  late final DeviceTestService _tests = _injectedTests ??
+      DeviceTestService(
+        transport: _transport,
+        store: DeviceTestStore(
+          fileStore: _fileStore,
+          directory: _recordingsDirectory,
+        ),
+        disconnectLink: disconnect,
+      );
+
+  /// The harness, for the developer screen to render and drive.
+  ///
+  /// Subscribing HERE rather than in [initialise] on purpose: the developer
+  /// screen renders a running test's elapsed time and live counters, and those
+  /// arrive on the service's own stream. A subscription set up in `initialise`
+  /// would be missing in every test that builds a screen without starting the
+  /// app, and the readout would sit frozen while the test ran.
+  DeviceTestService get deviceTests {
+    _testSubscription ??= _tests.changes.listen((_) => notifyListeners());
+    return _tests;
+  }
 
   /// Null when the app was built without a playback driver; every playback
   /// method is then a no-op rather than a crash.
@@ -109,6 +148,16 @@ class AppController extends ChangeNotifier {
   /// (`0xFF` on the wire). Neither may ever be rendered as 0%.
   BatteryStatus? _battery;
 
+  /// The device's die temperature, or null when it is unknown: nothing is
+  /// connected, the read failed, or the firmware predates `fe07`.
+  ///
+  /// The same third state [_autoSleep] and [_battery] have, for the same
+  /// reason. And the same SECOND unknown nested inside it: a [DieTemperature]
+  /// whose `deciCelsius` is null is a device that has the characteristic but no
+  /// reading (`0x8000` on the wire). Neither may ever be rendered as 0 \u00B0C,
+  /// which would read as a freezing room.
+  DieTemperature? _temperature;
+
   /// The bucketed view of [_battery], and the ONLY place the hysteresis state
   /// lives.
   ///
@@ -123,6 +172,8 @@ class AppController extends ChangeNotifier {
 
   StreamSubscription<DiscoveredDevice>? _scanSubscription;
   StreamSubscription<BatteryStatus>? _batterySubscription;
+  StreamSubscription<DieTemperature>? _temperatureSubscription;
+  StreamSubscription<void>? _testSubscription;
   StreamSubscription<BleConnectionStatus>? _connectionSubscription;
   StreamSubscription<CaptureStats>? _statsSubscription;
   StreamSubscription<LevelReading>? _levelSubscription;
@@ -252,6 +303,57 @@ class AppController extends ChangeNotifier {
   /// sitting astride a boundary.
   BatteryBars get batteryBars => _batteryBars;
 
+  /// Whether the connected device reported a die temperature at all.
+  ///
+  /// False means the readout has nothing truthful to show and must be
+  /// presented as unavailable - not as 0 °C. Firmware without `fe07`
+  /// looks exactly like this.
+  bool get temperatureAvailable => _temperature != null;
+
+  /// The nRF52840's DIE temperature in °C, or null when there is no
+  /// reading.
+  ///
+  /// Null covers both unknowns: no `fe07` on this firmware, and `fe07`
+  /// reporting `0x8000`.
+  ///
+  /// A DIE temperature. The sensor shares a package with the CPU and the radio,
+  /// so it sits well above the room - and further above it again inside a
+  /// plastic case with a cell underneath, which is exactly why it is worth
+  /// measuring before and after. Anything that labels this as ambient is wrong.
+  double? get dieTemperatureCelsius => _temperature?.celsius;
+
+  /// The reading itself, for callers that want the raw decidegrees.
+  DieTemperature? get dieTemperature => _temperature;
+
+  /// Why a streaming device test cannot run right now, or null when one can.
+  ///
+  /// The three-state discipline the auto-sleep and battery readouts follow: a
+  /// test with nothing truthful behind it is offered as unavailable WITH A
+  /// REASON, never as a control that produces a default result.
+  DeviceTestBlocker? get testBlocker {
+    if (_tests.isRunning) return DeviceTestBlocker.testRunning;
+    if (!isConnected) return DeviceTestBlocker.notConnected;
+    // `subscribeFrames` takes one subscriber, so a capture in progress owns it.
+    if (isRecording || _recorder.isRecording) {
+      return DeviceTestBlocker.recording;
+    }
+    return null;
+  }
+
+  /// Why the wake-on-motion test cannot run right now, or null when it can.
+  ///
+  /// Everything [testBlocker] rules out, plus the two conditions only this test
+  /// has: it writes `fe04`, so firmware without auto-sleep cannot be put to
+  /// sleep on purpose; and it watches the device advertise, which needs the
+  /// scan permission.
+  DeviceTestBlocker? get wakeTestBlocker {
+    final blocker = testBlocker;
+    if (blocker != null) return blocker;
+    if (_permissionDenied) return DeviceTestBlocker.scanPermissionDenied;
+    if (!autoSleepAvailable) return DeviceTestBlocker.noAutoSleep;
+    return null;
+  }
+
   bool get isScanning => _phase == AppPhase.scanning;
   bool get isConnected =>
       _connectedDevice != null && _phase != AppPhase.connecting;
@@ -281,6 +383,9 @@ class AppController extends ChangeNotifier {
         notifyListeners();
       },
     );
+    // Read once at startup, so the developer screen has yesterday's numbers to
+    // compare against the moment it is opened rather than after a first run.
+    await deviceTests.load();
     await refreshLibrary();
     try {
       _availability = await _transport.currentAvailability();
@@ -390,7 +495,9 @@ class AppController extends ChangeNotifier {
         // The reading described a link that is gone; keeping the last
         // percentage on screen would be showing a stale measurement as live.
         _setBattery(null);
+        _temperature = null;
         unawaited(_stopBattery(device.id));
+        unawaited(_stopTemperature(device.id));
         _setPhase(AppPhase.idle);
       }
     });
@@ -402,6 +509,8 @@ class AppController extends ChangeNotifier {
     // notifications so it stays live.
     await _readBattery(device.id);
     _followBattery(device.id);
+    await _readTemperature(device.id);
+    _followTemperature(device.id);
   }
 
   /// Records a battery reading - or its absence - and rebuckets the bars.
@@ -465,6 +574,125 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  /// Reads the die temperature from the connected device.
+  ///
+  /// A failure is not an app error: it leaves the temperature unknown and the
+  /// readout unavailable, which is all firmware without `fe07` can honestly be
+  /// reported as. Mirrors [_readBattery] deliberately - a second way of doing
+  /// the same thing is a second way to get it wrong.
+  Future<void> _readTemperature(String deviceId) async {
+    try {
+      _temperature = await _transport.readDieTemperature(deviceId);
+    } on BleTransportException {
+      _temperature = null;
+    }
+    notifyListeners();
+  }
+
+  /// Follows `fe07` notifications so the readout tracks the die.
+  ///
+  /// An error on the stream - a malformed value, or firmware with no `fe07` at
+  /// all - leaves whatever the one-shot read established rather than inventing
+  /// a reading, and is not an app failure.
+  void _followTemperature(String deviceId) {
+    unawaited(_temperatureSubscription?.cancel());
+    try {
+      _temperatureSubscription =
+          _transport.subscribeDieTemperature(deviceId).listen(
+        (reading) {
+          _temperature = reading;
+          notifyListeners();
+        },
+        onError: (Object _) {},
+      );
+    } on BleTransportException {
+      _temperatureSubscription = null;
+    }
+  }
+
+  /// Ends the `fe07` subscription, best effort.
+  Future<void> _stopTemperature(String deviceId) async {
+    await _temperatureSubscription?.cancel();
+    _temperatureSubscription = null;
+    try {
+      await _transport.unsubscribeDieTemperature(deviceId);
+    } on BleTransportException {
+      // The notifications have stopped either way.
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // THE DEVICE-TEST HARNESS
+  //
+  // The controller's job here is the same as everywhere else: supply the
+  // device id and the codec, refuse to start a test that cannot honestly run,
+  // and let `services/device_test_service.dart` do the measuring. Nothing in
+  // these methods knows what a UUID is.
+  // -------------------------------------------------------------------------
+
+  /// Starts the range walk. Does nothing when [testBlocker] says it cannot run.
+  Future<void> beginRangeWalk() async {
+    final device = _connectedDevice;
+    if (device == null || testBlocker != null) return;
+    await _tests.beginRangeWalk(
+      deviceId: device.id,
+      requestCodec: _preferredCodec,
+    );
+  }
+
+  /// Records a stop on the range walk.
+  Future<void> markRangeStep() => _tests.markRangeStep();
+
+  /// Ends the range walk and saves it.
+  Future<void> finishRangeWalk() async {
+    await _tests.finishRangeWalk();
+  }
+
+  /// Ten seconds of a quiet room, reported as RMS dBFS.
+  Future<void> runNoiseFloorTest() async {
+    final device = _connectedDevice;
+    if (device == null || testBlocker != null) return;
+    await _tests.runNoiseFloor(
+      deviceId: device.id,
+      requestCodec: _preferredCodec,
+    );
+  }
+
+  /// A voice at the marked distance, reported as peak and RMS dBFS.
+  Future<void> runSensitivityTest() async {
+    final device = _connectedDevice;
+    if (device == null || testBlocker != null) return;
+    await _tests.runSensitivity(
+      deviceId: device.id,
+      requestCodec: _preferredCodec,
+    );
+  }
+
+  /// Minutes of streaming, reported as dropped frames and disconnections.
+  Future<void> runLinkSoakTest() async {
+    final device = _connectedDevice;
+    if (device == null || testBlocker != null) return;
+    await _tests.runLinkSoak(
+      deviceId: device.id,
+      requestCodec: _preferredCodec,
+    );
+  }
+
+  /// Enables auto-sleep, drops the link, waits for System OFF and times a
+  /// shake. See [DeviceTestService.runWakeOnMotion] for what the figure is and
+  /// is not.
+  Future<void> runWakeOnMotionTest() async {
+    final device = _connectedDevice;
+    if (device == null || wakeTestBlocker != null) return;
+    await _tests.runWakeOnMotion(deviceId: device.id);
+  }
+
+  /// The operator has just shaken the device. Starts the wake clock.
+  void confirmShaken() => _tests.confirmShaken();
+
+  /// Stops the running test. Its partial readings are still saved.
+  void cancelDeviceTest() => _tests.cancel();
+
   /// Re-reads the auto-sleep flag from the connected device.
   ///
   /// A failure is not an app error: it leaves the setting unknown and the
@@ -517,9 +745,11 @@ class AppController extends ChangeNotifier {
     if (isRecording) await stopRecording();
     await _connectionSubscription?.cancel();
     _connectionSubscription = null;
-    // Stop following the battery before the link goes, so the last thing the
-    // radio does is not delivering a notification into a torn-down listener.
+    // Stop following the battery and the die temperature before the link goes,
+    // so the last thing the radio does is not delivering a notification into a
+    // torn-down listener.
     await _stopBattery(device.id);
+    await _stopTemperature(device.id);
     String? failure;
     try {
       await _transport.disconnect(device.id);
@@ -529,6 +759,7 @@ class AppController extends ChangeNotifier {
     _connectedDevice = null;
     _autoSleep = null;
     _setBattery(null);
+    _temperature = null;
     _errorMessage = failure;
     // The user ended this, so there is nothing to explain and nothing to
     // offer a retry for.
@@ -786,6 +1017,10 @@ class AppController extends ChangeNotifier {
     _connectionSubscription = null;
     await _batterySubscription?.cancel();
     _batterySubscription = null;
+    await _temperatureSubscription?.cancel();
+    _temperatureSubscription = null;
+    await _testSubscription?.cancel();
+    _testSubscription = null;
     await _statsSubscription?.cancel();
     _statsSubscription = null;
     await _levelSubscription?.cancel();
@@ -794,6 +1029,7 @@ class AppController extends ChangeNotifier {
     _librarySubscription = null;
     await _playbackSubscription?.cancel();
     _playbackSubscription = null;
+    await _tests.dispose();
     await _recorder.dispose();
     await _library.dispose();
     await _player?.dispose();

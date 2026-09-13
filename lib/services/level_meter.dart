@@ -128,3 +128,74 @@ class LevelMeter {
     return dbfs;
   }
 }
+
+/// Peak and RMS across a WHOLE measurement window, not one block.
+///
+/// [LevelMeter] answers "how loud is this 20 ms block", which is what a live
+/// meter needs. An acoustic test asks a different question - "how loud was the
+/// room over ten seconds" - and the answer is NOT the average of the per-block
+/// dBFS figures. dBFS is logarithmic, so averaging it averages the logarithms
+/// and quietly under-reports anything with a transient in it; a single door
+/// slam in an otherwise silent room would barely move the number. Energy has
+/// to be summed in the linear domain and converted once at the end, which is
+/// what this does.
+///
+/// It borrows [LevelMeter.dbfsForAmplitude] rather than repeating the
+/// conversion, so the floor and the full-scale reference cannot drift apart
+/// from the live meter's.
+class LevelWindow {
+  LevelWindow({LevelMeter? meter}) : _meter = meter ?? LevelMeter();
+
+  final LevelMeter _meter;
+
+  int _peakSample = 0;
+  double _sumOfSquares = 0;
+  int _sampleCount = 0;
+
+  /// Samples accumulated so far.
+  int get sampleCount => _sampleCount;
+
+  /// Whether anything has been measured at all. False means there is no
+  /// reading, which must never be rendered as silence: no audio arrived is a
+  /// different fact from the room being quiet.
+  bool get hasAudio => _sampleCount > 0;
+
+  /// Absolute value of the loudest sample seen, `0 .. 32768`.
+  int get peakSample => _peakSample;
+
+  /// Loudest single sample over the window, or `null` before any audio.
+  double? get peakDbfs =>
+      hasAudio ? _meter.dbfsForAmplitude(_peakSample.toDouble()) : null;
+
+  /// RMS over the whole window, or `null` before any audio.
+  double? get rmsDbfs => hasAudio
+      ? _meter.dbfsForAmplitude(math.sqrt(_sumOfSquares / _sampleCount))
+      : null;
+
+  /// Accumulates one block of signed 16-bit little-endian PCM.
+  ///
+  /// An empty block is ignored rather than divided by - the same guard
+  /// [LevelMeter.addPcmS16le] has, and for the same reason.
+  void addPcmS16le(Uint8List pcm) {
+    final count = pcm.length ~/ 2;
+    if (count == 0) return;
+    final view = ByteData.sublistView(pcm);
+    for (var i = 0; i < count; i++) {
+      final sample = view.getInt16(i * 2, Endian.little);
+      final magnitude = sample < 0 ? -sample : sample;
+      if (magnitude > _peakSample) _peakSample = magnitude;
+      // Accumulated as a double: at 16 kHz a five-minute window is 4.8e6
+      // samples, and 4.8e6 * 32768^2 is about 5.2e15 - inside an int, but only
+      // just, and a double carries it with room to spare.
+      _sumOfSquares += sample.toDouble() * sample.toDouble();
+    }
+    _sampleCount += count;
+  }
+
+  /// Forgets everything measured, ready for another window.
+  void reset() {
+    _peakSample = 0;
+    _sumOfSquares = 0;
+    _sampleCount = 0;
+  }
+}

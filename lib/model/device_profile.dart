@@ -40,6 +40,18 @@ abstract final class DeviceProfile {
   static const String batteryCharacteristicUuid =
       '6e40fe05-b5a3-f393-e0a9-e50e24dcca9e';
 
+  /// `fe07` - READ + NOTIFY, two bytes of nRF52840 DIE temperature (see
+  /// [DieTemperature]): a little-endian signed int16 in decidegrees Celsius,
+  /// with `0x8000` meaning unknown.
+  ///
+  /// A DIE temperature, not an ambient one. The sensor is inside the same
+  /// package as the CPU and the radio, so it reads above the room, and it
+  /// reads higher again inside a plastic case with a cell underneath. Firmware
+  /// older than this characteristic simply does not have it; the app treats
+  /// the absence as "temperature unavailable", never as 0 °C.
+  static const String temperatureCharacteristicUuid =
+      '6e40fe07-b5a3-f393-e0a9-e50e24dcca9e';
+
   /// Every notification is prefixed with a little-endian uint16 sequence
   /// number; gaps in it are packets dropped on the link.
   static const int sequenceHeaderBytes = 2;

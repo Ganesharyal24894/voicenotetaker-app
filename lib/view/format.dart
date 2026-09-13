@@ -59,6 +59,32 @@ abstract final class Fmt {
   static String rssi(int? dbm) =>
       dbm == null ? '— dBm' : '−${dbm.abs()} dBm';
 
+  /// One device-test measurement with its unit: `−62.4 dBFS`, `0.41%`,
+  /// `1.8 s`, `312`.
+  ///
+  /// A null [value] is `—` with the unit kept - `— dBm`, exactly as
+  /// [rssi] renders an absent signal. NEVER `0`: "no reading" and "a reading of
+  /// zero" are different facts, and this is the last place they could be
+  /// collapsed.
+  ///
+  /// Precision is chosen by unit so the same quantity reads the same way
+  /// everywhere it appears - on the card and in the export.
+  static String measurement(num? value, String unit) {
+    final suffix = unit.isEmpty ? '' : (unit == '%' ? unit : ' $unit');
+    if (value == null) return '—$suffix';
+    final decimals = switch (unit) {
+      'dBFS' => 1,
+      's' => 1,
+      '°C' => 1,
+      '%' => 2,
+      _ => 0,
+    };
+    final text = value.toDouble().toStringAsFixed(decimals);
+    // A real minus sign (U+2212), the same one [rssi] uses: these sit in
+    // tabular columns next to each other.
+    return '${text.replaceFirst('-', '−')}$suffix';
+  }
+
   /// `16 kHz mono` / `48 kHz stereo`.
   static String streamSummary(int sampleRateHz, int channels) {
     final khz = sampleRateHz / 1000;

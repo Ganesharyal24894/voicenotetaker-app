@@ -12,7 +12,10 @@ import 'package:voicenotetaker_app/drivers/platform_settings.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
+import 'package:voicenotetaker_app/model/die_temperature.dart';
 import 'package:voicenotetaker_app/model/stream_info.dart';
+import 'package:voicenotetaker_app/services/device_test_service.dart';
+import 'package:voicenotetaker_app/services/device_test_store.dart';
 import 'package:voicenotetaker_app/services/library_service.dart';
 import 'package:voicenotetaker_app/services/wav_writer.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
@@ -99,6 +102,7 @@ class ViewHarness {
     List<DiscoveredDevice> devices = const <DiscoveredDevice>[],
     AudioPlayer? audioPlayer,
     this.availability = BleAvailability.poweredOn,
+    this.testWindow,
   }) : transport = MockBleTransport() {
     when(() => transport.currentAvailability())
         .thenAnswer((_) async => availability);
@@ -140,6 +144,19 @@ class ViewHarness {
     when(() => transport.subscribeBattery(any()))
         .thenAnswer((_) => battery.stream);
     when(() => transport.unsubscribeBattery(any())).thenAnswer((_) async {});
+    // A die running warm, which is the ordinary case: the sensor shares a
+    // package with the CPU and the radio. Tests that care re-stub this -
+    // including with a throw, which is what firmware without `fe07` does - or
+    // push values through [temperature].
+    when(() => transport.readDieTemperature(any()))
+        .thenAnswer((_) async => const DieTemperature(deciCelsius: 312));
+    when(() => transport.subscribeDieTemperature(any()))
+        .thenAnswer((_) => temperature.stream);
+    when(() => transport.unsubscribeDieTemperature(any()))
+        .thenAnswer((_) async {});
+    // The live link's signal, which is NOT `knownDevice.rssi`: that one is a
+    // single sample off an advertising packet, taken at scan time.
+    when(() => transport.readRssi(any())).thenAnswer((_) async => -58);
     when(() => transport.readStreamInfo(any()))
         .thenAnswer((_) async => StreamInfo.fallback);
     when(() => transport.subscribeFrames(any()))
@@ -153,6 +170,26 @@ class ViewHarness {
       audioPlayer: audioPlayer,
       platformSettings: settings,
       recordingsDirectory: recordingsDirectory,
+      deviceTestService: testWindow == null
+          ? null
+          : DeviceTestService(
+              transport: transport,
+              store: DeviceTestStore(
+                fileStore: fileStore,
+                directory: recordingsDirectory,
+              ),
+              // Milliseconds instead of the ten seconds and three minutes the
+              // real windows are, so a widget test can watch a test run
+              // without the widget test taking three minutes.
+              noiseFloorWindow: testWindow!,
+              sensitivityWindow: testWindow!,
+              linkSoakWindow: testWindow!,
+              advertisingPollWindow: testWindow!,
+              systemOffConfirm: testWindow!,
+              systemOffTimeout: testWindow!,
+              wakeTimeout: testWindow!,
+              tick: const Duration(milliseconds: 20),
+            ),
     );
   }
 
@@ -166,6 +203,11 @@ class ViewHarness {
   /// What `currentAvailability()` answers. [begin] is what makes the controller
   /// read it.
   final BleAvailability availability;
+
+  /// When set, the device-test harness runs with windows this long instead of
+  /// its real ones. Null leaves the controller building the real service, which
+  /// is what every test that only RENDERS the card wants.
+  final Duration? testWindow;
 
   /// Adapter state changes, pushed by hand.
   final StreamController<BleAvailability> adapter =
@@ -181,6 +223,10 @@ class ViewHarness {
   /// it, so a readout that moves on its own cannot pass unnoticed.
   final StreamController<BatteryStatus> battery =
       StreamController<BatteryStatus>.broadcast();
+
+  /// `fe07` notifications, pushed by hand. Same rule as [battery].
+  final StreamController<DieTemperature> temperature =
+      StreamController<DieTemperature>.broadcast();
 
   /// The scan stream handed out by the most recent `scan()` call, so a test can
   /// end its window.
@@ -304,6 +350,15 @@ class ViewHarness {
     await flush(tester);
   }
 
+  /// Pushes a `fe07` notification, exactly as the device would.
+  Future<void> notifyTemperature(
+    WidgetTester tester, {
+    required int? deciCelsius,
+  }) async {
+    temperature.add(DieTemperature(deciCelsius: deciCelsius));
+    await flush(tester);
+  }
+
   Future<void> dispose() async {
     final scan = _scan;
     _scan = null;
@@ -312,6 +367,7 @@ class ViewHarness {
     if (!link.isClosed) await link.close();
     await frames.close();
     if (!battery.isClosed) await battery.close();
+    if (!temperature.isClosed) await temperature.close();
     await controller.teardown();
   }
 }
@@ -372,6 +428,10 @@ class MemoryFileStore implements FileStore {
   /// Paths whose deletion must fail, for the "the unlink itself broke" case.
   final Set<String> undeletable = <String>{};
 
+  /// When true every [writeBytes] fails, for the "the measurement happened and
+  /// the record of it did not" case.
+  bool readOnly = false;
+
   @override
   Future<FileSink> openWrite(String path) async {
     final bytes = <int>[];
@@ -403,8 +463,14 @@ class MemoryFileStore implements FileStore {
   }
 
   @override
-  Future<void> writeBytes(String path, List<int> bytes) async =>
-      files[path] = <int>[...bytes];
+  Future<void> writeBytes(String path, List<int> bytes) async {
+    if (readOnly) {
+      // A plain exception, not a `FileSystemException`: this store exists so the
+      // domain layer can be tested with no `dart:io` anywhere near it.
+      throw Exception('read-only filesystem: $path');
+    }
+    files[path] = <int>[...bytes];
+  }
 
   @override
   Future<bool> exists(String path) async => files.containsKey(path);

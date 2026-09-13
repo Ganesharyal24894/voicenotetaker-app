@@ -9,6 +9,7 @@ import '../model/auto_sleep.dart';
 import '../model/battery_status.dart';
 import '../model/device_profile.dart';
 import '../model/device_state.dart';
+import '../model/die_temperature.dart';
 import '../model/stream_info.dart';
 import 'ble_transport.dart';
 
@@ -45,6 +46,13 @@ class UniversalBleTransport implements BleTransport {
   StreamSubscription<Uint8List>? _batterySubscription;
   StreamController<BatteryStatus>? _batteryController;
   String? _batteryDeviceId;
+
+  /// Die-temperature notifications are a third, independent subscription, for
+  /// the same reason the battery's is separate from the frames': it must keep
+  /// arriving whether or not a capture is running.
+  StreamSubscription<Uint8List>? _temperatureSubscription;
+  StreamController<DieTemperature>? _temperatureController;
+  String? _temperatureDeviceId;
 
   bool _scanning = false;
   bool _disposed = false;
@@ -199,6 +207,9 @@ class UniversalBleTransport implements BleTransport {
     }
     if (_batteryDeviceId == deviceId) {
       await unsubscribeBattery(deviceId);
+    }
+    if (_temperatureDeviceId == deviceId) {
+      await unsubscribeDieTemperature(deviceId);
     }
     try {
       await ub.UniversalBle.disconnect(deviceId);
@@ -371,6 +382,120 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
+  Future<DieTemperature> readDieTemperature(String deviceId) async {
+    try {
+      final bytes = await ub.UniversalBle.read(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.temperatureCharacteristicUuid,
+      );
+      return DieTemperature.fromBytes(bytes);
+    } on FormatException catch (e) {
+      throw BleTransportException('malformed die temperature', e);
+    } catch (e) {
+      // Firmware without `fe07` fails here, and so does a link that dropped
+      // mid-read. Neither is worth telling apart: the temperature is unknown.
+      throw BleTransportException('could not read the die temperature', e);
+    }
+  }
+
+  @override
+  Stream<DieTemperature> subscribeDieTemperature(String deviceId) {
+    if (_temperatureController != null) {
+      throw const BleTransportException(
+        'already subscribed to the die temperature',
+      );
+    }
+
+    final controller = StreamController<DieTemperature>(
+      onCancel: () => unsubscribeDieTemperature(deviceId),
+    );
+    _temperatureController = controller;
+    _temperatureDeviceId = deviceId;
+
+    _temperatureSubscription = ub.UniversalBle.characteristicValueStream(
+      deviceId,
+      DeviceProfile.temperatureCharacteristicUuid,
+    ).listen(
+      (bytes) {
+        try {
+          controller.add(DieTemperature.fromBytes(bytes));
+        } on FormatException catch (e) {
+          // Reported as unreadable, never rounded into a number to show.
+          controller.addError(
+            BleTransportException('malformed temperature notification', e),
+          );
+        }
+      },
+      onError: controller.addError,
+    );
+
+    unawaited(() async {
+      try {
+        await ub.UniversalBle.subscribeNotifications(
+          deviceId,
+          DeviceProfile.serviceUuid,
+          DeviceProfile.temperatureCharacteristicUuid,
+        );
+      } catch (e) {
+        // Firmware without `fe07` lands here. The one-shot read has already
+        // failed for the same reason, so this is not a second failure worth
+        // escalating - the stream simply ends.
+        if (!controller.isClosed) {
+          controller.addError(
+            BleTransportException(
+              'could not subscribe to the die temperature',
+              e,
+            ),
+          );
+        }
+        // Through `unsubscribeDieTemperature` rather than a bare `close`, so
+        // the fields are cleared too: a later reconnect must be able to
+        // subscribe again instead of being told it already has.
+        await unsubscribeDieTemperature(deviceId);
+      }
+    }());
+
+    return controller.stream;
+  }
+
+  @override
+  Future<void> unsubscribeDieTemperature(String deviceId) async {
+    final subscription = _temperatureSubscription;
+    final controller = _temperatureController;
+    _temperatureSubscription = null;
+    _temperatureController = null;
+    _temperatureDeviceId = null;
+
+    await subscription?.cancel();
+    try {
+      await ub.UniversalBle.unsubscribe(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.temperatureCharacteristicUuid,
+      );
+    } catch (_) {
+      // Unsubscribing a link that has already dropped, or a characteristic
+      // that was never there, is not an error worth propagating.
+    }
+    if (controller != null && !controller.isClosed) {
+      await controller.close();
+    }
+  }
+
+  @override
+  Future<int> readRssi(String deviceId) async {
+    try {
+      return await ub.UniversalBle.readRssi(deviceId);
+    } catch (e) {
+      // Some platforms refuse this on a connected device, and a link that has
+      // just dropped refuses it too. Either way there is no signal reading,
+      // which is a different fact from a signal of 0 dBm.
+      throw BleTransportException('could not read the link RSSI', e);
+    }
+  }
+
+  @override
   Stream<Uint8List> subscribeFrames(String deviceId) {
     if (_frameController != null) {
       throw const BleTransportException('already subscribed to frames');
@@ -439,6 +564,10 @@ class UniversalBleTransport implements BleTransport {
     if (deviceId != null) await unsubscribeFrames(deviceId);
     final batteryDeviceId = _batteryDeviceId;
     if (batteryDeviceId != null) await unsubscribeBattery(batteryDeviceId);
+    final temperatureDeviceId = _temperatureDeviceId;
+    if (temperatureDeviceId != null) {
+      await unsubscribeDieTemperature(temperatureDeviceId);
+    }
     if (_scanning) {
       try {
         await stopScan();

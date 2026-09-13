@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import '../model/audio_codec.dart';
 import '../model/battery_status.dart';
 import '../model/device_state.dart';
+import '../model/die_temperature.dart';
 import '../model/stream_info.dart';
 
 /// Everything the app needs from a Bluetooth Low Energy stack, expressed
@@ -89,6 +90,32 @@ abstract class BleTransport {
   Stream<BatteryStatus> subscribeBattery(String deviceId);
 
   Future<void> unsubscribeBattery(String deviceId);
+
+  /// Reads the `fe07` die-temperature characteristic once.
+  ///
+  /// Throws [BleTransportException] when the characteristic is absent - which
+  /// is what firmware older than `fe07` looks like from here - or when the
+  /// value is not the two bytes the protocol defines. Callers must treat that
+  /// as "temperature unavailable", never as 0 \u00B0C.
+  Future<DieTemperature> readDieTemperature(String deviceId);
+
+  /// Subscribes to `fe07` and emits each notification, parsed.
+  ///
+  /// A malformed notification arrives as an error on the stream rather than as
+  /// a made-up value, exactly as [subscribeBattery] does.
+  Stream<DieTemperature> subscribeDieTemperature(String deviceId);
+
+  Future<void> unsubscribeDieTemperature(String deviceId);
+
+  /// Signal strength of the LIVE link to [deviceId], in dBm.
+  ///
+  /// Not the same number as [DiscoveredDevice.rssi], which is one sample taken
+  /// off an advertising packet at scan time and never updated afterwards. A
+  /// range test needs the current link, so it needs this.
+  ///
+  /// Throws [BleTransportException] when the platform will not report it -
+  /// which callers must render as unknown, never as 0 dBm.
+  Future<int> readRssi(String deviceId);
 
   /// Subscribes to `fe01` and emits each notification verbatim - sequence
   /// header included. Stripping that header is [FrameReassembler]'s job, not
