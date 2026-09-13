@@ -19,16 +19,14 @@ import 'recording_entry.dart';
 /// The sample library from `design/Main.dc.html`, anchored to "now" so the
 /// Today / Yesterday grouping is exercised.
 abstract final class PlaceholderData {
-  /// Battery percentage is unknown: the device exposes no battery service and
-  /// `BleTransport` has no method for one. The Home header renders `--`.
-  static const double? batteryLevel = null;
-
-  /// Peak level is unknown for the same reason - `CaptureStats` counts
-  /// packets, not loudness.
+  /// Peak level is unknown - `CaptureStats` counts packets, not loudness.
   static const int? peakDbfs = null;
 
-  /// Shown wherever a reading exists in the design but nothing can produce
-  /// it yet - ATT MTU, connection interval, PHY, throughput, jitter buffer.
+  /// The app's em dash for "no reading". Shown wherever a value the design
+  /// has cannot be produced - ATT MTU, connection interval, PHY, throughput,
+  /// jitter buffer - and also for readings that ARE wired to a service but
+  /// that the device has not reported, such as the battery percentage on
+  /// firmware without `fe05`.
   static const String unknownValue = '—';
 
   static List<RecordingEntry> library({DateTime? now}) {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -81,16 +83,35 @@ class _AppRootState extends State<AppRoot> {
   void _openLibrary(BuildContext context) {
     _push(
       context,
-      (context) => LibraryView(
-        entries: _entries,
-        onBack: () => Navigator.of(context).pop(),
-        onOpen: (entry) => _openPlayback(context, entry),
-        onNewRecording: () {
-          Navigator.of(context).pop();
-          widget.controller.startRecording();
-        },
+      // A PUSHED route is not rebuilt by this state's `setState`, so the
+      // library listens to the controller itself. Without this, deleting a
+      // recording would leave the row it deleted on screen until the user
+      // navigated away and back.
+      (context) => ListenableBuilder(
+        listenable: widget.controller,
+        builder: (context, _) => LibraryView(
+          entries: _entries,
+          onBack: () => Navigator.of(context).pop(),
+          onOpen: (entry) => _openPlayback(context, entry),
+          onDelete: (entry) => _delete(entry),
+          onNewRecording: () {
+            Navigator.of(context).pop();
+            widget.controller.startRecording();
+          },
+        ),
       ),
     );
+  }
+
+  /// Deletes the file behind [entry] through the controller.
+  ///
+  /// The view asked for confirmation before calling this; the deletion itself
+  /// belongs to `LibraryService`, which the controller owns. Nothing in
+  /// `view/` goes near the filesystem.
+  void _delete(RecordingEntry entry) {
+    final recording = _recordingFor(entry);
+    if (recording == null) return;
+    unawaited(widget.controller.deleteRecording(recording));
   }
 
   /// The saved file behind [entry], or null if the library does not list it.
@@ -118,6 +139,8 @@ class _AppRootState extends State<AppRoot> {
         controller: widget.controller,
         entry: entry,
         recording: recording,
+        // The screen is showing a file that no longer exists, so it leaves.
+        onDeleted: () => Navigator.of(context).pop(),
         onBack: () => Navigator.of(context).pop(),
       ),
     );

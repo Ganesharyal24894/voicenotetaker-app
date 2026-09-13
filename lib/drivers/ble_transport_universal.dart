@@ -6,6 +6,7 @@ import 'package:universal_ble/universal_ble.dart' as ub;
 
 import '../model/audio_codec.dart';
 import '../model/auto_sleep.dart';
+import '../model/battery_status.dart';
 import '../model/device_profile.dart';
 import '../model/device_state.dart';
 import '../model/stream_info.dart';
@@ -37,6 +38,13 @@ class UniversalBleTransport implements BleTransport {
   StreamSubscription<Uint8List>? _frameSubscription;
   StreamController<Uint8List>? _frameController;
   String? _frameDeviceId;
+
+  /// Battery notifications are a second, independent subscription: they must
+  /// keep arriving whether or not a capture is running, so they cannot share
+  /// the frame plumbing above.
+  StreamSubscription<Uint8List>? _batterySubscription;
+  StreamController<BatteryStatus>? _batteryController;
+  String? _batteryDeviceId;
 
   bool _scanning = false;
   bool _disposed = false;
@@ -173,6 +181,9 @@ class UniversalBleTransport implements BleTransport {
     if (_frameDeviceId == deviceId) {
       await unsubscribeFrames(deviceId);
     }
+    if (_batteryDeviceId == deviceId) {
+      await unsubscribeBattery(deviceId);
+    }
     try {
       await ub.UniversalBle.disconnect(deviceId);
     } catch (e) {
@@ -246,6 +257,104 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
+  Future<BatteryStatus> readBattery(String deviceId) async {
+    try {
+      final bytes = await ub.UniversalBle.read(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.batteryCharacteristicUuid,
+      );
+      return BatteryStatus.fromBytes(bytes);
+    } on FormatException catch (e) {
+      throw BleTransportException('malformed battery status', e);
+    } catch (e) {
+      // Firmware without `fe05` fails here, and so does a link that dropped
+      // mid-read. Neither is worth telling apart: the battery is unknown.
+      throw BleTransportException('could not read the battery status', e);
+    }
+  }
+
+  @override
+  Stream<BatteryStatus> subscribeBattery(String deviceId) {
+    if (_batteryController != null) {
+      throw const BleTransportException('already subscribed to the battery');
+    }
+
+    final controller = StreamController<BatteryStatus>(
+      onCancel: () => unsubscribeBattery(deviceId),
+    );
+    _batteryController = controller;
+    _batteryDeviceId = deviceId;
+
+    _batterySubscription = ub.UniversalBle.characteristicValueStream(
+      deviceId,
+      DeviceProfile.batteryCharacteristicUuid,
+    ).listen(
+      (bytes) {
+        try {
+          controller.add(BatteryStatus.fromBytes(bytes));
+        } on FormatException catch (e) {
+          // A value this build cannot read is reported as such, never
+          // rounded into a number to show.
+          controller.addError(
+            BleTransportException('malformed battery notification', e),
+          );
+        }
+      },
+      onError: controller.addError,
+    );
+
+    unawaited(() async {
+      try {
+        await ub.UniversalBle.subscribeNotifications(
+          deviceId,
+          DeviceProfile.serviceUuid,
+          DeviceProfile.batteryCharacteristicUuid,
+        );
+      } catch (e) {
+        // Firmware without `fe05` lands here. The one-shot read has already
+        // failed for the same reason, so this is not a second failure worth
+        // escalating - the stream simply ends.
+        if (!controller.isClosed) {
+          controller.addError(
+            BleTransportException('could not subscribe to the battery', e),
+          );
+        }
+        // Through `unsubscribeBattery` rather than a bare `close`, so the
+        // fields are cleared too: a later reconnect must be able to subscribe
+        // again instead of being told it already has.
+        await unsubscribeBattery(deviceId);
+      }
+    }());
+
+    return controller.stream;
+  }
+
+  @override
+  Future<void> unsubscribeBattery(String deviceId) async {
+    final subscription = _batterySubscription;
+    final controller = _batteryController;
+    _batterySubscription = null;
+    _batteryController = null;
+    _batteryDeviceId = null;
+
+    await subscription?.cancel();
+    try {
+      await ub.UniversalBle.unsubscribe(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.batteryCharacteristicUuid,
+      );
+    } catch (_) {
+      // Unsubscribing a link that has already dropped, or a characteristic
+      // that was never there, is not an error worth propagating.
+    }
+    if (controller != null && !controller.isClosed) {
+      await controller.close();
+    }
+  }
+
+  @override
   Stream<Uint8List> subscribeFrames(String deviceId) {
     if (_frameController != null) {
       throw const BleTransportException('already subscribed to frames');
@@ -312,6 +421,8 @@ class UniversalBleTransport implements BleTransport {
     _disposed = true;
     final deviceId = _frameDeviceId;
     if (deviceId != null) await unsubscribeFrames(deviceId);
+    final batteryDeviceId = _batteryDeviceId;
+    if (batteryDeviceId != null) await unsubscribeBattery(batteryDeviceId);
     if (_scanning) {
       try {
         await stopScan();

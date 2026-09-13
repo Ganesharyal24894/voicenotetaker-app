@@ -9,6 +9,7 @@ import 'package:voicenotetaker_app/drivers/audio_player.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/drivers/file_store.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
+import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/model/stream_info.dart';
 import 'package:voicenotetaker_app/services/library_service.dart';
@@ -109,6 +110,14 @@ class ViewHarness {
     // - including with a throw, which is what firmware without `fe04` does.
     when(() => transport.readAutoSleep(any())).thenAnswer((_) async => false);
     when(() => transport.setAutoSleep(any(), any())).thenAnswer((_) async {});
+    // A charged, discharging cell: the ordinary case. Tests that care
+    // re-stub this - including with a throw, which is what firmware without
+    // `fe05` does - or push values through [battery].
+    when(() => transport.readBattery(any()))
+        .thenAnswer((_) async => const BatteryStatus(percent: 76, charging: false));
+    when(() => transport.subscribeBattery(any()))
+        .thenAnswer((_) => battery.stream);
+    when(() => transport.unsubscribeBattery(any())).thenAnswer((_) async {});
     when(() => transport.readStreamInfo(any()))
         .thenAnswer((_) async => StreamInfo.fallback);
     when(() => transport.subscribeFrames(any()))
@@ -131,6 +140,11 @@ class ViewHarness {
   final MemoryFileStore fileStore = MemoryFileStore();
   final StreamController<Uint8List> frames =
       StreamController<Uint8List>.broadcast();
+
+  /// `fe05` notifications, pushed by hand. Nothing arrives unless a test sends
+  /// it, so a readout that moves on its own cannot pass unnoticed.
+  final StreamController<BatteryStatus> battery =
+      StreamController<BatteryStatus>.broadcast();
   late final AppController controller;
 
   /// Writes a real WAV file into the store, exactly as a finished capture
@@ -191,8 +205,19 @@ class ViewHarness {
     await done;
   }
 
+  /// Pushes a `fe05` notification, exactly as the device would.
+  Future<void> notifyBattery(
+    WidgetTester tester, {
+    required int? percent,
+    required bool charging,
+  }) async {
+    battery.add(BatteryStatus(percent: percent, charging: charging));
+    await flush(tester);
+  }
+
   Future<void> dispose() async {
     await frames.close();
+    if (!battery.isClosed) await battery.close();
     await controller.teardown();
   }
 }
@@ -250,6 +275,9 @@ class MemoryFileStore implements FileStore {
   /// Modification times for [stat], for tests that seed files directly.
   final Map<String, DateTime> modifiedTimes = <String, DateTime>{};
 
+  /// Paths whose deletion must fail, for the "the unlink itself broke" case.
+  final Set<String> undeletable = <String>{};
+
   @override
   Future<FileSink> openWrite(String path) async {
     final bytes = <int>[];
@@ -288,7 +316,14 @@ class MemoryFileStore implements FileStore {
   Future<bool> exists(String path) async => files.containsKey(path);
 
   @override
-  Future<void> delete(String path) async => files.remove(path);
+  Future<void> delete(String path) async {
+    if (undeletable.contains(path)) {
+      // A plain exception, not a `FileSystemException`: this store exists so
+      // the domain layer can be tested with no `dart:io` anywhere near it.
+      throw Exception('permission denied: $path');
+    }
+    files.remove(path);
+  }
 
   @override
   Future<List<String>> list(String directory) async => files.keys

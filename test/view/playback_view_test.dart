@@ -66,6 +66,7 @@ Future<_Playback> _open(
   bool withPlayer = true,
   bool withFile = true,
   FakePlayback? fake,
+  VoidCallback? onDeleted,
 }) async {
   final playback = fake ?? FakePlayback();
   addTearDown(playback.close);
@@ -91,6 +92,7 @@ Future<_Playback> _open(
       controller: harness.controller,
       entry: RecordingEntry.fromInfo(info),
       recording: withFile ? info : null,
+      onDeleted: onDeleted,
     ),
   );
   await tester.pump();
@@ -394,5 +396,90 @@ void main() {
       expect(size.width, greaterThanOrEqualTo(44), reason: label);
       expect(size.height, greaterThanOrEqualTo(44), reason: label);
     }
+  });
+
+  group('deleting from the playback screen', () {
+    testWidgets('the action is offered for a recording with a file',
+        (tester) async {
+      await _open(tester);
+
+      expect(find.bySemanticsLabel('Delete recording'), findsOneWidget);
+      expect(find.bySemanticsLabel('More'), findsNothing);
+
+      final size = tester.getSize(find.bySemanticsLabel('Delete recording'));
+      expect(size.width, greaterThanOrEqualTo(44));
+      expect(size.height, greaterThanOrEqualTo(44));
+    });
+
+    testWidgets('an entry with no file behind it offers no delete',
+        (tester) async {
+      await _open(tester, withFile: false);
+
+      expect(find.bySemanticsLabel('Delete recording'), findsNothing);
+      expect(find.bySemanticsLabel('More'), findsOneWidget);
+    });
+
+    testWidgets('it confirms first, naming the recording', (tester) async {
+      final playback = await _open(tester);
+
+      await tester.tap(find.bySemanticsLabel('Delete recording'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Delete recording?'), findsOneWidget);
+      expect(find.textContaining('Voice note 09:14'), findsWidgets);
+
+      // Still there: the dialog has not been answered.
+      expect(playback.harness.fileStore.files, contains(playback.info.path));
+    });
+
+    testWidgets('Cancel deletes nothing and stays on the screen',
+        (tester) async {
+      final playback = await _open(tester);
+
+      await tester.tap(find.bySemanticsLabel('Delete recording'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(playback.harness.fileStore.files, contains(playback.info.path));
+      expect(playback.harness.controller.recordings, hasLength(1));
+      expect(find.bySemanticsLabel('Delete recording'), findsOneWidget);
+    });
+
+    testWidgets(
+        'Delete stops playback BEFORE unlinking, removes the file and leaves',
+        (tester) async {
+      var left = false;
+      final playback = await _open(tester, onDeleted: () => left = true);
+
+      // Actually playing, which is the case that would crash the player if the
+      // file went out from under it.
+      await playback.emit(
+        tester,
+        isPlaying: true,
+        position: const Duration(seconds: 30),
+      );
+      expect(playback.harness.controller.isPlaying, isTrue);
+
+      await tester.tap(find.bySemanticsLabel('Delete recording'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await flush(tester);
+      await tester.pumpAndSettle();
+
+      // The player was stopped, not merely paused.
+      verify(() => playback.player.stop()).called(greaterThanOrEqualTo(1));
+      // The file is gone, and so is the library entry - no orphan.
+      expect(
+        playback.harness.fileStore.files,
+        isNot(contains(playback.info.path)),
+      );
+      expect(playback.harness.controller.recordings, isEmpty);
+      // And nothing still claims to be playing it.
+      expect(playback.harness.controller.nowPlaying, isNull);
+      expect(playback.harness.controller.isPlaying, isFalse);
+      // The screen has nothing left to show, so it left.
+      expect(left, isTrue);
+    });
   });
 }

@@ -9,15 +9,36 @@ import 'harness.dart';
 
 final DateTime _now = DateTime(2026, 9, 10, 18, 0);
 
+/// Entries that stand for real saved files: they carry a path, which is what
+/// makes them deletable. `PlaceholderData.library` rows have none.
+List<RecordingEntry> _saved() => <RecordingEntry>[
+      RecordingEntry(
+        title: 'Standup notes',
+        recordedAt: _now.subtract(const Duration(hours: 9)),
+        duration: const Duration(minutes: 4, seconds: 12),
+        sizeBytes: 7900000,
+        path: '/recordings/voicenote-20260910-091400.wav',
+      ),
+      RecordingEntry(
+        title: 'Call with supplier',
+        recordedAt: _now.subtract(const Duration(days: 1)),
+        duration: const Duration(minutes: 11, seconds: 3),
+        sizeBytes: 21200000,
+        path: '/recordings/voicenote-20260909-180000.wav',
+      ),
+    ];
+
 Widget _library({
   ValueChanged<RecordingEntry>? onOpen,
   VoidCallback? onNewRecording,
+  ValueChanged<RecordingEntry>? onDelete,
   List<RecordingEntry>? entries,
 }) =>
     LibraryView(
       entries: entries ?? PlaceholderData.library(now: _now),
       onOpen: onOpen ?? (_) {},
       onNewRecording: onNewRecording ?? () {},
+      onDelete: onDelete,
       // Pinned, not the wall clock. The entries are built relative to _now,
       // so without this the TODAY/YESTERDAY headers were only correct on
       // 10 Sept 2026 and the test failed at the next midnight.
@@ -131,5 +152,128 @@ void main() {
           .last,
     );
     expect(well.height, greaterThanOrEqualTo(AppShape.minTapTarget));
+  });
+
+  group('deleting a recording', () {
+    testWidgets('every saved row offers a delete control', (tester) async {
+      await pumpScreen(
+        tester,
+        _library(entries: _saved(), onDelete: (_) {}),
+      );
+
+      expect(find.bySemanticsLabel('Delete Standup notes'), findsOneWidget);
+      expect(
+        find.bySemanticsLabel('Delete Call with supplier'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('no delete control without a handler to delete through',
+        (tester) async {
+      await pumpScreen(tester, _library(entries: _saved()));
+
+      expect(find.bySemanticsLabel('Delete Standup notes'), findsNothing);
+    });
+
+    testWidgets('a row with no file behind it cannot be deleted',
+        (tester) async {
+      // The placeholder rows carry no path, so there is nothing to unlink.
+      await pumpScreen(tester, _library(onDelete: (_) {}));
+
+      expect(find.bySemanticsLabel('Delete Standup notes'), findsNothing);
+    });
+
+    testWidgets('the delete control clears the 44px minimum', (tester) async {
+      await pumpScreen(
+        tester,
+        _library(entries: _saved(), onDelete: (_) {}),
+      );
+
+      final size =
+          tester.getSize(find.bySemanticsLabel('Delete Standup notes'));
+      expect(size.width, greaterThanOrEqualTo(AppShape.minTapTarget));
+      expect(size.height, greaterThanOrEqualTo(AppShape.minTapTarget));
+    });
+
+    testWidgets('it confirms first, and the confirmation NAMES the recording',
+        (tester) async {
+      final deleted = <RecordingEntry>[];
+      await pumpScreen(
+        tester,
+        _library(entries: _saved(), onDelete: deleted.add),
+      );
+
+      await tester.tap(find.bySemanticsLabel('Delete Standup notes'));
+      await tester.pumpAndSettle();
+
+      // Nothing has happened yet - this is the whole point of the dialog.
+      expect(deleted, isEmpty);
+      expect(find.text('Delete recording?'), findsOneWidget);
+      // Named, with the day and length that confirm it is the right one, and
+      // explicit that there is no undo.
+      expect(
+        find.text(
+          'Delete \u201CStandup notes\u201D (Today, 4:12)? '
+          'This cannot be undone.',
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('Cancel deletes nothing', (tester) async {
+      final deleted = <RecordingEntry>[];
+      await pumpScreen(
+        tester,
+        _library(entries: _saved(), onDelete: deleted.add),
+      );
+
+      await tester.tap(find.bySemanticsLabel('Delete Standup notes'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(deleted, isEmpty);
+      expect(find.text('Delete recording?'), findsNothing);
+      expect(find.text('Standup notes'), findsOneWidget);
+    });
+
+    testWidgets('Delete reports the row that was tapped, and only that one',
+        (tester) async {
+      final deleted = <RecordingEntry>[];
+      await pumpScreen(
+        tester,
+        _library(entries: _saved(), onDelete: deleted.add),
+      );
+
+      await tester.tap(find.bySemanticsLabel('Delete Call with supplier'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      expect(deleted, hasLength(1));
+      expect(deleted.single.title, 'Call with supplier');
+      expect(
+        deleted.single.path,
+        '/recordings/voicenote-20260909-180000.wav',
+      );
+    });
+
+    testWidgets('tapping the bin does not also open the recording',
+        (tester) async {
+      RecordingEntry? opened;
+      await pumpScreen(
+        tester,
+        _library(
+          entries: _saved(),
+          onDelete: (_) {},
+          onOpen: (entry) => opened = entry,
+        ),
+      );
+
+      await tester.tap(find.bySemanticsLabel('Delete Standup notes'));
+      await tester.pumpAndSettle();
+
+      expect(opened, isNull);
+    });
   });
 }

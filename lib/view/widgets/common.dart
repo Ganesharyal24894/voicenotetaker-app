@@ -270,3 +270,47 @@ class KeyValueRow extends StatelessWidget {
     );
   }
 }
+
+
+/// The app's ONE delete confirmation, so the library row and the playback
+/// screen cannot drift apart in how they ask.
+///
+/// Returns true only on an explicit Delete. [what] is the recording's name -
+/// naming it is the point of the dialog, because the alternative is asking
+/// "delete this?" about a row the user may have mis-tapped - and [detail] is
+/// the day and length that confirm it is the right one.
+///
+/// Destructive-red on the confirming action, from [AppColors.error]; Cancel is
+/// the quiet one and is what a dismissal returns.
+Future<bool> confirmDeleteRecording(
+  BuildContext context, {
+  required String what,
+  required String detail,
+}) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(borderRadius: AppShape.card),
+      title: const Text('Delete recording?', style: AppText.title22),
+      content: Text(
+        'Delete \u201C$what\u201D ($detail)? This cannot be undone.',
+        style: AppText.footnote12,
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel', style: AppText.label13),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: Text(
+            'Delete',
+            style: AppText.label13.copyWith(color: AppColors.error),
+          ),
+        ),
+      ],
+    ),
+  );
+  return confirmed ?? false;
+}

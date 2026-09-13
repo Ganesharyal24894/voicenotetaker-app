@@ -186,6 +186,7 @@ void main() {
         AppText.timer,
         AppText.peakValue,
         AppText.scrubTime,
+        AppText.batteryValue,
       ]) {
         expect(
           style.fontFeatures,

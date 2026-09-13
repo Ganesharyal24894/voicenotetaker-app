@@ -255,6 +255,16 @@ abstract final class AppText {
     color: AppColors.textTertiary,
   );
 
+  /// The battery percentage - 12px / 300 tertiary, tabular. The charge ticks
+  /// while the app is open, and the header must not reflow when it does.
+  static const TextStyle batteryValue = TextStyle(
+    fontFamily: family,
+    fontSize: 12,
+    fontWeight: FontWeight.w300,
+    color: AppColors.textTertiary,
+    fontFeatures: _tabular,
+  );
+
   /// 13px / 300 tertiary meta.
   static const TextStyle meta13 = TextStyle(
     fontFamily: family,

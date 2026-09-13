@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../model/audio_codec.dart';
+import '../model/battery_status.dart';
 import '../model/device_state.dart';
 import '../model/stream_info.dart';
 
@@ -58,6 +59,23 @@ abstract class BleTransport {
 
   /// Writes [enabled] to the `fe04` auto-sleep characteristic as one byte.
   Future<void> setAutoSleep(String deviceId, bool enabled);
+
+  /// Reads the `fe05` battery characteristic once.
+  ///
+  /// Throws [BleTransportException] when the characteristic is absent - which
+  /// is what firmware older than `fe05` looks like from here - or when the
+  /// value is not the two bytes the protocol defines. Callers must treat that
+  /// as "battery unavailable", never as a reading of zero.
+  Future<BatteryStatus> readBattery(String deviceId);
+
+  /// Subscribes to `fe05` and emits each battery notification, parsed.
+  ///
+  /// A malformed notification arrives as an error on the stream rather than
+  /// as a made-up value. The stream closes when the subscription is cancelled
+  /// or [unsubscribeBattery] is called.
+  Stream<BatteryStatus> subscribeBattery(String deviceId);
+
+  Future<void> unsubscribeBattery(String deviceId);
 
   /// Subscribes to `fe01` and emits each notification verbatim - sequence
   /// header included. Stripping that header is [FrameReassembler]'s job, not

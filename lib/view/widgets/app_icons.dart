@@ -38,6 +38,9 @@ enum AppGlyph {
 
   /// Circular arrow with a head - the scan control's refresh glyph.
   refresh,
+
+  /// Waste bin - deleting a recording.
+  trash,
 }
 
 /// A stroke-based vector icon drawn with a [CustomPainter].
@@ -253,6 +256,31 @@ class _GlyphPainter extends CustomPainter {
             ..moveTo(20.5, 3.5)
             ..lineTo(20.5, 9)
             ..lineTo(15, 9),
+        ];
+      case AppGlyph.trash:
+        return <Path>[
+          // Lid, with the handle above it.
+          Path()
+            ..moveTo(3.5, 6.5)
+            ..lineTo(20.5, 6.5),
+          Path()
+            ..moveTo(9.5, 6.5)
+            ..lineTo(9.5, 4.5)
+            ..lineTo(14.5, 4.5)
+            ..lineTo(14.5, 6.5),
+          // Tapered body.
+          Path()
+            ..moveTo(5.5, 6.5)
+            ..lineTo(6.4, 19.5)
+            ..lineTo(17.6, 19.5)
+            ..lineTo(18.5, 6.5),
+          // The two ribs.
+          Path()
+            ..moveTo(10.3, 10)
+            ..lineTo(10.6, 16),
+          Path()
+            ..moveTo(13.7, 10)
+            ..lineTo(13.4, 16),
         ];
       case AppGlyph.play:
         return const <Path>[];

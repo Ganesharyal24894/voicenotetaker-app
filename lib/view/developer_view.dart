@@ -81,6 +81,10 @@ class _DeveloperViewState extends State<DeveloperView> {
       // Reported as unknown when the device never told us, so a report from a
       // board running older firmware cannot be misread as "auto-sleep off".
       'auto-sleep: ${_controller.autoSleepAvailable ? (_controller.autoSleepEnabled ? 'on' : 'off') : 'unknown'}',
+      // Same rule: "unknown" rather than a number, so a report from a board
+      // running older firmware cannot be misread as a flat battery.
+      'battery: ${_controller.batteryAvailable ? (_controller.batteryPercent == null ? 'unknown (0xFF)' : '${_controller.batteryPercent}%') : 'unavailable'}',
+      'charging: ${_controller.batteryAvailable ? (_controller.batteryCharging ? 'yes' : 'no') : 'unknown'}',
       'stream: ${info == null ? '—' : info.toString()}',
       'frames received: ${stats.framesReceived}',
       'frames lost: ${stats.framesLost}',

@@ -31,6 +31,15 @@ abstract final class DeviceProfile {
   static const String autoSleepCharacteristicUuid =
       '6e40fe04-b5a3-f393-e0a9-e50e24dcca9e';
 
+  /// `fe05` - READ + NOTIFY, two bytes of battery status (see
+  /// [BatteryStatus]). Read once on connect and then followed by
+  /// notifications, so the reading on screen stays live.
+  ///
+  /// Firmware older than this characteristic simply does not have it; the app
+  /// treats the absence as "battery unavailable", never as a flat cell.
+  static const String batteryCharacteristicUuid =
+      '6e40fe05-b5a3-f393-e0a9-e50e24dcca9e';
+
   /// Every notification is prefixed with a little-endian uint16 sequence
   /// number; gaps in it are packets dropped on the link.
   static const int sequenceHeaderBytes = 2;

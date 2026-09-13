@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'recording_entry.dart';
@@ -7,14 +9,14 @@ import 'widgets/common.dart';
 
 /// Screen 4 - the recordings library.
 ///
-/// [entries] are supplied by the caller: the app passes any real finished
-/// recording plus `PlaceholderData.library`, because nothing enumerates saved
-/// files yet.
+/// [entries] are supplied by the caller: the app passes the saved recordings
+/// the library service found.
 class LibraryView extends StatefulWidget {
   const LibraryView({
     required this.entries,
     required this.onOpen,
     required this.onNewRecording,
+    this.onDelete,
     this.onBack,
     this.now,
     super.key,
@@ -23,6 +25,15 @@ class LibraryView extends StatefulWidget {
   final List<RecordingEntry> entries;
   final ValueChanged<RecordingEntry> onOpen;
   final VoidCallback onNewRecording;
+
+  /// Deletes one recording. The view CONFIRMS first and only calls this on a
+  /// yes; the deletion itself is the service layer's, reached through the
+  /// controller - nothing here touches a file.
+  ///
+  /// Null leaves the rows with no delete control at all, which is what a
+  /// caller that has no controller to delete through should pass.
+  final ValueChanged<RecordingEntry>? onDelete;
+
   final VoidCallback? onBack;
 
   /// "Today"/"Yesterday" are relative to this, defaulting to the wall clock.
@@ -61,6 +72,29 @@ class _LibraryViewState extends State<LibraryView> {
       groups.putIfAbsent(entry.dayLabel(now: widget.now), () => <RecordingEntry>[]).add(entry);
     }
     return groups;
+  }
+
+  /// Asks before deleting, and NAMES the recording while asking.
+  ///
+  /// Deletion is permanent - the file goes, and there is no copy on the
+  /// recorder - so a mis-tap on a 44px row must not be able to destroy a
+  /// recording on its own. The dialog itself is
+  /// [confirmDeleteRecording], shared with the playback screen.
+  Future<void> _confirmDelete(
+    BuildContext context,
+    RecordingEntry entry,
+  ) async {
+    final onDelete = widget.onDelete;
+    if (onDelete == null) return;
+
+    final confirmed = await confirmDeleteRecording(
+      context,
+      what: entry.title,
+      // The day and the length: enough to be sure it is the right one
+      // without leaving the dialog.
+      detail: '${entry.dayLabel(now: widget.now)}, ${entry.durationLabel}',
+    );
+    if (confirmed) onDelete(entry);
   }
 
   @override
@@ -123,6 +157,14 @@ class _LibraryViewState extends State<LibraryView> {
                       lastInGroup: i == group.value.length - 1 &&
                           group.key == groups.keys.last,
                       onTap: () => widget.onOpen(group.value[i]),
+                      // A row with no file behind it has nothing to delete,
+                      // so it gets no delete control rather than a dead one.
+                      onDelete: widget.onDelete == null ||
+                              group.value[i].path == null
+                          ? null
+                          : () => unawaited(
+                                _confirmDelete(context, group.value[i]),
+                              ),
                     ),
                   const SizedBox(height: 18),
                 ],
@@ -205,11 +247,15 @@ class _LibraryRow extends StatelessWidget {
     required this.entry,
     required this.lastInGroup,
     required this.onTap,
+    this.onDelete,
   });
 
   final RecordingEntry entry;
   final bool lastInGroup;
   final VoidCallback onTap;
+
+  /// Null when this row cannot be deleted; the control is then absent.
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -240,6 +286,19 @@ class _LibraryRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 14),
+            if (onDelete != null)
+              // Inside the row's own gesture detector, but opaque, so a tap
+              // on the bin deletes rather than opening the recording.
+              TapTarget(
+                onTap: onDelete,
+                semanticLabel: 'Delete ${entry.title}',
+                child: const AppIcon(
+                  AppGlyph.trash,
+                  size: 18,
+                  color: AppColors.textTertiary,
+                  strokeWidth: 1.6,
+                ),
+              ),
             const AppIcon(
               AppGlyph.chevronRight,
               size: 17,

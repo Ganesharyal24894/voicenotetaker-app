@@ -33,6 +33,7 @@ class PlaybackView extends StatefulWidget {
     required this.controller,
     required this.entry,
     this.recording,
+    this.onDeleted,
     this.onBack,
     super.key,
   });
@@ -45,6 +46,12 @@ class PlaybackView extends StatefulWidget {
   /// Null when this entry has no file - the placeholder rows - in which case
   /// nothing can be loaded and the transport is disabled.
   final RecordingInfo? recording;
+
+  /// Called after this recording has been deleted, so the caller can leave a
+  /// screen that no longer has a file behind it.
+  ///
+  /// Null - or a [recording] of null - takes the delete action away entirely.
+  final VoidCallback? onDeleted;
 
   final VoidCallback? onBack;
 
@@ -159,6 +166,25 @@ class _PlaybackViewState extends State<PlaybackView> {
     unawaited(_controller.seekPlayback(target));
   }
 
+  /// Deletes the recording this screen is showing, after confirming.
+  ///
+  /// [AppController.deleteRecording] stops playback before unlinking the file
+  /// - deleting one out from under an open player is a platform crash - and
+  /// this screen then has nothing left to show, so it leaves.
+  Future<void> _delete() async {
+    final recording = _recording;
+    if (recording == null) return;
+    final confirmed = await confirmDeleteRecording(
+      context,
+      what: widget.entry.title,
+      detail: '${widget.entry.dayLabel()}, ${widget.entry.durationLabel}',
+    );
+    if (!confirmed || !mounted) return;
+    await _controller.deleteRecording(recording);
+    if (!mounted) return;
+    (widget.onDeleted ?? widget.onBack)?.call();
+  }
+
   void _notice(String what) {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
@@ -227,16 +253,30 @@ class _PlaybackViewState extends State<PlaybackView> {
               const Expanded(
                 child: Text('Recordings', style: AppText.meta13),
               ),
-              TapTarget(
-                onTap: () => _notice('No actions here yet.'),
-                semanticLabel: 'More',
-                child: const AppIcon(
-                  AppGlyph.more,
-                  size: 19,
-                  color: AppColors.textSecondary,
-                  strokeWidth: 1.7,
+              if (_recording == null)
+                // Nothing to act on: a row with no file behind it cannot be
+                // deleted, so the control says so rather than looking live.
+                TapTarget(
+                  onTap: () => _notice('No actions here yet.'),
+                  semanticLabel: 'More',
+                  child: const AppIcon(
+                    AppGlyph.more,
+                    size: 19,
+                    color: AppColors.textSecondary,
+                    strokeWidth: 1.7,
+                  ),
+                )
+              else
+                TapTarget(
+                  onTap: () => unawaited(_delete()),
+                  semanticLabel: 'Delete recording',
+                  child: const AppIcon(
+                    AppGlyph.trash,
+                    size: 19,
+                    color: AppColors.textSecondary,
+                    strokeWidth: 1.7,
+                  ),
                 ),
-              ),
             ],
           ),
           const SizedBox(height: 34),

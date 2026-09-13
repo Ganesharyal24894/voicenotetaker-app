@@ -6,6 +6,7 @@ import '../drivers/audio_player.dart';
 import '../drivers/ble_transport.dart';
 import '../drivers/file_store.dart';
 import '../model/audio_codec.dart';
+import '../model/battery_status.dart';
 import '../model/device_state.dart';
 import '../model/level_reading.dart';
 import '../model/recording_info.dart';
@@ -89,7 +90,18 @@ class AppController extends ChangeNotifier {
   /// put the recorder to sleep - and a wrong guess is worse than no answer.
   bool? _autoSleep;
 
+  /// The device's battery reading, or null when it is unknown: nothing is
+  /// connected, the read failed, or the firmware predates `fe05`.
+  ///
+  /// Null is the same kind of third state [_autoSleep] is, and for the same
+  /// reason: there is no honest default for a measurement only the device can
+  /// take. Note the SECOND unknown nested inside it - a [BatteryStatus] whose
+  /// `percent` is null is a device that has the characteristic but no reading
+  /// (`0xFF` on the wire). Neither may ever be rendered as 0%.
+  BatteryStatus? _battery;
+
   StreamSubscription<DiscoveredDevice>? _scanSubscription;
+  StreamSubscription<BatteryStatus>? _batterySubscription;
   StreamSubscription<BleConnectionStatus>? _connectionSubscription;
   StreamSubscription<CaptureStats>? _statsSubscription;
   StreamSubscription<LevelReading>? _levelSubscription;
@@ -155,6 +167,27 @@ class AppController extends ChangeNotifier {
   /// The device's auto-sleep flag as last read from, or written to, the
   /// recorder. Meaningless unless [autoSleepAvailable] is true.
   bool get autoSleepEnabled => _autoSleep ?? false;
+
+  /// Whether the connected device reported a battery status at all.
+  ///
+  /// False means the control has nothing truthful to show and must be
+  /// presented as unavailable - not as an empty battery.
+  bool get batteryAvailable => _battery != null;
+
+  /// Charge in percent, or null when there is no reading to show.
+  ///
+  /// Null covers both unknowns: no `fe05` on this firmware, and `fe05`
+  /// reporting `0xFF`. A caller that renders null as "0%" is a bug - the
+  /// whole point of the nullability is that 0% is a real, different fact.
+  int? get batteryPercent => _battery?.percent;
+
+  /// Whether the recorder is charging. False when unknown, because "not
+  /// charging" is what the absence of a charge signal looks like - and unlike
+  /// the percentage it is not a number put in front of the user.
+  bool get batteryCharging => _battery?.charging ?? false;
+
+  /// The reading itself, for callers that want both halves at once.
+  BatteryStatus? get batteryStatus => _battery;
 
   bool get isScanning => _phase == AppPhase.scanning;
   bool get isConnected =>
@@ -255,6 +288,10 @@ class AppController extends ChangeNotifier {
       if (status == BleConnectionStatus.disconnected) {
         _connectedDevice = null;
         _autoSleep = null;
+        // The reading described a link that is gone; keeping the last
+        // percentage on screen would be showing a stale measurement as live.
+        _battery = null;
+        unawaited(_stopBattery(device.id));
         _setPhase(AppPhase.idle);
       }
     });
@@ -262,6 +299,58 @@ class AppController extends ChangeNotifier {
     // Read rather than assumed: the flag lives in the device's flash and
     // survives reboots, so only the device knows what it is.
     await _readAutoSleep(device.id);
+    // Read once so there is something on screen immediately, then follow the
+    // notifications so it stays live.
+    await _readBattery(device.id);
+    _followBattery(device.id);
+  }
+
+  /// Reads the battery status from the connected device.
+  ///
+  /// A failure is not an app error: it leaves the battery unknown and the
+  /// readout unavailable, which is all firmware without `fe05` can honestly
+  /// be reported as.
+  Future<void> _readBattery(String deviceId) async {
+    try {
+      _battery = await _transport.readBattery(deviceId);
+    } on BleTransportException {
+      _battery = null;
+    }
+    notifyListeners();
+  }
+
+  /// Follows `fe05` notifications so the readout tracks the device.
+  ///
+  /// An error on the stream - a malformed value, or firmware with no `fe05` at
+  /// all - leaves whatever the one-shot read established rather than inventing
+  /// a reading, and is not an app failure.
+  void _followBattery(String deviceId) {
+    unawaited(_batterySubscription?.cancel());
+    try {
+      _batterySubscription = _transport.subscribeBattery(deviceId).listen(
+        (status) {
+          _battery = status;
+          notifyListeners();
+        },
+        onError: (Object _) {},
+      );
+    } on BleTransportException {
+      // A transport that refuses to subscribe at all - no `fe05`, or a
+      // subscription already open - leaves whatever the one-shot read
+      // established. It must never take the connection down with it.
+      _batterySubscription = null;
+    }
+  }
+
+  /// Ends the `fe05` subscription, best effort.
+  Future<void> _stopBattery(String deviceId) async {
+    await _batterySubscription?.cancel();
+    _batterySubscription = null;
+    try {
+      await _transport.unsubscribeBattery(deviceId);
+    } on BleTransportException {
+      // The notifications have stopped either way.
+    }
   }
 
   /// Re-reads the auto-sleep flag from the connected device.
@@ -299,20 +388,36 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Ends the link the user asked to end.
+  ///
+  /// A capture in progress is stopped first, so the file is closed and its WAV
+  /// header patched rather than truncated by the link going away.
+  ///
+  /// A FAILING `disconnect` STILL DROPS THE LOCAL STATE. The alternative -
+  /// keeping [connectedDevice] because the platform call threw - leaves the UI
+  /// claiming a connection the user has already dismissed, with a device name
+  /// and a battery percentage that nothing is refreshing. The failure is
+  /// reported instead, on the screen the app returns to; reconnecting is one
+  /// tap from there.
   Future<void> disconnect() async {
     final device = _connectedDevice;
     if (device == null) return;
     if (isRecording) await stopRecording();
     await _connectionSubscription?.cancel();
     _connectionSubscription = null;
+    // Stop following the battery before the link goes, so the last thing the
+    // radio does is not delivering a notification into a torn-down listener.
+    await _stopBattery(device.id);
+    String? failure;
     try {
       await _transport.disconnect(device.id);
     } on BleTransportException catch (e) {
-      _fail(e.message);
-      return;
+      failure = e.message;
     }
     _connectedDevice = null;
     _autoSleep = null;
+    _battery = null;
+    _errorMessage = failure;
     _setPhase(AppPhase.idle);
   }
 
@@ -373,9 +478,26 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Deletes [recording] and refreshes the list.
+  /// Deletes [recording]: the file, and every reference the app still holds
+  /// to it.
+  ///
+  /// Playback stops FIRST when this is the recording being played. Deleting a
+  /// file out from under an open player is a platform-level crash, not a
+  /// tidy-up problem, so the order here is load-bearing.
+  ///
+  /// The app keeps no sidecar metadata - a recording's name, timestamp and
+  /// length are read back from the file name and its own WAV header - so
+  /// "delete the metadata too" means dropping the in-memory references:
+  /// [nowPlaying], [lastRecording] and the published list. Any one of them
+  /// left pointing at a deleted path is the orphan entry.
   Future<void> deleteRecording(RecordingInfo recording) async {
-    if (_nowPlaying?.path == recording.path) await stopPlayback();
+    if (_nowPlaying?.path == recording.path) {
+      await stopPlayback();
+      _nowPlaying = null;
+      _playback = PlaybackState.idle;
+      _playbackError = null;
+    }
+    if (_lastRecording?.path == recording.path) _lastRecording = null;
     try {
       // The service re-lists the directory itself, so the deletion and the
       // list can never disagree.
@@ -491,6 +613,8 @@ class AppController extends ChangeNotifier {
     _scanSubscription = null;
     await _connectionSubscription?.cancel();
     _connectionSubscription = null;
+    await _batterySubscription?.cancel();
+    _batterySubscription = null;
     await _statsSubscription?.cancel();
     _statsSubscription = null;
     await _levelSubscription?.cancel();

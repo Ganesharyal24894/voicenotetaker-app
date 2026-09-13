@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
@@ -83,9 +85,28 @@ class HomeView extends StatelessWidget {
                               : AppColors.disconnected,
                         ),
                         const SizedBox(width: 7),
-                        Text(
-                          connected ? 'Connected' : 'Disconnected',
-                          style: AppText.body13,
+                        // Charging is stated in WORDS here, so the battery
+                        // readout's green tint is a reinforcement rather than
+                        // the only way to tell 40% charging from 40% draining.
+                        //
+                        // It REPLACES "Connected" rather than being appended
+                        // to it: "Connected · Charging" does not fit beside
+                        // the name, the battery and the developer entry point
+                        // at 390px, and the breathing green dot immediately to
+                        // its left already says the link is up.
+                        //
+                        // Flexible, because a narrower phone or a longer
+                        // device name must ellipsise rather than overflow.
+                        Flexible(
+                          child: Text(
+                            connected
+                                ? (controller.batteryCharging
+                                    ? 'Charging'
+                                    : 'Connected')
+                                : 'Disconnected',
+                            style: AppText.body13,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -103,7 +124,7 @@ class HomeView extends StatelessWidget {
                     strokeWidth: 1.7,
                   ),
                 ),
-              const _BatteryReadout(),
+              _BatteryReadout(controller: controller),
             ],
           ),
           Expanded(
@@ -122,6 +143,12 @@ class HomeView extends StatelessWidget {
                     connected ? 'Tap to record' : 'Connect a recorder to start',
                     style: AppText.meta14,
                   ),
+                  if (connected) ...<Widget>[
+                    const SizedBox(height: 24),
+                    _DisconnectChip(
+                      onTap: () => unawaited(controller.disconnect()),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -205,26 +232,108 @@ class _RecordButton extends StatelessWidget {
   }
 }
 
-/// Battery charge. There is no battery service on the device and no method for
-/// one on `BleTransport`, so this renders the unknown state.
+/// Battery charge and charging state, from the device's `fe05` characteristic.
+///
+/// THREE STATES, AND 0% IS NONE OF THEM:
+///
+///   * a percentage - the device measured it and said so;
+///   * unknown because the device has no reading (`0xFF` on the wire);
+///   * unknown because there is no `fe05` at all - older firmware, a failed
+///     read, or nothing connected.
+///
+/// The last two both render as an em dash and an empty battery OUTLINE, never
+/// as `0%` and never as a full one. A flat cell and an unanswered question
+/// look nothing alike here, which is the whole point.
+///
+/// Charging is shown separately from the percentage, and is knowable even when
+/// the percentage is not: the icon and figure turn green, and the status line
+/// under the device name says "Charging" in words so the state does not rest
+/// on colour alone.
 class _BatteryReadout extends StatelessWidget {
-  const _BatteryReadout();
+  const _BatteryReadout({required this.controller});
+
+  /// Space kept for the figure, whatever it currently reads - see the comment
+  /// at the call site. Sized for the widest value the contract allows, "100%".
+  static const double _readingWidth = 34;
+
+  final AppController controller;
 
   @override
   Widget build(BuildContext context) {
-    const level = PlaceholderData.batteryLevel;
+    final percent = controller.batteryPercent;
+    final charging = controller.batteryCharging;
+    final colour = charging ? AppColors.connected : AppColors.textTertiary;
+
     return Semantics(
-      label: 'Battery',
+      label: _semanticLabel(percent, charging),
+      container: true,
+      excludeSemantics: true,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          const BatteryIcon(level: level),
+          BatteryIcon(
+            // Null leaves the outline empty rather than drawing a bar; see
+            // `BatteryIcon`.
+            level: percent == null ? null : percent / 100,
+            color: colour,
+          ),
           const SizedBox(width: 6),
-          Text(
-            level == null ? '—' : '${(level * 100).round()}%',
-            style: AppText.meta12,
+          // A RESERVED width, wide enough for "100%", right-aligned. The
+          // readout sits beside the device name in a fixed-height header, so
+          // if it grew with the number the name would be squeezed and re-laid
+          // out every time the charge ticked - and would jump between the
+          // connected and disconnected states.
+          SizedBox(
+            width: _readingWidth,
+            child: Text(
+              percent == null
+                  ? PlaceholderData.unknownValue
+                  : '$percent%',
+              style: AppText.batteryValue.copyWith(color: colour),
+              textAlign: TextAlign.right,
+            ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Spelt out for a screen reader, where the green means nothing.
+  static String _semanticLabel(int? percent, bool charging) {
+    final charge = percent == null ? 'level unknown' : '$percent percent';
+    return charging ? 'Battery $charge, charging' : 'Battery $charge';
+  }
+}
+
+/// Ends the link with the recorder.
+///
+/// Placed with the connection state rather than in the header: the header is
+/// only 46px tall and already carries the logo, the device name, the battery
+/// and (in debug) the developer entry point, and the sentence directly under
+/// the record button - "Tap to record" / "Connect a recorder to start" - is
+/// where this screen already talks about whether a recorder is attached.
+///
+/// The same quiet pill as the playback screen's speed and Transcribe chips, so
+/// this introduces no new control idiom. It is shown ONLY while connected; it
+/// is not confirmed, because disconnecting destroys nothing and reconnecting
+/// is one tap on the screen it returns to.
+class _DisconnectChip extends StatelessWidget {
+  const _DisconnectChip({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return TapTarget(
+      onTap: onTap,
+      semanticLabel: 'Disconnect',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: AppColors.border),
+          borderRadius: AppShape.pill,
+        ),
+        child: Text('Disconnect', style: AppText.label13),
       ),
     );
   }
