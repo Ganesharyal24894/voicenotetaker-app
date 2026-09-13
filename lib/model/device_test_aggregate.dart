@@ -15,16 +15,18 @@
 /// So the screen takes n samples and this file reduces them. It reports:
 ///
 ///   * a MEDIAN, not a mean. One bad sample - a dropout, a door slamming, a
-///     scan the OS throttled - moves a mean of five by a fifth of its error and
-///     moves a median of five not at all.
+///     scan the OS throttled - moves a mean of seven by a seventh of its error
+///     and moves a median of seven not at all.
 ///   * the full RANGE, min to max. Not a standard deviation: nothing here is
-///     known to be normally distributed and n is five, where a sample SD is
-///     itself mostly noise. Not an inter-quartile range either, and that is a
-///     deliberate choice - at n=5 the IQR is computed from samples 2 and 4,
-///     which means it DISCARDS exactly the extreme readings that a resonance or
-///     a slammed door shows up as. The wildest sample is usually the most
-///     interesting one here, so the spread that is reported is the one that
-///     contains it.
+///     known to be normally distributed and n is single digits, where a sample
+///     SD is itself mostly noise. Not an inter-quartile range either, and that
+///     is a deliberate choice - at these n the IQR discards exactly the extreme
+///     readings that a resonance or a slammed door shows up as. The wildest
+///     sample is usually the most interesting one here, so the spread that is
+///     reported is the one that contains it. The price of that choice is that
+///     the expected range GROWS with n, so a range is only comparable against
+///     another range of similar size - which is why [DeviceTestSampling] fixes
+///     the counts and why every batch prints its own n.
 ///
 /// NOTHING IS EXCLUDED FROM THE MEDIAN. A sample with no reading at all - a
 /// failed run, or a window in which no audio arrived - cannot enter a median, so
@@ -40,32 +42,69 @@ import 'device_test_result.dart';
 
 /// How many samples a check takes, and which checks can take them unattended.
 ///
-/// IN `model/` RATHER THAN BESIDE THE LOOP THAT USES IT. The screen offers the
-/// choice, the controller holds it, the service performs it and the tests assert
-/// on it; a constant in any one of those four would have the other three
-/// quoting a number they could not see.
+/// IN `model/` RATHER THAN BESIDE THE LOOP THAT USES IT. The screen names the
+/// counts, the controller passes them, the service performs them and the tests
+/// assert on them; a constant in any one of those four would have the other
+/// three quoting a number they could not see.
+///
+/// THE COUNTS ARE FIXED AND THERE IS NO CONTROL FOR THEM. There used to be one
+/// on the diagnostics screen, and it was wrong: diagnostics is a screen for
+/// OBSERVERS, and a sample-count selector asks somebody to reason about
+/// sampling statistics before they are allowed to look at their own microphone.
+/// Worse, a knob means two batches on the same phone can be taken at different
+/// n - and n is precisely what makes two batches comparable, because the spread
+/// this file reports is a RANGE and the expected range of a sample grows with
+/// its size. Fixing the counts here is what lets "Latest beside Before" be read
+/// as a measurement rather than as an artefact of how patient somebody felt.
+///
+/// A developer who wants another n still has one: `DeviceTestService.run…` takes
+/// `repeats` and always has. It is simply not a thing the UI asks about.
 abstract final class DeviceTestSampling {
-  /// Samples taken per test unless the operator says otherwise.
+  /// Samples the noise floor takes: SEVEN.
   ///
-  /// FIVE, and the number is a compromise between statistics and patience.
+  /// This check is fully unattended - the operator's whole job is to leave the
+  /// room alone - so samples cost nobody anything but the recorder's time, and
+  /// seven ten-second windows is a little over a minute of leaving it be.
   ///
-  /// It is ODD, so the median is a sample somebody actually measured rather
-  /// than the mean of the two middle ones. It survives two bad samples out of
-  /// five without the middle value moving, which covers the ordinary disasters
-  /// here - one slammed door, one lorry outside, one cough. And it is small
-  /// enough to actually get done: five ten-second windows is under a minute of
-  /// somebody's afternoon, and a default nobody finishes yields n=2 batches -
-  /// which is worse than a default of five that they do finish.
+  /// Seven rather than five because the extra two are nearly free here and buy
+  /// a median that survives THREE bad samples instead of two, which is the
+  /// difference between tolerating one fridge compressor cycle and tolerating a
+  /// compressor plus a lorry. Seven rather than nine or ten because the range
+  /// is what gets compared against the bare-board baseline, that baseline was
+  /// taken at n=5, and the expected range of a normal sample runs about 2.33σ
+  /// at n=5, 2.70σ at n=7 and 3.08σ at n=10 - so nine or ten would inflate the
+  /// spread by a quarter against the baseline for no reason other than arithmetic
+  /// and read as the enclosure adding variability it did not add. Seven keeps
+  /// that inflation to about a sixth, and the card prints the n of every batch
+  /// beside its range so the difference is visible rather than implied.
   ///
-  /// Three is defensible and is offered. One is offered too, because a single
-  /// run is the right thing when the question is "is this board alive" rather
-  /// than "is this enclosure worse" - and the screen then says n=1 out loud
-  /// instead of dressing one reading up as a baseline.
-  static const int defaultCount = 5;
+  /// Odd, so the median is a sample somebody measured rather than the mean of
+  /// the two middle ones - the one place this file would otherwise report a
+  /// number nobody took.
+  static const int noiseFloorSamples = 7;
 
-  /// The counts the screen offers. Ten is for the tighter baseline worth having
-  /// on the noise floor, which repeats unattended and costs nobody anything.
-  static const List<int> choices = <int>[1, 3, 5, 10];
+  /// Samples the sensitivity check takes: THREE.
+  ///
+  /// EVERY SAMPLE OF THIS ONE COSTS A HUMAN. Somebody has to stand at
+  /// [DeviceTestReadings.sensitivityDistanceCm] and speak, once per sample, and
+  /// the check stops and waits for them in between. Five of those is tedious in
+  /// the specific way that stops a check being run at all - and a check nobody
+  /// runs measures nothing, which is worse than a check run at n=3.
+  ///
+  /// Three is the smallest count that still reports both things this file exists
+  /// for: an odd median, which one bad sample cannot move, and a range, which
+  /// needs at least two. The range from three samples is narrower than the
+  /// baseline's five by about a quarter for purely combinatorial reasons - the
+  /// same arithmetic as above, in the other direction - so a spread that LOOKS
+  /// tighter than the baseline's is not news. A spread that looks WIDER at n=3
+  /// than the baseline's at n=5 very much is.
+  static const int sensitivitySamples = 3;
+
+  /// How many samples [kind] takes. Not a setting - see the class comment.
+  static int samplesFor(DeviceTestKind kind) => switch (kind) {
+        DeviceTestKind.noiseFloor => noiseFloorSamples,
+        DeviceTestKind.sensitivity => sensitivitySamples,
+      };
 
   /// Whether [kind] can take its next sample with nobody present.
   ///
@@ -240,7 +279,7 @@ class DeviceTestBatch {
       // share a batch, whatever a hand-edited or future file claims.
       final key = id == null
           ? 'lone-${loners++}'
-          : '${run.kind.wireName} $id';
+          : '${run.kind.wireName} $id';
       final bucket = groups[key];
       if (bucket == null) {
         groups[key] = <DeviceTestResult>[run];

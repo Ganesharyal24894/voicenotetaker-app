@@ -10,6 +10,7 @@ import '../model/audio_codec.dart';
 import '../model/battery_bars.dart';
 import '../model/battery_status.dart';
 import '../model/device_state.dart';
+import '../model/device_test_aggregate.dart';
 import '../model/device_test_result.dart';
 import '../model/die_temperature.dart';
 import '../model/level_reading.dart';
@@ -33,6 +34,23 @@ enum AppPhase {
   recording,
   stopping,
   error,
+}
+
+/// Why a link is ending.
+///
+/// The three ways it can happen differ in only a handful of details, and those
+/// details live in one place - see `AppController._releaseLink` - rather than in
+/// three teardowns that can drift apart.
+enum _LinkEnding {
+  /// The user asked, by tapping Disconnect.
+  userAsked,
+
+  /// The radio reported the peripheral gone while the adapter was still up.
+  peripheralGone,
+
+  /// The adapter itself went away - switched off, resetting, or the permission
+  /// withdrawn - so there is no radio left to report anything at all.
+  adapterLost,
 }
 
 /// Owns app state and sequences the drivers and services.
@@ -187,6 +205,7 @@ class AppController extends ChangeNotifier {
   StreamSubscription<void>? _testSubscription;
   StreamSubscription<void>? _linkSubscription;
   StreamSubscription<BleConnectionStatus>? _connectionSubscription;
+  StreamSubscription<BleAvailability>? _availabilitySubscription;
   StreamSubscription<CaptureStats>? _statsSubscription;
   StreamSubscription<LevelReading>? _levelSubscription;
   StreamSubscription<List<RecordingInfo>>? _librarySubscription;
@@ -337,29 +356,6 @@ class AppController extends ChangeNotifier {
   /// The reading itself, for callers that want the raw decidegrees.
   DieTemperature? get dieTemperature => _temperature;
 
-  int _samplesPerTest = DeviceTestService.defaultRepeatCount;
-
-  /// How many samples each mic check takes before it is aggregated.
-  ///
-  /// A SETTING AND NOT A CONSTANT, because the sensitivity check needs somebody
-  /// standing at the mark speaking, and the person doing that is entitled to say
-  /// how many times. The default and the reasoning behind it are
-  /// [DeviceTestService.defaultRepeatCount]; the choices offered are
-  /// [DeviceTestSampling.choices].
-  int get samplesPerTest => _samplesPerTest;
-
-  /// Changes the sample count the NEXT test will take. Never mid-batch: a batch
-  /// carries the count it was started with, or the n on the card would not match
-  /// what was measured.
-  set samplesPerTest(int samples) {
-    final wanted = samples < 1 ? 1 : samples;
-    if (wanted == _samplesPerTest || _tests.isRunning || _tests.isBatchActive) {
-      return;
-    }
-    _samplesPerTest = wanted;
-    notifyListeners();
-  }
-
   /// Runs in the saved file this build does not read - see
   /// [DeviceTestStore.retiredKinds]. They are kept in the file untouched.
   ///
@@ -431,10 +427,89 @@ class AppController extends ChangeNotifier {
       _fail(e.message);
       return;
     }
-    _transport.availability.listen((state) {
-      _availability = state;
-      notifyListeners();
-    });
+    _availabilitySubscription =
+        _transport.availability.listen(_onAvailabilityChanged);
+    notifyListeners();
+  }
+
+  /// The adapter changed state. THE STALE-CONNECTED BUG LIVES HERE.
+  ///
+  /// Turning Bluetooth off does not reliably produce a disconnect: on Android the
+  /// GATT callback that reports a dropped link is delivered BY the stack that has
+  /// just been shut down, and there is no radio left to notice the peripheral is
+  /// gone. So an app that waits for [BleConnectionStatus.disconnected] waits for
+  /// an event that can never arrive, and goes on showing a device name, a battery
+  /// percentage and the word "Connected" that nothing is refreshing.
+  ///
+  /// ANYTHING BUT [BleAvailability.poweredOn] THEREFORE TEARS THE LINK DOWN, not
+  /// [BleAvailability.poweredOff] alone. `unauthorized` is the same fact arriving
+  /// through a revoked permission, and `unknown` is what the stack reports while
+  /// it is resetting or mid-way through turning off - on Android
+  /// `STATE_TURNING_OFF` arrives before `STATE_OFF`, which means tearing down on
+  /// "not powered on" acts one event EARLIER than watching for "powered off"
+  /// would.
+  ///
+  /// The reverse - Bluetooth coming back - deliberately does NOT reconnect. The
+  /// link was dropped, nothing is holding it, and claiming otherwise is the bug
+  /// this method exists to prevent. The screen returns to the scan control, which
+  /// is something the user can act on.
+  void _onAvailabilityChanged(BleAvailability state) {
+    final previous = _availability;
+    _availability = state;
+    if (state != previous && state != BleAvailability.poweredOn) {
+      unawaited(_adapterLost());
+    }
+    notifyListeners();
+  }
+
+  /// Re-reads the adapter state and acts on it, for callers that cannot assume
+  /// they were listening.
+  ///
+  /// A BACKSTOP AND NOT THE FIX. The availability stream is what carries this
+  /// (see [_onAvailabilityChanged]); this exists because a screen becoming
+  /// visible is the one moment where a missed event is both plausible and cheap
+  /// to correct - the user may have gone to the system Bluetooth panel, switched
+  /// the radio off there and come back. One platform read, on resume, is a
+  /// smaller price than a screen that lies.
+  ///
+  /// A failure is swallowed: the last known state is still the best answer, and
+  /// a resume must not be able to put the app into an error phase.
+  Future<void> refreshAvailability() async {
+    BleAvailability state;
+    try {
+      state = await _transport.currentAvailability();
+    } on BleTransportException {
+      return;
+    }
+    _onAvailabilityChanged(state);
+  }
+
+  /// The radio went away underneath us: drop everything that described it.
+  ///
+  /// The scan and the device list go too. A list of peripherals found by a radio
+  /// that is now off is not a list of peripherals in range, and leaving it there
+  /// means the user sees stale cards the moment Bluetooth comes back.
+  Future<void> _adapterLost() async {
+    // Cancelling the subscription is what ends the scan: the transport stops the
+    // radio and cancels the window timer from its own `onCancel`. It is wrapped
+    // because THIS is the case where telling the radio to stop scanning fails -
+    // it is already off - and a throw here must not stop the teardown below,
+    // which is the part the user can see.
+    try {
+      await _scanSubscription?.cancel();
+    } on BleTransportException {
+      // The scan has stopped either way: there is no radio running it.
+    }
+    _scanSubscription = null;
+    _devices.clear();
+    // Neither "found some" nor "found none" is true of a window the radio never
+    // finished, so the outcome goes back to saying nothing.
+    _scanOutcome = ScanOutcome.pending;
+    // A denied permission is NOT cleared: it is a separate fact that outlives
+    // the toggle, and the screen picks it over this one on purpose.
+    _errorMessage = null;
+    await _releaseLink(_LinkEnding.adapterLost);
+    if (_phase != AppPhase.idle) _setPhase(AppPhase.idle);
     notifyListeners();
   }
 
@@ -524,23 +599,10 @@ class AppController extends ChangeNotifier {
     _connectionSubscription =
         _transport.connectionState(device.id).listen((status) {
       if (status == BleConnectionStatus.disconnected) {
-        // Nobody asked for this: a working link went away. `disconnect()`
-        // cancels this subscription before it ends the link, so a deliberate
-        // disconnect never arrives here.
-        _linkOutcome = LinkOutcome.connectionLost;
-        _connectedDevice = null;
-        _autoSleep = null;
-        // The reading described a link that is gone; keeping the last
-        // percentage on screen would be showing a stale measurement as live.
-        _setBattery(null);
-        _temperature = null;
-        unawaited(_stopBattery(device.id));
-        unawaited(_stopTemperature(device.id));
-        // The live link view has nothing left to watch. `_diagnosticsOpen` is
-        // deliberately NOT cleared: the screen is still on top, and a reconnect
-        // should bring its readings back without the user leaving and returning.
-        unawaited(_linkMonitor.stop());
-        _setPhase(AppPhase.idle);
+        // Nobody asked for this: a working link went away while the adapter was
+        // still up. `disconnect()` cancels this subscription before it ends the
+        // link, so a deliberate disconnect never arrives here.
+        unawaited(_releaseLink(_LinkEnding.peripheralGone));
       }
     });
     _setPhase(AppPhase.connected);
@@ -787,11 +849,15 @@ class AppController extends ChangeNotifier {
   // -------------------------------------------------------------------------
 
   /// Ten seconds of a quiet room, reported as RMS dBFS.
+  ///
+  /// THE SAMPLE COUNT IS NOT A PARAMETER HERE and there is no setter for it: it
+  /// belongs to the measurement, not to the person taking it, and it differs per
+  /// check. See [DeviceTestSampling].
   Future<void> runNoiseFloorTest() => _micCheck(
         (device) => _tests.runNoiseFloor(
           deviceId: device.id,
           requestCodec: _preferredCodec,
-          repeats: _samplesPerTest,
+          repeats: DeviceTestSampling.samplesFor(DeviceTestKind.noiseFloor),
         ),
       );
 
@@ -800,7 +866,7 @@ class AppController extends ChangeNotifier {
         (device) => _tests.runSensitivity(
           deviceId: device.id,
           requestCodec: _preferredCodec,
-          repeats: _samplesPerTest,
+          repeats: DeviceTestSampling.samplesFor(DeviceTestKind.sensitivity),
         ),
       );
 
@@ -905,32 +971,87 @@ class AppController extends ChangeNotifier {
   /// and a battery percentage that nothing is refreshing. The failure is
   /// reported instead, on the screen the app returns to; reconnecting is one
   /// tap from there.
-  Future<void> disconnect() async {
+  Future<void> disconnect() => _releaseLink(_LinkEnding.userAsked);
+
+  /// Drops every trace of the current link. THE ONE TEARDOWN.
+  ///
+  /// Three things end a link and all three arrive here:
+  ///
+  ///   * the user asking ([_LinkEnding.userAsked]),
+  ///   * the radio reporting the peripheral gone ([_LinkEnding.peripheralGone]),
+  ///   * and the adapter itself going away ([_LinkEnding.adapterLost]).
+  ///
+  /// ONE METHOD BECAUSE THREE COPIES DRIFT, and the stale-"Connected" bug is
+  /// exactly what that drift looks like: a second teardown written for the
+  /// adapter case would sooner or later forget the die temperature, or the
+  /// diagnostics subscriptions, or a check still streaming. Whatever
+  /// "disconnected" means, it means the same thing three times.
+  ///
+  /// The differences between the three are small, named, and all in this method
+  /// rather than spread across its callers.
+  Future<void> _releaseLink(_LinkEnding ending) async {
     final device = _connectedDevice;
     if (device == null) return;
+    // The capture is finished properly rather than truncated: `stopRecording`
+    // patches the WAV header, and a link that has already gone does not stop it
+    // from doing that to the bytes already on disk.
     if (isRecording) await stopRecording();
+    // A CHECK CANNOT OUTLIVE THE LINK IT IS MEASURING. Its samples are kept and
+    // the batch is labelled stopped early - see `DeviceTestService.cancel` -
+    // which is the honest outcome, and it also stops the service holding the
+    // frame subscription open against a radio that is not there.
+    _tests.cancel();
+    // Cancelled in every case, including the one that arrives ON it: there is
+    // nothing further to hear about this link, and `connect` installs a fresh
+    // subscription rather than reusing this one.
     await _connectionSubscription?.cancel();
     _connectionSubscription = null;
     // Stop following the battery, the die temperature and the frame stream
     // before the link goes, so the last thing the radio does is not delivering a
     // notification into a torn-down listener.
+    //
+    // `_diagnosticsOpen` is deliberately NOT cleared. The screen may still be on
+    // top, and a reconnect should bring its readings back without the user
+    // leaving and returning - see [connect]. What matters for the power rule is
+    // that the SUBSCRIPTIONS are down, and these two lines are what puts them
+    // down; `_linkSubscription` carries no device state and is left for
+    // [closeDiagnostics] to drop when the screen actually goes away.
     await _stopBattery(device.id);
     await _stopTemperature(device.id);
     await _linkMonitor.stop();
     String? failure;
-    try {
-      await _transport.disconnect(device.id);
-    } on BleTransportException catch (e) {
-      failure = e.message;
+    if (ending != _LinkEnding.peripheralGone) {
+      // The peripheral is already gone in that case, and the existing behaviour
+      // is to say nothing to a stack that has nothing to close. The other two
+      // still ask, so the platform releases its GATT client.
+      try {
+        await _transport.disconnect(device.id);
+      } on BleTransportException catch (e) {
+        // Reported only when the USER asked: they are owed an explanation for an
+        // action they took. With the adapter gone the call was never going to
+        // succeed, there is nothing the user could do about it, and the
+        // Bluetooth-off screen is the whole message.
+        if (ending == _LinkEnding.userAsked) failure = e.message;
+      }
     }
     _connectedDevice = null;
     _autoSleep = null;
+    // These readings described a link that is gone; keeping the last percentage
+    // or the last temperature on screen would be showing a stale measurement as
+    // a live one.
     _setBattery(null);
     _temperature = null;
-    _errorMessage = failure;
-    // The user ended this, so there is nothing to explain and nothing to
-    // offer a retry for.
-    _linkOutcome = LinkOutcome.none;
+    // A dropped link leaves whatever message was already on screen: it explains
+    // the last thing the user did, and `ConnectionLostView` supplies the reason
+    // for the drop itself.
+    if (ending != _LinkEnding.peripheralGone) _errorMessage = failure;
+    // Only an unsolicited drop is worth explaining and offering a retry for. The
+    // user asking needs neither, and the adapter going off has a screen of its
+    // own - the Bluetooth-off edge state, which is reached by leaving the
+    // outcome at `none`.
+    _linkOutcome = ending == _LinkEnding.peripheralGone
+        ? LinkOutcome.connectionLost
+        : LinkOutcome.none;
     _setPhase(AppPhase.idle);
   }
 
@@ -1182,6 +1303,8 @@ class AppController extends ChangeNotifier {
     _scanSubscription = null;
     await _connectionSubscription?.cancel();
     _connectionSubscription = null;
+    await _availabilitySubscription?.cancel();
+    _availabilitySubscription = null;
     await _batterySubscription?.cancel();
     _batterySubscription = null;
     await _temperatureSubscription?.cancel();

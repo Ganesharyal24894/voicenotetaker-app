@@ -68,6 +68,11 @@ enum AppGlyph {
 
   /// Five bars of a level meter - recordings, and the invitation to make one.
   levels,
+
+  /// A circled lower-case i - the "what is this?" control beside a heading on
+  /// Diagnostics. Drawn in the same 24x24 box and the same stroke weight as the
+  /// rest, so it sits at a heading's weight rather than shouting.
+  info,
 }
 
 /// A stroke-based vector icon drawn with a [CustomPainter].
@@ -452,6 +457,22 @@ class _GlyphPainter extends CustomPainter {
           Path()
             ..moveTo(20, 11.5)
             ..lineTo(20, 12.5),
+        ];
+      case AppGlyph.info:
+        return <Path>[
+          Path()
+            ..addOval(
+              Rect.fromCircle(center: const Offset(12, 12), radius: 8.75),
+            ),
+          // The stem.
+          Path()
+            ..moveTo(12, 11)
+            ..lineTo(12, 16.5),
+          // The tittle, drawn as a very short stroke so the round cap makes the
+          // dot - the same trick the level-meter bars use for their short bars.
+          Path()
+            ..moveTo(12, 7.6)
+            ..lineTo(12, 7.7),
         ];
       case AppGlyph.play:
         return const <Path>[];

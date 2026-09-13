@@ -40,7 +40,7 @@ class AppRoot extends StatefulWidget {
   State<AppRoot> createState() => _AppRootState();
 }
 
-class _AppRootState extends State<AppRoot> {
+class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   /// This navigator is nested inside the app's own, so it needs a hero
   /// controller of its own: one controller cannot serve two navigators.
   final HeroController _heroController = HeroController(
@@ -52,13 +52,39 @@ class _AppRootState extends State<AppRoot> {
   void initState() {
     super.initState();
     widget.controller.addListener(_onControllerChanged);
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_onControllerChanged);
     _heroController.dispose();
     super.dispose();
+  }
+
+  /// Re-reads the adapter state when the app comes back to the foreground.
+  ///
+  /// A BACKSTOP, NOT THE FIX. `AppController` follows the availability stream and
+  /// that is what tears the link down when Bluetooth goes off; see
+  /// `AppController.refreshAvailability`. This covers the one gap where a missed
+  /// event is plausible - the user leaves for the system Bluetooth panel, turns
+  /// the radio off there, and comes back - and it costs one platform read on
+  /// resume.
+  ///
+  /// IT LIVES HERE RATHER THAN ON EACH SCREEN because every screen that can
+  /// render a connection sits under this widget, and the bug being guarded
+  /// against is "any screen showing a link that is gone" rather than "Home
+  /// showing it". One observer at the root beats four that can each be forgotten.
+  ///
+  /// `inactive` is deliberately not acted on - see the note in
+  /// `diagnostics_view.dart`; it fires for a notification shade and an app
+  /// switcher preview, and neither means the user left.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(widget.controller.refreshAvailability());
+    }
   }
 
   void _onControllerChanged() {

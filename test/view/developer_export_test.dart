@@ -325,6 +325,49 @@ void main() {
     expect(find.textContaining('Shake to advertising'), findsNothing);
   });
 
+  testWidgets('carries the wording the diagnostics screen no longer says',
+      (tester) async {
+    // WHERE THE ENGINEERING REGISTER WENT. The diagnostics screen used to carry
+    // these derivations in front of anybody who opened it. It now says the same
+    // things in plain language, and NOTHING WAS DELETED: the precise wording is
+    // here, in the report that actually travels into a bug thread.
+    final harness = ViewHarness();
+    addTearDown(harness.dispose);
+
+    await pumpScreen(tester, DeveloperView(controller: harness.controller));
+    await export(tester);
+
+    expect(
+      find.textContaining('--- how the diagnostics screen measures things ---'),
+      findsOneWidget,
+    );
+    // The loss derivation, off the card and into the report.
+    expect(
+      find.textContaining('counted from gaps in the fe01 sequence number'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Leaving that screen open IS the soak test'),
+      findsOneWidget,
+    );
+    // The die, by that name, with the 0x8000 case spelled out.
+    expect(find.textContaining('DIE temperature from fe07'), findsOneWidget);
+    expect(find.textContaining('0x8000'), findsOneWidget);
+    // The two acoustic measurements in full, MEMS and RMS and all.
+    expect(find.textContaining('RMS dBFS'), findsWidgets);
+    expect(find.textContaining('MEMS microphone'), findsOneWidget);
+    expect(
+      find.textContaining('${DeviceTestReadings.sensitivityDistanceCm} cm from '
+          'the microphone port'),
+      findsOneWidget,
+    );
+    // And why a batch is a median and a range rather than a mean and an SD.
+    expect(
+      find.textContaining('never a mean and never a standard deviation'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('says nothing about unread runs when there are none',
       (tester) async {
     final harness = ViewHarness();

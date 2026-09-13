@@ -389,6 +389,111 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
+  // THE BASELINE MUST SURVIVE THE SAMPLE COUNTS CHANGING
+  //
+  // The counts used to be a control on the diagnostics screen and defaulted to
+  // five; they are now fixed per check at seven and three. The bare-board
+  // baseline on the owner's phone was taken at FIVE, five sensitivity samples
+  // and five noise-floor samples, and it cannot be taken again. A build that
+  // read those rows as partial, or refused them, or rewrote their
+  // `repeatTarget`, would destroy the only "before" there is.
+  // -------------------------------------------------------------------------
+
+  test('a batch recorded at the old count of five still reads as complete',
+      () async {
+    final files = MemoryFileStore();
+    final store = storeOn(files);
+    await store.load();
+    for (final kind in DeviceTestKind.values) {
+      for (var i = 1; i <= 5; i++) {
+        await store.append(
+          inBatch(
+            kind,
+            i,
+            batchId: 'baseline-${kind.wireName}',
+            index: i,
+            // What the old build wrote, and what is on the phone.
+            target: 5,
+          ),
+        );
+      }
+    }
+
+    final reopened = storeOn(files);
+    await reopened.load();
+
+    for (final kind in DeviceTestKind.values) {
+      final batch = reopened.batchesOf(kind).single;
+      expect(batch.sampleCount, 5);
+      // Five of five: the batch is judged against the target IT was taken with,
+      // never against whatever this build would ask for now.
+      expect(batch.requested, 5);
+      expect(batch.isPartial, isFalse);
+      expect(batch.runs.every((run) => run.repeatTarget == 5), isTrue);
+    }
+  });
+
+  test("a baseline at five survives an append at today's counts, byte for byte",
+      () async {
+    final files = MemoryFileStore();
+    final store = storeOn(files);
+    await store.load();
+    for (var i = 1; i <= 5; i++) {
+      await store.append(
+        inBatch(
+          DeviceTestKind.noiseFloor,
+          i,
+          batchId: 'bare-board',
+          index: i,
+          target: 5,
+        ),
+      );
+    }
+    final before = utf8.decode(await files.read(store.path));
+
+    // A new batch at the count this build uses now.
+    for (var i = 1; i <= 7; i++) {
+      await store.append(
+        inBatch(
+          DeviceTestKind.noiseFloor,
+          20 + i,
+          batchId: 'in-case',
+          index: i,
+          target: 7,
+        ),
+      );
+    }
+    final after = utf8.decode(await files.read(store.path));
+
+    // Every row of the old file is still in the new one, unchanged and in the
+    // same order - the store rewrites the WHOLE file on every append, so this is
+    // the guarantee that matters, and it is checked on each row's own JSON
+    // rather than on the model that was parsed out of it.
+    List<String> rowsOf(String json) =>
+        ((jsonDecode(json) as Map)['results'] as List<Object?>)
+            .map(jsonEncode)
+            .toList();
+    final oldRows = rowsOf(before);
+    final newRows = rowsOf(after);
+    expect(oldRows, hasLength(5));
+    expect(newRows, hasLength(12));
+    // The five newest are the new batch; the five oldest are the baseline, and
+    // their `repeatTarget` of 5 was not rewritten to 7.
+    expect(newRows.sublist(7), oldRows);
+
+    // And both batches are readable side by side, each quoting its own n.
+    final batches = store.batchesOf(DeviceTestKind.noiseFloor);
+    expect(batches.map((batch) => batch.batchId), <String>[
+      'in-case',
+      'bare-board',
+    ]);
+    expect(batches.first.sampleCount, 7);
+    expect(batches.first.isPartial, isFalse);
+    expect(batches[1].sampleCount, 5);
+    expect(batches[1].isPartial, isFalse);
+  });
+
+  // -------------------------------------------------------------------------
   // THE BASELINE MUST SURVIVE THE MEASUREMENTS THAT WERE REMOVED
   //
   // There is a phone with runs of the range walk, the link soak and

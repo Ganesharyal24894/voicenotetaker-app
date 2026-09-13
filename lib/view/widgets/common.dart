@@ -63,6 +63,12 @@ class TapTarget extends StatelessWidget {
     return Semantics(
       button: onTap != null,
       label: semanticLabel,
+      // THE TAP ACTION HAS TO BE DECLARED HERE. `excludeSemantics` below drops
+      // the descendants' semantics, and the [GestureDetector]'s tap action is
+      // one of them - so without this the node is a button a screen reader can
+      // read out and cannot activate. Every small control in the app goes
+      // through this widget, so it is declared once, here.
+      onTap: onTap,
       // With a label of its own the control is one node: the glyph or text
       // inside must not add a second, duplicate one.
       container: semanticLabel != null,
@@ -358,6 +364,81 @@ class SegmentButton extends StatelessWidget {
   }
 }
 
+
+/// The circled i beside a heading: one tap for a longer explanation, one tap to
+/// put it away.
+///
+/// A FLOATING SHEET RATHER THAN AN EXPANDING ROW, and that is the point of the
+/// design. Every card on Diagnostics is live - the signal, the counters and the
+/// temperature all move while somebody is reading them - so an explanation that
+/// grew inside the card would shove the readings down the page, and on a 390px
+/// screen the ones somebody opened the screen for would leave it. This floats
+/// above instead: nothing moves, and when it closes every figure is where it
+/// was.
+///
+/// REACHABLE AND DISMISSIBLE WITHOUT SIGHT. [TapTarget] gives it the 44px hit
+/// area and the spoken label; the dialog is a route, so a screen reader moves
+/// into it and announces it, the barrier is labelled, tapping outside it or the
+/// system back gesture closes it, and Close is a real focusable button rather
+/// than a swipe nobody can find.
+class InfoButton extends StatelessWidget {
+  const InfoButton({required this.title, required this.body, super.key});
+
+  /// The heading this explains, used as the sheet's title and read out as
+  /// "About the signal".
+  final String title;
+
+  /// Two or three plain sentences: what to do, and what an unusual reading
+  /// might mean. No jargon - moving jargon behind a tap does not fix it.
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return TapTarget(
+      onTap: () {
+        // Nothing is awaited: the sheet's only outcome is being closed.
+        showInfoSheet(context, title: title, body: body);
+      },
+      semanticLabel: 'About $title',
+      child: const AppIcon(
+        AppGlyph.info,
+        size: 17,
+        color: AppColors.textSecondary,
+        strokeWidth: 1.6,
+      ),
+    );
+  }
+}
+
+/// The sheet [InfoButton] opens. Separate so a screen can explain something
+/// from a control that is not a circled i.
+///
+/// Scrollable content, because these run to three sentences and a phone at a
+/// large text scale has less room than this reads like it needs.
+Future<void> showInfoSheet(
+  BuildContext context, {
+  required String title,
+  required String body,
+}) {
+  return showDialog<void>(
+    context: context,
+    barrierLabel: '$title, more detail',
+    builder: (context) => AlertDialog(
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(borderRadius: AppShape.card),
+      title: Text(title, style: AppText.title22),
+      content: SingleChildScrollView(
+        child: Text(body, style: AppText.footnote12),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close', style: AppText.label13),
+        ),
+      ],
+    ),
+  );
+}
 
 /// The app's ONE delete confirmation, so the library row and the playback
 /// screen cannot drift apart in how they ask.

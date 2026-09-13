@@ -41,6 +41,16 @@ import 'widgets/common.dart';
 ///     invent an app-wide mechanism, the one screen that has a reason to care
 ///     observes it, scoped to its own [State] and removed in [dispose].
 ///
+/// THE COPY ON THIS SCREEN IS WRITTEN FOR SOMEBODY WHO DID NOT BUILD THE
+/// RECORDER. Every visible line is one short sentence saying what a reading is,
+/// and every longer explanation is behind a circled i - see [InfoButton] and the
+/// `_…Info` constants at the foot of this file. BOTH layers are plain: moving
+/// jargon behind a tap does not fix jargon, so neither layer explains itself in
+/// terms of the signal chain. The precise engineering wording these lines used to
+/// carry was not deleted; it is in the exported diagnostics, under "how the
+/// diagnostics screen measures things" in `developer_view.dart`, which is where
+/// somebody reading a bug report looks.
+///
 /// `inactive` is deliberately NOT treated as "gone". It fires for a notification
 /// shade being pulled down, an incoming call, the iOS app switcher preview - all
 /// transient, and tearing the subscriptions down and back up on each of them
@@ -141,9 +151,7 @@ class _DiagnosticsViewState extends State<DiagnosticsView>
           ),
           const SizedBox(height: 8),
           const Text(
-            'What the recorder is doing right now. Nothing here changes a '
-            'setting on the device. The link and the die temperature are only '
-            'measured while this screen is open.',
+            'How your recorder is doing. Nothing here changes it.',
             style: AppText.footnote12,
           ),
           const SizedBox(height: 22),
@@ -187,7 +195,10 @@ class _DiagnosticsViewState extends State<DiagnosticsView>
 /// LOSS IS COUNTED FROM GAPS IN THE `fe01` SEQUENCE NUMBER, which is what makes
 /// it the number worth having: it counts what the PHONE failed to receive, air
 /// losses included. A byte counter kept by the firmware could only say what the
-/// firmware believed it had sent.
+/// firmware believed it had sent. The card no longer SAYS any of that: the rows
+/// read "Audio received" and "Audio lost", the circled i says a weak connection
+/// is what loses audio, and the sequence-number derivation is in the exported
+/// diagnostics.
 ///
 /// It degrades honestly in three directions, and none of them is a zero: not
 /// connected, a platform that will not report the signal, and the mic check
@@ -208,7 +219,16 @@ class _LinkCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const SectionCaption('Link', small: true),
+          Row(
+            children: const <Widget>[
+              Expanded(child: SectionCaption('Connection', small: true)),
+              InfoButton(title: 'Connection', body: _connectionInfo),
+            ],
+          ),
+          const Text(
+            'How well the recorder is reaching your phone.',
+            style: AppText.footnote11,
+          ),
           const SizedBox(height: 12),
           KeyValueRow(
             label: 'Signal',
@@ -220,16 +240,16 @@ class _LinkCard extends StatelessWidget {
           const SizedBox(height: 10),
           _RssiMeter(fraction: health.rssiFraction),
           const SizedBox(height: 14),
-          // "Streamed", not "received": the pair of numbers only means anything
+          // "Received", not "streamed": the pair of numbers only means anything
           // together, and the word that pairs with "lost" is the one that says
-          // these frames arrived.
+          // this audio arrived.
           KeyValueRow(
-            label: 'Frames streamed',
+            label: 'Audio received',
             value: watching ? '${health.framesReceived}' : _unknown,
           ),
           const SizedBox(height: 12),
           KeyValueRow(
-            label: 'Frames lost',
+            label: 'Audio lost',
             value: watching ? '${health.framesLost}' : _unknown,
             valueColor: !watching || health.framesLost == 0
                 ? AppColors.textPrimary
@@ -240,7 +260,7 @@ class _LinkCard extends StatelessWidget {
           // rate of 0.00% on a stream that has not started is a lie that reads
           // as a perfect link.
           KeyValueRow(
-            label: 'Loss',
+            label: 'Percent lost',
             value: watching && health.lossPercent != null
                 ? Fmt.measurement(health.lossPercent, '%')
                 : _unknown,
@@ -260,15 +280,6 @@ class _LinkCard extends StatelessWidget {
               color: failure != null ? AppColors.warning : AppColors.textSecondary,
             ),
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Counted from gaps in the fe01 sequence number, so a lost frame is '
-            'one the recorder sent and this phone never got - the air included. '
-            'The counters start from zero each time this screen opens: they '
-            'describe this sitting, not the life of the link. Leaving the screen '
-            'open IS the soak test.',
-            style: AppText.footnote11,
-          ),
         ],
       ),
     );
@@ -282,17 +293,11 @@ class _LinkCard extends StatelessWidget {
     required bool checkRunning,
     required String? failure,
   }) {
-    if (!connected) {
-      return 'Not connected, so there is no link to measure. Nothing here is a '
-          'reading.';
-    }
-    if (failure != null) return 'Not counting: $failure';
-    if (checkRunning) {
-      return 'Paused while the mic check runs - the audio stream takes one '
-          'listener at a time. It comes back when the check finishes.';
-    }
-    if (!watching) return 'Not counting frames.';
-    return 'Live. Walk away from the recorder and watch both halves move.';
+    if (!connected) return 'Not connected, so there is nothing to measure.';
+    if (failure != null) return 'Not measuring: $failure';
+    if (checkRunning) return 'Paused while the mic check runs.';
+    if (!watching) return 'Not counting audio.';
+    return 'Live. Walk away and watch these change.';
   }
 }
 
@@ -321,7 +326,7 @@ class _RssiMeter extends StatelessWidget {
       label: 'Signal strength',
       value: value == null
           ? 'no reading'
-          : '${(value * 100).round()} percent of scale',
+          : '${(value * 100).round()} percent',
       child: Container(
         height: 8,
         decoration: BoxDecoration(
@@ -379,12 +384,14 @@ class _MicCheckCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const SectionCaption('Mic check', small: true),
-          const SizedBox(height: 8),
+          Row(
+            children: const <Widget>[
+              Expanded(child: SectionCaption('Mic check', small: true)),
+              InfoButton(title: 'Mic check', body: _micCheckInfo),
+            ],
+          ),
           const Text(
-            'Enclosure before-and-after. Run it on the bare board, fit the '
-            'case, run it again, and compare by date - the app cannot know '
-            'whether the case is on, so it does not pretend to.',
+            'Two measurements to take now and compare later.',
             style: AppText.footnote11,
           ),
           if (blocker != null &&
@@ -398,7 +405,7 @@ class _MicCheckCard extends StatelessWidget {
           if (saveFailure != null) ...<Widget>[
             const SizedBox(height: 10),
             Text(
-              'The last result was measured but NOT saved: $saveFailure',
+              'Measured, but not saved: $saveFailure',
               style: AppText.footnote11.copyWith(color: AppColors.error),
             ),
           ],
@@ -407,7 +414,7 @@ class _MicCheckCard extends StatelessWidget {
             _CheckRow(controller: controller, kind: kind),
           ],
           const SizedBox(height: 18),
-          _SamplesPerCheck(controller: controller),
+          const _WhyItRepeats(),
           const SizedBox(height: 14),
           Text(_historyLine(controller), style: AppText.footnote11),
         ],
@@ -422,21 +429,22 @@ class _MicCheckCard extends StatelessWidget {
 /// baseline, and some of those runs are of measurements that have since been
 /// retired - the range walk, the link soak, wake-on-motion. They are kept in the
 /// file and written back out untouched, but this build cannot interpret them, so
-/// they are not in the history. Saying "12 runs kept, 3 more this build does not
-/// read" is the difference between ignoring them and losing them.
+/// they are not in the history. Saying "12 runs saved, 3 older ones saved too"
+/// is the difference between ignoring them and losing them.
+///
+/// The file's NAME is no longer here. "in device-tests.json beside the
+/// recordings" means nothing to somebody who cannot open it, and it is in the
+/// exported diagnostics for somebody who can.
 String _historyLine(AppController controller) {
   final tests = controller.deviceTests;
   if (!tests.isLoaded) return 'Saved runs have not been read yet.';
   final kept = tests.history.length;
   final unread = controller.unreadDeviceTestRunCount;
   return <String>[
-    '$kept run${kept == 1 ? '' : 's'} kept on this phone, newest first, in '
-        '${tests.resultsFileName} beside the recordings.',
+    '$kept run${kept == 1 ? '' : 's'} saved on this phone, newest first.',
     if (unread > 0)
-      '$unread more ${unread == 1 ? 'run is' : 'runs are'} in that file from '
-          'a measurement this app no longer takes. They are kept, untouched, '
-          'and not read.',
-    'Every readable run is in Export diagnostics, readings and all.',
+      '$unread older ${unread == 1 ? 'run is' : 'runs are'} saved too, from a '
+          'check this app no longer takes. They are kept, untouched.',
   ].join(' ');
 }
 
@@ -470,7 +478,8 @@ class _CheckRow extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            const SizedBox(width: 10),
+            InfoButton(title: _checkName(kind), body: _checkInfo(kind)),
+            const SizedBox(width: 4),
             SizedBox(
               width: 96,
               child: SegmentButton(
@@ -507,7 +516,7 @@ class _CheckRow extends StatelessWidget {
           KeyValueRow(label: 'Elapsed', value: Fmt.timer(tests.elapsed)),
           const SizedBox(height: 6),
           KeyValueRow(
-            label: 'Frames / lost',
+            label: 'Audio / lost',
             value: '${tests.liveStats.framesReceived} / '
                 '${tests.liveStats.framesLost}',
             valueColor: tests.liveStats.framesLost == 0
@@ -587,73 +596,55 @@ class _CheckRow extends StatelessWidget {
       };
 }
 
-/// How many samples each check takes, and why it takes more than one.
+/// Why each check is taken several times, and how many times each one takes.
 ///
-/// BELOW THE ROWS, not above them. It applies to both of them, but the rows are
-/// what people come to this card for and a control inserted above them pushes
-/// every one of them down the screen.
-class _SamplesPerCheck extends StatelessWidget {
-  const _SamplesPerCheck({required this.controller});
-
-  final AppController controller;
+/// PROSE, NOT A CONTROL. There WAS a segmented "samples per check" selector
+/// here, and it was the wrong thing on this screen twice over. Diagnostics is
+/// for OBSERVERS - everything else on it is something to look at, not something
+/// to set - and a sample-count selector asks somebody to reason about sampling
+/// statistics before they are allowed to read their own microphone. It also let
+/// two batches on one phone be taken at different n, which quietly breaks the
+/// comparison the card exists for: the spread reported is a RANGE, and a range
+/// is only comparable against another range of similar size.
+///
+/// So the counts are fixed in [DeviceTestSampling] and this says what they are.
+/// It reads the numbers from there rather than spelling them out, so the screen
+/// and the measurement cannot disagree.
+///
+/// WHAT IS VISIBLE IS ONE LINE OF IT. The reasoning above is exactly the kind of
+/// paragraph this screen was rewritten to stop putting in front of people, so
+/// the card names the two counts and the circled i explains, in plain words, why
+/// one go is not enough to compare - see [_repeatsInfo].
+///
+/// BELOW THE ROWS, where the old control was, and for the same reason: the rows
+/// are what people come to this card for, and anything inserted above them
+/// pushes every one of them down the screen.
+class _WhyItRepeats extends StatelessWidget {
+  const _WhyItRepeats();
 
   @override
   Widget build(BuildContext context) {
-    final tests = controller.deviceTests;
-    // Mid-batch the count is fixed: a batch carries the number it was started
-    // with, or the n on the card would not be the n that was measured.
-    final locked = tests.isRunning || tests.isBatchActive;
+    final noise = DeviceTestSampling.noiseFloorSamples;
+    final voice = DeviceTestSampling.sensitivitySamples;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Text(
-          'Samples per check · ${controller.samplesPerTest}',
-          style: AppText.devValue,
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'Both measurements are noisy, so one reading before the case and one '
-          'after cannot be compared - the difference would be noise as often '
-          'as not. Each check is taken this many times and reported as a '
-          'median with the full range across the samples, so the spread is on '
-          'the screen next to the figure.',
-          style: AppText.footnote11,
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'The noise floor repeats on its own. The voice asks you between '
-          'samples - and you can stop early at any point, which keeps every '
-          'sample already taken.',
-          style: AppText.footnote11,
-        ),
-        const SizedBox(height: 8),
         Row(
-          children: <Widget>[
-            for (final count in DeviceTestSampling.choices) ...<Widget>[
-              if (count != DeviceTestSampling.choices.first)
-                const SizedBox(width: 8),
-              Expanded(
-                child: SegmentButton(
-                  label: '$count',
-                  semanticLabel: count == 1
-                      ? 'Take a single sample per check'
-                      : 'Take $count samples per check',
-                  selected: count == controller.samplesPerTest,
-                  enabled: !locked,
-                  onTap: () => controller.samplesPerTest = count,
-                ),
+          children: const <Widget>[
+            Expanded(
+              child: Text(
+                'Each check is taken several times',
+                style: AppText.devValue,
               ),
-            ],
+            ),
+            InfoButton(title: 'Repeated checks', body: _repeatsInfo),
           ],
         ),
-        if (locked) ...<Widget>[
-          const SizedBox(height: 4),
-          const Text(
-            'Fixed while a batch is in progress. The next one can differ.',
-            style: AppText.footnote11,
-          ),
-        ],
+        Text(
+          'Noise floor $noise times, voice $voice times.',
+          style: AppText.footnote11,
+        ),
       ],
     );
   }
@@ -666,16 +657,18 @@ class _SamplesPerCheck extends StatelessWidget {
 /// noise floor that got worse is worth a great deal more when the temperature it
 /// was taken at is written next to it.
 ///
-/// THE LABEL IS THE POINT. This is a DIE temperature: the sensor is inside the
-/// same package as the CPU and the radio, so it reads well above the room even
-/// on an open bench. A figure like "31.2" next to the word "temperature" will be
-/// read as the room by anyone who did not write this file, so every place it
-/// appears - here, the export, the card's own caption - says "die".
+/// THE FIGURE MUST NOT BE READ AS THE ROOM, and the word "die" is not how a user
+/// is told so. The sensor is inside the same package as the CPU and the radio, so
+/// it reads well above ambient even on an open bench - so the card's own first
+/// line says "It runs warmer than the room", and the circled i says why and says
+/// that charging makes it warmer still. The word "die", the `fe07`
+/// characteristic and the raw decidegrees are all in the exported diagnostics,
+/// where they are read by somebody who wants them.
 ///
 /// Three outcomes, never collapsed: a figure, a device that has the
-/// characteristic but no reading (`0x8000`), and firmware that does not have
-/// `fe07` at all. Zero would read as a freezing room, which is why the
-/// controller's getter is nullable.
+/// characteristic but no reading (`unknown` here, `0x8000` in the export), and
+/// firmware that does not have `fe07` at all (`unavailable`). Zero would read as
+/// a freezing room, which is why the controller's getter is nullable.
 class _DieTemperatureCard extends StatelessWidget {
   const _DieTemperatureCard({required this.controller});
 
@@ -690,31 +683,27 @@ class _DieTemperatureCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const SectionCaption('Die temperature', small: true),
-          const SizedBox(height: 12),
+          Row(
+            children: const <Widget>[
+              Expanded(child: SectionCaption('Temperature', small: true)),
+              InfoButton(title: 'Temperature', body: _temperatureInfo),
+            ],
+          ),
           KeyValueRow(
-            label: 'Die',
+            label: 'Recorder',
             value: !available
                 ? 'unavailable'
                 : celsius == null
-                    ? 'unknown (0x8000)'
+                    ? 'unknown'
                     : '${celsius.toStringAsFixed(1)} °C',
           ),
           const SizedBox(height: 12),
           Text(
             available
-                ? 'The chip’s own junction temperature, NOT the room. The '
-                    'sensor shares a package with the CPU and the radio, so it '
-                    'self-heats - and it will read higher again inside the '
-                    'enclosure with the cell underneath it. It is captured on '
-                    'every mic check above, and the device only samples it while '
-                    'this screen is open.'
+                ? 'How warm the recorder is. Warmer than the room.'
                 : controller.isConnected
-                    ? 'This recorder did not report a die temperature, so '
-                        'nothing is shown. Firmware without the fe07 '
-                        'characteristic looks like this.'
-                    : 'Connect to the recorder to read this. It is measured on '
-                        'the device, not in the app.',
+                    ? 'This recorder does not report its temperature.'
+                    : 'Connect to the recorder to read this.',
             style: AppText.footnote11,
           ),
         ],
@@ -730,7 +719,11 @@ class _DieTemperatureCard extends StatelessWidget {
 /// THE SPREAD IS NOT A FOOTNOTE HERE. A three-decibel change after the
 /// enclosure means nothing if the five samples before it spanned ten, and the
 /// only way somebody reads that off the screen instead of deducing it is for the
-/// range to sit on the line under the median.
+/// range to sit on the line under the median. It is written as "middle X ·
+/// ranged Y to Z" rather than "median X · spread N": the same two facts, in
+/// words that do not need a statistics course. `n=`, the spread as a single
+/// figure, and the untranslated reading labels are all in the exported
+/// diagnostics.
 ///
 /// THE SAMPLES ARE PRINTED IN FULL, and no reading is ever dropped for being
 /// extreme. A single wild value is frequently the most interesting thing the
@@ -755,16 +748,16 @@ List<Widget> _spreadLines(ReadingSpread spread, Color colour) {
   final missing = spread.missing == 0
       ? ''
       : ' · ${spread.missing} of ${spread.sampleCount} had no reading';
+  final name = _readingName(spread.label);
   return <Widget>[
     const SizedBox(height: 2),
     Text(
       spread.hasSpread
-          ? '${spread.label}: median '
-              '${Fmt.measurement(spread.median, spread.unit)} · '
+          ? '$name: middle '
+              '${Fmt.measurement(spread.median, spread.unit)} · ranged '
               '${Fmt.measurement(spread.min, spread.unit)} to '
-              '${Fmt.measurement(spread.max, spread.unit)} · spread '
-              '${Fmt.measurement(spread.spread, spread.unit)}$missing'
-          : '${spread.label}: '
+              '${Fmt.measurement(spread.max, spread.unit)}$missing'
+          : '$name: '
               '${Fmt.measurement(spread.median, spread.unit)}$missing',
       style: AppText.footnote11.copyWith(color: colour),
     ),
@@ -781,15 +774,20 @@ List<Widget> _spreadLines(ReadingSpread spread, Color colour) {
   ];
 }
 
-/// `n=5 of 5`, plus every caveat that belongs beside an n.
+/// `5 of 7 samples`, plus every caveat that belongs beside a count.
+///
+/// The count is spelled out rather than written `n=5 of 5`, which is the same
+/// fact in a notation nobody outside a lab reads. The exported diagnostics still
+/// say `n=` - see `developer_view.dart`.
 String _batchCount(DeviceTestBatch batch) {
   final parts = <String>[
-    'n=${batch.sampleCount}'
-        '${batch.requested > 1 ? ' of ${batch.requested}' : ''}',
+    batch.requested > 1
+        ? '${batch.sampleCount} of ${batch.requested} samples'
+        : '${batch.sampleCount} sample${batch.sampleCount == 1 ? '' : 's'}',
     if (batch.isPartial) 'stopped early',
     // A COMPARISON AGAINST ONE RUN SAYS SO. It is not a baseline; it is a
     // single draw from a noisy process, and it cannot show its own spread.
-    if (batch.isSingle) 'one run only, no spread to judge it by',
+    if (batch.isSingle) 'one run only, so there is no range to compare',
     ..._batchOutcomes(batch),
   ];
   return parts.join(' · ');
@@ -817,8 +815,8 @@ Color _batchColour(DeviceTestBatch batch) {
 /// What the operator has to do before the next sample can be taken.
 String _nextSamplePrompt(DeviceTestKind kind) => switch (kind) {
       DeviceTestKind.sensitivity =>
-        'Get back to ${DeviceTestReadings.sensitivityDistanceCm} cm and speak '
-            'again when the next sample starts.',
+        'Get back to about ${DeviceTestReadings.sensitivityDistanceCm} cm and '
+            'speak again.',
       // The noise floor repeats unattended and never waits, so this is
       // unreachable.
       DeviceTestKind.noiseFloor => '',
@@ -837,6 +835,21 @@ List<String> _headlineLabels(DeviceTestKind kind) => switch (kind) {
         ],
     };
 
+/// The screen's name for a saved reading's label.
+///
+/// A VIEW-ONLY TRANSLATION, and it has to be. The labels in
+/// [DeviceTestReadings] are the KEYS of every reading in `device-tests.json`,
+/// including runs taken on the bare board that cannot be taken again - so they
+/// are frozen, and the place to say "Hiss level" instead of "Noise floor (RMS)"
+/// is here, where nothing is written to disk. A label this build does not
+/// recognise falls through unchanged rather than being hidden.
+String _readingName(String label) => switch (label) {
+      DeviceTestReadings.noiseFloorRms => 'Hiss level',
+      DeviceTestReadings.peak => 'Loudest',
+      DeviceTestReadings.rms => 'Average',
+      _ => label,
+    };
+
 String _checkName(DeviceTestKind kind) => switch (kind) {
       DeviceTestKind.noiseFloor => 'Noise floor',
       DeviceTestKind.sensitivity => 'Sensitivity',
@@ -844,20 +857,76 @@ String _checkName(DeviceTestKind kind) => switch (kind) {
 
 String _checkBlurb(DeviceTestKind kind) => switch (kind) {
       DeviceTestKind.noiseFloor =>
-        'Ten seconds of a quiet room, as RMS dBFS. Catches a rattle, a '
-            'resonance, or case vibration coupling into the microphone.',
+        'How much hiss the mic picks up in a silent room.',
       DeviceTestKind.sensitivity =>
-        'Speak at ${DeviceTestReadings.sensitivityDistanceCm} cm. Peak and RMS '
-            'dBFS - what the enclosure’s port costs a voice.',
+        'How loudly your voice reaches the recorder.',
+    };
+
+/// What each circled i on this screen says.
+///
+/// GATHERED IN ONE PLACE, and deliberately. This is the copy of the screen, it
+/// is reviewed as writing rather than as code, and six sentences scattered
+/// through six widgets cannot be read end to end to check that they sound like
+/// one voice.
+///
+/// THE RULE THEY ARE ALL WRITTEN TO: plain in BOTH layers. Moving jargon behind
+/// a tap does not fix jargon, so nothing here explains itself in terms of the
+/// signal chain - no MEMS, no RMS, no dBFS floor, no sequence numbers, no
+/// frames. Each one says what to DO and what an unusual reading might mean,
+/// about the object in somebody's hand. The precise wording those sentences used
+/// to carry is in the exported diagnostics, under "how the diagnostics screen
+/// measures things", which is where an engineer reading a bug report looks.
+///
+/// NOTHING HERE CALLS A READING GOOD OR BAD. These are comparisons, not
+/// verdicts: the most any of them says is what a CHANGE from last time might
+/// mean.
+const String _connectionInfo =
+    'Carry your phone away from the recorder and watch this change. The signal '
+    'gets weaker with distance and through walls, and if it gets weak enough '
+    'some audio stops arriving. Zero lost is what you want; the counts start '
+    'again each time you open this screen.';
+
+const String _micCheckInfo =
+    'Run both checks before you put the recorder in its case, then again '
+    'afterwards, and compare the two dates. The app has no way of knowing '
+    'whether the case is on, so it does not guess; that part is up to you. '
+    'Nothing here changes the recorder, it only listens.';
+
+const String _noiseFloorInfo =
+    'Put the recorder down somewhere quiet, with nothing touching it, and '
+    'leave it alone while this runs. A reading higher than last time usually '
+    'means something is resting against it or rattling, often the case itself. '
+    'Compare it against an earlier run rather than judging one reading on its '
+    'own.';
+
+const String _sensitivityInfo =
+    'Hold the recorder about ${DeviceTestReadings.sensitivityDistanceCm} cm '
+    'away and speak at a normal level until it stops. Keep to the same '
+    'distance every time, or two runs cannot be compared. A reading lower than '
+    'last time can mean the case is covering the microphone opening.';
+
+const String _repeatsInfo =
+    'These readings move around a little from one go to the next, so a single '
+    'go is not enough to compare. Taking several and reporting the middle one '
+    'is what tells a real change apart from ordinary wobble. The quiet-room '
+    'check repeats on its own; the voice one waits for you before each go, and '
+    'you can stop early and keep what it already has.';
+
+const String _temperatureInfo =
+    'The sensor sits inside the chip that does the recording, so it always '
+    'reads warmer than the room, more so inside the case and more again while '
+    'charging. It is saved with every mic check, which helps explain a reading '
+    'that changed. The recorder only measures it while this screen is open.';
+
+String _checkInfo(DeviceTestKind kind) => switch (kind) {
+      DeviceTestKind.noiseFloor => _noiseFloorInfo,
+      DeviceTestKind.sensitivity => _sensitivityInfo,
     };
 
 String _blockerText(DeviceTestBlocker blocker) => switch (blocker) {
-      DeviceTestBlocker.notConnected =>
-        'Connect to the recorder first. The check measures its microphone, '
-            'which needs its audio stream.',
+      DeviceTestBlocker.notConnected => 'Connect to the recorder first.',
       DeviceTestBlocker.recording =>
-        'A recording is in progress. The audio notify stream takes one '
-            'subscriber, so no check can have it until the capture stops.',
+        'A recording is running. Stop it, then try again.',
       DeviceTestBlocker.testRunning => 'Another check is running.',
     };
 
@@ -866,12 +935,12 @@ String _phasePrompt(DeviceTestPhase phase, DeviceTestKind kind) =>
       DeviceTestPhase.idle => '',
       DeviceTestPhase.measuring => switch (kind) {
           DeviceTestKind.noiseFloor =>
-            'Quiet room, hands off the device. Measuring…',
+            'Keep it quiet and do not touch it. Measuring…',
           DeviceTestKind.sensitivity =>
-            'Speak now, at ${DeviceTestReadings.sensitivityDistanceCm} cm from '
-                'the microphone port.',
+            'Speak now, about ${DeviceTestReadings.sensitivityDistanceCm} cm '
+                'away.',
         },
-      DeviceTestPhase.saving => 'Saving the result…',
+      DeviceTestPhase.saving => 'Saving…',
       // Nothing is running between samples, so the row draws its own prompt -
       // see [_nextSamplePrompt].
       DeviceTestPhase.awaitingNextSample => '',

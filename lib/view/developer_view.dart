@@ -126,6 +126,7 @@ class _DeveloperViewState extends State<DeveloperView> {
       ..._retiredRunLines(_controller),
       ..._testAggregateLines(tests.history),
       ..._testHistoryLines(tests.history),
+      ..._measurementNotes,
     ].join('\n');
   }
 
@@ -502,6 +503,73 @@ class _AutoSleepCard extends StatelessWidget {
     );
   }
 }
+
+/// How every figure on the diagnostics screen is actually arrived at.
+///
+/// THIS IS WHERE THE PRECISE WORDING LIVES NOW. The diagnostics screen used to
+/// carry these paragraphs itself, in this register, and it was the wrong screen
+/// for them: somebody opening Diagnostics wants to know whether their recorder
+/// is working, not which characteristic a counter is derived from. The screen now
+/// says the same things in plain language, and nothing was deleted - it moved
+/// here, into the report an engineer reads when a plain-language sentence turns
+/// out not to be enough.
+///
+/// PART OF THE EXPORT RATHER THAN A CARD, because this is the text that has to
+/// travel. A bug report is pasted somewhere else entirely, and a caveat that
+/// stayed on this screen would not go with it.
+const List<String> _measurementNotes = <String>[
+  '',
+  '--- how the diagnostics screen measures things ---',
+  '',
+  'signal: the live connection RSSI in dBm, polled while the diagnostics '
+      'screen is open. NOT the advertising sample under "RSSI at scan" above; '
+      'the two are different numbers taken at different times. RSSI alone '
+      'misleads - a link at a respectable -75 dBm can be shedding one frame in '
+      'twenty, because what costs a notify stream its packets is retries in a '
+      'crowded band rather than path loss - which is why the loss figures sit '
+      'directly under it on the screen.',
+  '',
+  'audio received / audio lost / percent lost: frames, counted from gaps in the '
+      'fe01 sequence number. That is what makes them the numbers worth having: '
+      'they count what the PHONE failed to receive, air losses included, where '
+      'a byte counter kept by the firmware could only say what the firmware '
+      'believed it had sent. The counters start from zero each time the '
+      'diagnostics screen opens, so they describe one sitting and not the life '
+      'of the link. Leaving that screen open IS the soak test; carrying it '
+      'across a room is the range walk. Both stand down while a mic check runs, '
+      'because the fe01 subscription takes one listener at a time.',
+  '',
+  'temperature: the nRF52840 DIE temperature from fe07, NOT ambient. The sensor '
+      'shares a package with the CPU and the radio, so it self-heats and reads '
+      'well above the room even on an open bench, higher again inside the '
+      'enclosure with the cell underneath. 0x8000 means the characteristic '
+      'exists and has no reading; firmware without fe07 at all reads as '
+      'unavailable. Subscribing is what makes the firmware sample the sensor, '
+      'so it is sampled only while the diagnostics screen is visible.',
+  '',
+  'noise floor: a ten-second window of a quiet room, reported as RMS dBFS and '
+      'labelled "Noise floor (RMS)" in the readings above. Measured over the '
+      'whole window in the linear domain - see services/level_meter.dart for '
+      'why averaging dBFS would under-report a transient. A floor that rose '
+      'after the enclosure went on is the case itself: a rattle, a resonance, '
+      'or vibration coupling into the MEMS microphone.',
+  '',
+  'sensitivity: a voice at ${DeviceTestReadings.sensitivityDistanceCm} cm from '
+      'the microphone port at a normal speaking level, reported as peak and RMS '
+      'dBFS ("Loudest" and "Average" on the screen). Comparable between runs '
+      'only because the distance is fixed; move it and the numbers mean '
+      'nothing. What it catches is what the enclosure\u2019s port costs a '
+      'voice.',
+  '',
+  'batches: a median and the full min-to-max range, never a mean and never a '
+      'standard deviation - see model/device_test_aggregate.dart for the '
+      'reasoning, including why an inter-quartile range would discard exactly '
+      'the extreme sample worth looking at. Nothing is excluded from a median '
+      'except a sample that produced no reading at all, which is counted out '
+      'loud. The expected range grows with n, so a range is only comparable '
+      'against another range of similar size; the counts are fixed per check in '
+      'DeviceTestSampling and every batch above prints its own n.',
+];
 
 /// The die temperature as the export states it - three outcomes, and the word
 /// "die" in every one of them.

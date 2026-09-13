@@ -11,6 +11,7 @@ import 'package:voicenotetaker_app/model/device_test_result.dart';
 import 'package:voicenotetaker_app/model/die_temperature.dart';
 import 'package:voicenotetaker_app/services/device_test_store.dart';
 import 'package:voicenotetaker_app/view/diagnostics_view.dart';
+import 'package:voicenotetaker_app/view/theme.dart';
 
 import 'harness.dart';
 
@@ -143,13 +144,13 @@ void main() {
       await open(tester, harness);
 
       expect(find.text('Diagnostics'), findsOneWidget);
-      expect(find.text('LINK'), findsOneWidget);
+      expect(find.text('CONNECTION'), findsOneWidget);
       expect(find.text('MIC CHECK'), findsOneWidget);
       // It is an observer's screen, and it says so - there is no DEBUG ONLY
       // badge, because this one ships.
       expect(find.text('DEBUG ONLY'), findsNothing);
       expect(
-        find.textContaining('Nothing here changes a setting on the device'),
+        find.textContaining('Nothing here changes it.'),
         findsOneWidget,
       );
       expect(tester.takeException(), isNull);
@@ -379,16 +380,16 @@ void main() {
       // frame would cost more than the measurement is worth.
       await tester.pump(const Duration(milliseconds: 60));
 
-      expect(find.text('Frames streamed'), findsOneWidget);
-      expect(find.text('Frames lost'), findsOneWidget);
+      expect(find.text('Audio received'), findsOneWidget);
+      expect(find.text('Audio lost'), findsOneWidget);
       // 1 of 4 expected. The rate is the assertion rather than the raw counts:
       // small integers collide with the samples-per-check labels further down
       // the card, and the rate is what a reader is actually looking at.
       expect(find.text('25.00%'), findsOneWidget);
-      expect(
-        find.textContaining('gaps in the fe01 sequence number'),
-        findsOneWidget,
-      );
+      // The derivation is NOT on the screen: it is in the exported
+      // diagnostics - see developer_export_test.dart.
+      expect(find.textContaining('fe01'), findsNothing);
+      expect(find.textContaining('sequence number'), findsNothing);
 
       await leave(tester);
     });
@@ -439,7 +440,7 @@ void main() {
 
       expect(find.text('— dBm'), findsOneWidget);
       expect(
-        find.textContaining('Not connected, so there is no link to measure'),
+        find.textContaining('Not connected, so there is nothing to measure'),
         findsOneWidget,
       );
       // Not zeroes. "No frames lost" and "nothing is counting" are different
@@ -449,7 +450,11 @@ void main() {
       await leave(tester);
     });
 
-    testWidgets('it says the soak is this screen left open', (tester) async {
+    testWidgets('the circled i explains the card in plain words', (tester) async {
+      // THE SOAK AND THE RANGE WALK ARE STILL WHAT THIS CARD IS FOR. They are
+      // simply not what it SAYS any more: "Leaving the screen open IS the soak
+      // test" is a sentence for whoever retired the saved soak test, and the
+      // person holding the recorder is told to walk away from it and watch.
       final harness = ViewHarness();
       addTearDown(harness.dispose);
 
@@ -457,11 +462,31 @@ void main() {
       await open(tester, harness);
 
       expect(
-        find.textContaining('Leaving the screen open IS the soak test'),
+        find.text('How well the recorder is reaching your phone.'),
         findsOneWidget,
       );
-      // And the counters describe this sitting, which is why they start at zero.
-      expect(find.textContaining('not the life of the link'), findsOneWidget);
+      expect(find.textContaining('soak'), findsNothing);
+
+      await tester.tap(find.bySemanticsLabel('About Connection'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Carry your phone away from the recorder'),
+        findsOneWidget,
+      );
+      // What it does NOT do is hide the jargon behind the tap.
+      expect(find.textContaining('frame'), findsNothing);
+      expect(find.textContaining('RSSI'), findsNothing);
+      // And the counters resetting is said without saying "the life of the
+      // link".
+      expect(
+        find.textContaining('start again each time you open this screen'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Carry your phone away'), findsNothing);
 
       await leave(tester);
     });
@@ -482,7 +507,7 @@ void main() {
       await flush(tester);
 
       expect(harness.controller.linkHealth.watching, isFalse);
-      await tester.scrollUntilVisible(find.text('LINK'), -220);
+      await tester.scrollUntilVisible(find.text('CONNECTION'), -220);
       await tester.pump();
       expect(
         find.textContaining('Paused while the mic check runs'),
@@ -516,7 +541,7 @@ void main() {
 
       await harness.connect(tester);
       await open(tester, harness);
-      await reveal(tester, 'DIE TEMPERATURE');
+      await reveal(tester, 'TEMPERATURE');
 
       expect(find.text('31.2 °C'), findsOneWidget);
 
@@ -530,12 +555,18 @@ void main() {
 
       await harness.connect(tester);
       await open(tester, harness);
-      await reveal(tester, 'DIE TEMPERATURE');
+      await reveal(tester, 'TEMPERATURE');
 
-      expect(find.text('DIE TEMPERATURE'), findsOneWidget);
-      expect(find.text('Die'), findsOneWidget);
-      expect(find.textContaining('NOT the room'), findsOneWidget);
-      expect(find.textContaining('self-heats'), findsOneWidget);
+      expect(find.text('TEMPERATURE'), findsOneWidget);
+      expect(find.text('Recorder'), findsOneWidget);
+      // "Die" and "junction" are gone from the screen; what stays is the one
+      // fact a user needs, which is that this is not the room.
+      expect(
+        find.text('How warm the recorder is. Warmer than the room.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('junction'), findsNothing);
+      expect(find.textContaining('self-heats'), findsNothing);
 
       await leave(tester);
     });
@@ -548,9 +579,11 @@ void main() {
 
       await harness.connect(tester);
       await open(tester, harness);
-      await reveal(tester, 'DIE TEMPERATURE');
+      await reveal(tester, 'TEMPERATURE');
 
-      expect(find.text('unknown (0x8000)'), findsOneWidget);
+      // 0x8000 is in the exported diagnostics, not on the card.
+      expect(find.text('unknown'), findsOneWidget);
+      expect(find.textContaining('0x8000'), findsNothing);
       expect(find.text('0.0 °C'), findsNothing);
 
       await leave(tester);
@@ -564,10 +597,10 @@ void main() {
 
       await harness.connect(tester);
       await open(tester, harness);
-      await reveal(tester, 'DIE TEMPERATURE');
+      await reveal(tester, 'TEMPERATURE');
 
       expect(find.text('unavailable'), findsOneWidget);
-      expect(find.textContaining('without the fe07 characteristic'),
+      expect(find.textContaining('does not report its temperature'),
           findsOneWidget);
 
       await leave(tester);
@@ -579,7 +612,7 @@ void main() {
       addTearDown(harness.dispose);
 
       await open(tester, harness);
-      await reveal(tester, 'DIE TEMPERATURE');
+      await reveal(tester, 'TEMPERATURE');
 
       expect(find.text('unavailable'), findsOneWidget);
       expect(find.textContaining('Connect to the recorder to read this'),
@@ -594,7 +627,7 @@ void main() {
 
       await harness.connect(tester);
       await open(tester, harness);
-      await reveal(tester, 'DIE TEMPERATURE');
+      await reveal(tester, 'TEMPERATURE');
       expect(find.text('31.2 °C'), findsOneWidget);
 
       // The die warms up as the radio works, which is the whole point of having
@@ -607,19 +640,31 @@ void main() {
       await leave(tester);
     });
 
-    testWidgets('it says the device only samples while this screen is open',
+    testWidgets('the circled i says it is only measured while this is open',
         (tester) async {
+      // A REAL COST TO THE USER - the recorder samples the sensor only because
+      // this screen asked it to - so it is said, in the layer that has room for
+      // it rather than on a card that has four words spare.
       final harness = ViewHarness();
       addTearDown(harness.dispose);
 
       await harness.connect(tester);
       await open(tester, harness);
-      await reveal(tester, 'DIE TEMPERATURE');
+      await reveal(tester, 'TEMPERATURE');
+
+      await tester.tap(find.bySemanticsLabel('About Temperature'));
+      await tester.pumpAndSettle();
 
       expect(
-        find.textContaining('only samples it while this screen is open'),
+        find.textContaining('only measures it while this screen is open'),
         findsOneWidget,
       );
+      // Plain in here too: no characteristic, no die, no decidegrees.
+      expect(find.textContaining('fe07'), findsNothing);
+      expect(find.textContaining('die'), findsNothing);
+
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
 
       await leave(tester);
     });
@@ -641,22 +686,179 @@ void main() {
       expect(find.text('Range'), findsNothing);
       expect(find.text('Link soak'), findsNothing);
       expect(find.text('Wake on motion'), findsNothing);
-      expect(find.textContaining('30 cm'), findsWidgets);
+      // One short sentence each, saying what the thing IS.
+      expect(
+        find.text('How much hiss the mic picks up in a silent room.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('How loudly your voice reaches the recorder.'),
+        findsOneWidget,
+      );
+      // The distance is an instruction, so it is behind the circled i rather
+      // than in a line that has to say what the check measures.
+      expect(find.textContaining('30 cm'), findsNothing);
+      expect(find.textContaining('dBFS'), findsNothing);
 
       await leave(tester);
     });
 
-    testWidgets('says the comparison is by date, and does not pretend to know '
-        'whether the case is on', (tester) async {
+    testWidgets('the card\'s circled i says how to use the two checks',
+        (tester) async {
+      // The before-and-after IS the method, and it is an instruction rather
+      // than a definition - so the card says what the checks are in one line
+      // and the circled i says what to do with them.
       final harness = ViewHarness();
       addTearDown(harness.dispose);
 
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
 
-      expect(find.textContaining('compare by date'), findsOneWidget);
-      expect(find.textContaining('cannot know'), findsOneWidget);
+      expect(
+        find.text('Two measurements to take now and compare later.'),
+        findsOneWidget,
+      );
 
+      await tester.tap(find.bySemanticsLabel('About Mic check'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('before you put the recorder in its case'),
+        findsOneWidget,
+      );
+      // Still not pretending to know whether the case is on.
+      expect(find.textContaining('no way of knowing'), findsOneWidget);
+      // And still saying nothing here writes to the device.
+      expect(find.textContaining('it only listens'), findsOneWidget);
+
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+
+      await leave(tester);
+    });
+
+    testWidgets('each check has its own circled i, and it says what to DO',
+        (tester) async {
+      // THE HARD HALF OF THE BRIEF. A user who taps this has to come away
+      // knowing where to put the recorder, not which sensor is in it.
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await open(tester, harness);
+      await reveal(tester, 'MIC CHECK');
+
+      await tester.tap(find.bySemanticsLabel('About Noise floor'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Put the recorder down somewhere quiet'),
+        findsOneWidget,
+      );
+      // What an unusual reading might MEAN, in terms of the object.
+      expect(
+        find.textContaining('resting against it or rattling'),
+        findsOneWidget,
+      );
+      // Never a verdict on a reading.
+      expect(find.textContaining('good'), findsNothing);
+      expect(find.textContaining('bad'), findsNothing);
+      // And no signal-processing words behind the tap either.
+      expect(find.textContaining('MEMS'), findsNothing);
+      expect(find.textContaining('RMS'), findsNothing);
+      expect(find.textContaining('resonance'), findsNothing);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.bySemanticsLabel('About Sensitivity'));
+      await tester.pumpAndSettle();
+      // The distance is kept, because the comparison depends on it - and it is
+      // given as something to do rather than as a port geometry.
+      expect(
+        find.textContaining(
+          'about ${DeviceTestReadings.sensitivityDistanceCm} cm away and speak',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('covering the microphone opening'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+
+      await leave(tester);
+    });
+
+    testWidgets('every circled i clears the 44px minimum hit target',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await open(tester, harness);
+
+      for (final label in const <String>[
+        'About Connection',
+        'About Mic check',
+        'About Noise floor',
+        'About Sensitivity',
+        'About Repeated checks',
+        'About Temperature',
+      ]) {
+        final finder = find.bySemanticsLabel(label);
+        await tester.scrollUntilVisible(finder, 220);
+        await tester.pump();
+        expect(finder, findsOneWidget, reason: label);
+        final size = tester.getSize(finder);
+        expect(
+          size.width,
+          greaterThanOrEqualTo(AppShape.minTapTarget),
+          reason: label,
+        );
+        expect(
+          size.height,
+          greaterThanOrEqualTo(AppShape.minTapTarget),
+          reason: label,
+        );
+      }
+
+      await leave(tester);
+    });
+
+    testWidgets('a circled i is a button to a screen reader, and dismissible',
+        (tester) async {
+      // THE ACCESSIBILITY REQUIREMENT, asserted rather than asserted-to. The
+      // control is a button with a spoken label; the sheet is a route, so a
+      // screen reader moves into it; and it goes away by its own Close button
+      // AND by the barrier, which is what the system back gesture lands on.
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      final handle = tester.ensureSemantics();
+
+      await open(tester, harness);
+
+      expect(
+        tester.getSemantics(find.bySemanticsLabel('About Connection')),
+        matchesSemantics(
+          label: 'About Connection',
+          isButton: true,
+          // THE TAP ACTION IS THE REQUIREMENT. A node a screen reader can read
+          // out and cannot activate is not a reachable control - see the note
+          // on `Semantics.onTap` in `widgets/common.dart`.
+          hasTapAction: true,
+        ),
+      );
+
+      await tester.tap(find.bySemanticsLabel('About Connection'));
+      await tester.pumpAndSettle();
+      expect(find.text('Connection'), findsOneWidget);
+
+      // Dismissed by tapping outside it, not only by the button.
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Carry your phone away'), findsNothing);
+      // And the live readings never moved: the card is where it was.
+      expect(find.text('CONNECTION'), findsOneWidget);
+
+      handle.dispose();
       await leave(tester);
     });
 
@@ -692,7 +894,7 @@ void main() {
 
       expect(harness.controller.testBlocker, DeviceTestBlocker.recording);
       expect(
-        find.textContaining('audio notify stream takes one subscriber'),
+        find.textContaining('A recording is running. Stop it, then try again.'),
         findsOneWidget,
       );
 
@@ -735,7 +937,10 @@ void main() {
         DeviceTestKind.noiseFloor,
       );
       // The operator is half the check, so the instruction is on screen.
-      expect(find.textContaining('Quiet room, hands off'), findsOneWidget);
+      expect(
+        find.textContaining('Keep it quiet and do not touch it'),
+        findsOneWidget,
+      );
       // And it is stoppable.
       expect(
         find.bySemanticsLabel('Stop the noise floor check'),
@@ -797,7 +1002,7 @@ void main() {
       await reveal(tester, 'MIC CHECK');
 
       expect(find.textContaining('Latest ·'), findsNothing);
-      expect(find.textContaining('0 runs kept'), findsOneWidget);
+      expect(find.textContaining('0 runs saved'), findsOneWidget);
 
       await leave(tester);
     });
@@ -814,7 +1019,7 @@ void main() {
       await reveal(tester, 'MIC CHECK');
 
       expect(find.textContaining('have not been read yet'), findsOneWidget);
-      expect(find.textContaining('0 runs kept'), findsNothing);
+      expect(find.textContaining('0 runs saved'), findsNothing);
 
       await leave(tester);
     });
@@ -858,7 +1063,7 @@ void main() {
       expect(find.textContaining('−68.9 dBFS'), findsOneWidget);
       expect(find.textContaining('Latest ·'), findsOneWidget);
       expect(find.textContaining('Before ·'), findsOneWidget);
-      expect(find.textContaining('2 runs kept'), findsOneWidget);
+      expect(find.textContaining('2 runs saved'), findsOneWidget);
 
       await leave(tester);
     });
@@ -930,7 +1135,7 @@ void main() {
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
 
-      expect(find.textContaining('measured but NOT saved'), findsOneWidget);
+      expect(find.textContaining('Measured, but not saved'), findsOneWidget);
 
       await leave(tester);
     });
@@ -979,9 +1184,9 @@ void main() {
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
 
-      expect(find.textContaining('1 run kept'), findsOneWidget);
+      expect(find.textContaining('1 run saved'), findsOneWidget);
       expect(
-        find.textContaining('1 more run is in that file'),
+        find.textContaining('1 older run is saved too'),
         findsOneWidget,
       );
       expect(find.textContaining('They are kept, untouched'), findsOneWidget);
@@ -1066,14 +1271,24 @@ void main() {
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
 
-      // The n, so nobody has to guess how much the figure is worth.
-      expect(find.textContaining('n=5 of 5'), findsOneWidget);
-      // The median - a sample somebody actually took, not a mean.
-      expect(find.textContaining('median −60.0 dBFS'), findsOneWidget);
+      // How many samples, so nobody has to guess how much the figure is worth.
+      // Spelled out rather than written n=5 of 5, which is the same fact in a
+      // notation nobody outside a lab reads - the export still says n=.
+      expect(find.textContaining('5 of 5 samples'), findsOneWidget);
+      expect(find.textContaining('n='), findsNothing);
+      // The median - a sample somebody actually took, not a mean - called the
+      // middle one, which is what it is.
+      expect(find.textContaining('middle −60.0 dBFS'), findsOneWidget);
       // AND the spread, on the same line. This is the requirement.
-      expect(find.textContaining('−62.0 dBFS to −58.0 dBFS'), findsOneWidget);
-      expect(find.textContaining('spread 4.0 dBFS'), findsOneWidget);
-      expect(find.textContaining('5 runs kept'), findsOneWidget);
+      expect(
+        find.textContaining('ranged −62.0 dBFS to −58.0 dBFS'),
+        findsOneWidget,
+      );
+      // The reading's own label is translated for the screen; the saved key
+      // "Noise floor (RMS)" is untouched, and it is what the export prints.
+      expect(find.textContaining('Hiss level:'), findsOneWidget);
+      expect(find.textContaining('RMS'), findsNothing);
+      expect(find.textContaining('5 runs saved'), findsOneWidget);
 
       await leave(tester);
     });
@@ -1101,7 +1316,7 @@ void main() {
       // Never silently dropped: it is in the sample list and in the range.
       expect(find.textContaining('−12.0 dBFS'), findsWidgets);
       // And it did not drag the middle value with it, which a mean would have.
-      expect(find.textContaining('median −60.0 dBFS'), findsOneWidget);
+      expect(find.textContaining('middle −60.0 dBFS'), findsOneWidget);
 
       await leave(tester);
     });
@@ -1126,7 +1341,7 @@ void main() {
       // The only thing ever left out of a median is a sample that had no number
       // to contribute, and the card says how many that was.
       expect(find.textContaining('2 of 5 had no reading'), findsOneWidget);
-      expect(find.textContaining('median −61.0 dBFS'), findsOneWidget);
+      expect(find.textContaining('middle −61.0 dBFS'), findsOneWidget);
       // The two failures are named rather than averaged away.
       expect(find.textContaining('2 failed'), findsOneWidget);
 
@@ -1152,9 +1367,9 @@ void main() {
 
       // Three of five is a usable baseline. It is NOT five, and it is not
       // discarded either.
-      expect(find.textContaining('n=3 of 5'), findsOneWidget);
+      expect(find.textContaining('3 of 5 samples'), findsOneWidget);
       expect(find.textContaining('stopped early'), findsOneWidget);
-      expect(find.textContaining('median −60.0 dBFS'), findsOneWidget);
+      expect(find.textContaining('middle −60.0 dBFS'), findsOneWidget);
 
       await leave(tester);
     });
@@ -1182,12 +1397,15 @@ void main() {
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
 
-      expect(find.textContaining('n=1'), findsOneWidget);
-      expect(find.textContaining('no spread to judge it by'), findsOneWidget);
+      expect(find.textContaining('1 sample'), findsOneWidget);
+      expect(
+        find.textContaining('one run only, so there is no range to compare'),
+        findsOneWidget,
+      );
       // The figure is still shown - it is just not called a spread of nothing.
       expect(find.textContaining('−54.2 dBFS'), findsOneWidget);
       expect(find.textContaining('samples:'), findsNothing);
-      expect(find.textContaining('spread 0.0'), findsNothing);
+      expect(find.textContaining('ranged'), findsNothing);
 
       await leave(tester);
     });
@@ -1217,15 +1435,21 @@ void main() {
 
       expect(find.textContaining('Latest ·'), findsOneWidget);
       expect(find.textContaining('Before ·'), findsOneWidget);
-      // An n on each half, because five samples against three is a different
-      // comparison from five against five.
-      expect(find.textContaining('n=3 of 3'), findsOneWidget);
-      expect(find.textContaining('n=5 of 5'), findsOneWidget);
-      // The finding: about 15 dB, and both spreads are small enough to trust it.
-      expect(find.textContaining('median −53.0 dBFS'), findsOneWidget);
-      expect(find.textContaining('median −68.0 dBFS'), findsOneWidget);
-      expect(find.textContaining('spread 2.0 dBFS'), findsOneWidget);
-      expect(find.textContaining('spread 4.0 dBFS'), findsOneWidget);
+      // A count on each half, because five samples against three is a
+      // different comparison from five against five.
+      expect(find.textContaining('3 of 3 samples'), findsOneWidget);
+      expect(find.textContaining('5 of 5 samples'), findsOneWidget);
+      // The finding: about 15 dB, and both ranges are small enough to trust it.
+      expect(find.textContaining('middle −53.0 dBFS'), findsOneWidget);
+      expect(find.textContaining('middle −68.0 dBFS'), findsOneWidget);
+      expect(
+        find.textContaining('ranged −54.0 dBFS to −52.0 dBFS'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('ranged −70.0 dBFS to −66.0 dBFS'),
+        findsOneWidget,
+      );
 
       await leave(tester);
     });
@@ -1239,99 +1463,70 @@ void main() {
   // clear of a spread that narrow, and it is only possible to say so because the
   // spread was measured rather than assumed.
   // -------------------------------------------------------------------------
-  group('the samples-per-check control', () {
-    testWidgets('offers the counts and starts at five', (tester) async {
+  group('the fixed sample counts', () {
+    testWidgets('there is NO control for them, only an explanation',
+        (tester) async {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
 
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
 
-      expect(harness.controller.samplesPerTest, 5);
+      // The old knob is gone: diagnostics is for observers, and nobody should
+      // have to reason about sampling statistics to read their own microphone.
+      expect(find.textContaining('Samples per check'), findsNothing);
+      expect(find.bySemanticsLabel('Take 3 samples per check'), findsNothing);
+      expect(find.bySemanticsLabel('Take 5 samples per check'), findsNothing);
       expect(
-        harness.controller.samplesPerTest,
-        DeviceTestSampling.defaultCount,
-      );
-      expect(find.text('Samples per check · 5'), findsOneWidget);
-      for (final count in DeviceTestSampling.choices) {
-        expect(
-          find.bySemanticsLabel(
-            count == 1
-                ? 'Take a single sample per check'
-                : 'Take $count samples per check',
-          ),
-          findsOneWidget,
-        );
-      }
-      // And it says why more than one is taken at all.
-      expect(find.textContaining('reported as a median'), findsOneWidget);
-      expect(find.textContaining('stop early'), findsOneWidget);
-
-      await leave(tester);
-    });
-
-    testWidgets('choosing a count changes what the next check will take',
-        (tester) async {
-      final harness = ViewHarness();
-      addTearDown(harness.dispose);
-
-      await open(tester, harness);
-      await reveal(tester, 'Samples per check · 5');
-
-      await tester.tap(find.bySemanticsLabel('Take 3 samples per check'));
-      await tester.pump();
-
-      expect(harness.controller.samplesPerTest, 3);
-      expect(find.text('Samples per check · 3'), findsOneWidget);
-
-      await leave(tester);
-    });
-
-    testWidgets('a single sample is still offered', (tester) async {
-      final harness = ViewHarness();
-      addTearDown(harness.dispose);
-
-      await open(tester, harness);
-      await reveal(tester, 'Samples per check · 5');
-
-      await tester.tap(
         find.bySemanticsLabel('Take a single sample per check'),
+        findsNothing,
       );
-      await tester.pump();
 
-      // The right answer when the question is "is this board alive" rather than
-      // "is this enclosure worse" - and the card then says n=1 out loud.
-      expect(harness.controller.samplesPerTest, 1);
+      // What stays is WHY it repeats, which is an observer's business - one
+      // short line, and the reasoning behind the circled i.
+      expect(
+        find.text('Each check is taken several times'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('median'), findsNothing);
+
+      await tester.tap(find.bySemanticsLabel('About Repeated checks'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('a single go is not enough to compare'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('reporting the middle one'), findsOneWidget);
+      expect(find.textContaining('stop early'), findsOneWidget);
+      // Plain here too: no median, no n, no spread.
+      expect(find.textContaining('median'), findsNothing);
+      expect(find.textContaining('spread'), findsNothing);
+
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
 
       await leave(tester);
     });
 
-    testWidgets('the count is fixed while a batch is in progress',
+    testWidgets('the screen names the two counts, and reads them from the model',
         (tester) async {
-      final harness = ViewHarness(testWindow: const Duration(seconds: 30));
+      final harness = ViewHarness();
       addTearDown(harness.dispose);
 
-      await harness.connect(tester);
       await open(tester, harness);
       await reveal(tester, 'MIC CHECK');
-      await tester.tap(find.bySemanticsLabel('Run the noise floor check'));
-      await flush(tester);
 
-      harness.controller.samplesPerTest = 1;
-      await tester.pump();
-
-      // A batch carries the count it started with, or the n on the card would
-      // not be the n that was measured.
-      expect(harness.controller.samplesPerTest, 5);
-
-      harness.controller.cancelDeviceTest();
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      final noise = DeviceTestSampling.noiseFloorSamples;
+      final voice = DeviceTestSampling.sensitivitySamples;
+      expect(
+        find.text('Noise floor $noise times, voice $voice times.'),
+        findsOneWidget,
       );
-      await flush(tester);
 
       await leave(tester);
     });
+
 
     testWidgets('a running check says which sample of how many it is on',
         (tester) async {
@@ -1345,8 +1540,16 @@ void main() {
       await flush(tester);
 
       // Progress has to be obvious: a check that looks identical on sample four
-      // as on sample one is a check somebody abandons.
-      expect(find.text('Sample 1 of 5'), findsOneWidget);
+      // as on sample one is a check somebody abandons. And the count it is
+      // counting up to is the noise floor's own fixed one, not a chosen number.
+      expect(
+        harness.controller.deviceTests.batchTarget,
+        DeviceTestSampling.noiseFloorSamples,
+      );
+      expect(
+        find.text('Sample 1 of ${DeviceTestSampling.noiseFloorSamples}'),
+        findsOneWidget,
+      );
 
       harness.controller.cancelDeviceTest();
       await tester.runAsync(
@@ -1377,7 +1580,12 @@ void main() {
       expect(tests.samplesTaken, 1);
       await reveal(tester, 'MIC CHECK');
       // Progress, and what the operator has to do before the next one.
-      expect(find.textContaining('1 of 5 samples taken'), findsOneWidget);
+      expect(
+        find.textContaining(
+          '1 of ${DeviceTestSampling.sensitivitySamples} samples taken',
+        ),
+        findsOneWidget,
+      );
       expect(find.textContaining('speak again'), findsOneWidget);
       expect(
         find.bySemanticsLabel(
@@ -1397,7 +1605,7 @@ void main() {
       expect(tests.isBatchActive, isFalse);
       final batch = tests.batchesOf(DeviceTestKind.sensitivity).single;
       expect(batch.sampleCount, 1);
-      expect(batch.requested, 5);
+      expect(batch.requested, DeviceTestSampling.sensitivitySamples);
       expect(batch.isPartial, isTrue);
 
       await leave(tester);
@@ -1424,7 +1632,7 @@ void main() {
         sequence: 1,
       );
 
-      // Two samples of five taken, and still waiting rather than looping.
+      // Two samples of three taken, and still waiting rather than looping.
       expect(tests.samplesTaken, 2);
       expect(tests.awaitingNextSample, isTrue);
 

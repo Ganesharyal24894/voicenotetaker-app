@@ -41,7 +41,9 @@ import 'level_meter.dart';
 /// reading before the enclosure and one after cannot be compared - see
 /// `model/device_test_aggregate.dart`. Each `run…` method therefore takes a
 /// `repeats` count and collects a BATCH of samples under one
-/// [DeviceTestResult.batchId]. The noise floor repeats unattended; sensitivity
+/// [DeviceTestResult.batchId] - the counts the app actually uses, and why they
+/// differ per check, are in [DeviceTestSampling]. The noise floor repeats
+/// unattended; sensitivity
 /// needs somebody to speak, so it waits between samples in
 /// [DeviceTestPhase.awaitingNextSample] for [continueBatch] - or [endBatch],
 /// which keeps every sample taken so far.
@@ -67,11 +69,6 @@ class DeviceTestService {
 
   /// How often [elapsed] is republished while a check runs.
   final Duration tick;
-
-  /// Samples taken per check unless the operator says otherwise, and the reasons
-  /// for the number. Lives in `model/` so the screen can offer the choice
-  /// without reaching into a service - see [DeviceTestSampling].
-  static const int defaultRepeatCount = DeviceTestSampling.defaultCount;
 
   final StreamController<void> _changes = StreamController<void>.broadcast();
 

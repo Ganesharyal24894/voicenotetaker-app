@@ -254,22 +254,70 @@ void main() {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // THE SAMPLING POLICY, WHICH IS FIXED AND NOT A CONTROL
+  //
+  // There was a "samples per check" selector on the diagnostics screen. It is
+  // gone: diagnostics is a screen for observers, and the count is part of the
+  // measurement rather than a preference. These tests pin the two numbers,
+  // because a batch is only comparable against a batch of similar size.
+  // -------------------------------------------------------------------------
   group('the sampling policy', () {
-    test('the default is five, and it is odd on purpose', () {
-      // Odd, so the median is a sample somebody measured rather than the mean of
-      // the middle two - the only place this code reports a number nobody took.
-      expect(DeviceTestSampling.defaultCount, 5);
-      expect(DeviceTestSampling.defaultCount.isOdd, isTrue);
+    test('the counts are fixed per check, and they differ', () {
+      expect(DeviceTestSampling.samplesFor(DeviceTestKind.noiseFloor), 7);
+      expect(DeviceTestSampling.samplesFor(DeviceTestKind.sensitivity), 3);
+      // Different on purpose: one costs the recorder ten seconds, the other
+      // costs a person ten seconds of standing at a mark speaking.
+      expect(
+        DeviceTestSampling.samplesFor(DeviceTestKind.noiseFloor),
+        isNot(DeviceTestSampling.samplesFor(DeviceTestKind.sensitivity)),
+      );
     });
 
-    test('the choices include one, so a single run stays possible', () {
-      expect(DeviceTestSampling.choices, contains(1));
-      expect(DeviceTestSampling.choices, contains(DeviceTestSampling.defaultCount));
+    test('every count is odd, so the median is a sample somebody took', () {
+      // The even case is the one place the aggregate reports a number nobody
+      // measured - the mean of the two middle samples.
+      for (final kind in DeviceTestKind.values) {
+        expect(
+          DeviceTestSampling.samplesFor(kind).isOdd,
+          isTrue,
+          reason: '${kind.wireName} must take an odd number of samples',
+        );
+      }
+    });
+
+    test('every count is at least three, so a median AND a spread exist', () {
+      // Two would give a spread and a median that is the mean of both. One
+      // would give neither. Three is the floor for the pair of them.
+      for (final kind in DeviceTestKind.values) {
+        expect(
+          DeviceTestSampling.samplesFor(kind),
+          greaterThanOrEqualTo(3),
+          reason: '${kind.wireName} must be able to report a spread',
+        );
+      }
+    });
+
+    test('the unattended check takes more samples than the prompted one', () {
+      // The trade the numbers encode: samples are nearly free when nobody has
+      // to be there, and expensive when somebody does.
+      expect(
+        DeviceTestSampling.samplesFor(DeviceTestKind.noiseFloor),
+        greaterThan(DeviceTestSampling.samplesFor(DeviceTestKind.sensitivity)),
+      );
+      expect(
+        DeviceTestSampling.isAutomatic(DeviceTestKind.noiseFloor),
+        isTrue,
+      );
+      expect(
+        DeviceTestSampling.isAutomatic(DeviceTestKind.sensitivity),
+        isFalse,
+      );
     });
 
     test('only the check that needs nobody present repeats on its own', () {
       // The noise floor asks for a quiet room and nothing else, so it can take
-      // its five windows back to back.
+      // its seven windows back to back.
       expect(DeviceTestSampling.isAutomatic(DeviceTestKind.noiseFloor), isTrue);
       // Sensitivity IS the operator: somebody stands at the mark and speaks.
       // Looping it unattended would record silence and report it as a quiet
