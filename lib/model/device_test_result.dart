@@ -112,6 +112,13 @@ enum DeviceTestPhase {
 
   /// Writing the result to disk.
   saving,
+
+  /// A batch of samples is part-way through and the next one needs the
+  /// operator: they have to walk away again, speak again, or shake it again.
+  ///
+  /// APPENDED, never inserted. Nothing persists a phase, but the discipline is
+  /// the same one [DeviceTestKind] follows for a reason worth keeping.
+  awaitingNextSample,
 }
 
 /// The names of the measurements, and the one parameter that has to be the
@@ -320,6 +327,9 @@ class DeviceTestResult {
     this.readings = const <DeviceTestReading>[],
     this.steps = const <DeviceTestStep>[],
     this.note,
+    this.batchId,
+    this.repeatIndex = 1,
+    this.repeatTarget = 1,
   });
 
   /// A run that never started, with the reason recorded.
@@ -359,6 +369,53 @@ class DeviceTestResult {
   /// caveat that belongs with the figure.
   final String? note;
 
+  /// Which batch of repeated samples this run belongs to, or null when it ran
+  /// on its own.
+  ///
+  /// WHY A BATCH ID AND NOT A TIMESTAMP WINDOW. A single measurement is not
+  /// comparable against a single measurement - see
+  /// `model/device_test_aggregate.dart` - so the unit of comparison is a set of
+  /// samples, and a set needs a name. Grouping by "runs within ten minutes of
+  /// each other" would have silently merged two deliberately separate sittings
+  /// and split one long soak batch in half.
+  ///
+  /// NULL IS NOT A BUG. Every result saved before batches existed has none, and
+  /// each of those is read as a batch of one, which is what it was.
+  final String? batchId;
+
+  /// 1-based position of this sample within its batch. 1 for a lone run.
+  final int repeatIndex;
+
+  /// How many samples the batch was ASKED for, which may be more than it took:
+  /// the operator can stop a walk-away-and-shake test after three of five, and
+  /// three samples aggregated beats five samples abandoned. The difference
+  /// between this and the number of runs actually saved is what lets the screen
+  /// say "n=3 of 5, stopped early" rather than pretending five were taken.
+  final int repeatTarget;
+
+  /// The same run, stamped with where it sat in a batch.
+  ///
+  /// Used by the service as a result is saved, so the eight places that build
+  /// one do not each have to remember the batch fields.
+  DeviceTestResult inBatch({
+    required String? batchId,
+    required int repeatIndex,
+    required int repeatTarget,
+    Duration? duration,
+  }) =>
+      DeviceTestResult(
+        kind: kind,
+        outcome: outcome,
+        startedAt: startedAt,
+        duration: duration ?? this.duration,
+        readings: readings,
+        steps: steps,
+        note: note,
+        batchId: batchId,
+        repeatIndex: repeatIndex,
+        repeatTarget: repeatTarget,
+      );
+
   /// Whether this run produced numbers worth comparing.
   bool get hasReadings =>
       readings.any((reading) => reading.value != null) || steps.isNotEmpty;
@@ -379,6 +436,14 @@ class DeviceTestResult {
         'readings': readings.map((r) => r.toJson()).toList(),
         'steps': steps.map((s) => s.toJson()).toList(),
         'note': note,
+        // ADDITIVE, and the store's format version is deliberately NOT bumped
+        // for them: a file written before these existed reads back with
+        // `batchId` null and both counters 1, which is exactly what a lone run
+        // is. An older build reading a newer file ignores the three keys it
+        // does not know and still gets every reading. See [fromJson].
+        'batchId': batchId,
+        'repeatIndex': repeatIndex,
+        'repeatTarget': repeatTarget,
       };
 
   /// Reads one saved result.
@@ -416,6 +481,10 @@ class DeviceTestResult {
     if (note != null && note is! String) {
       throw const FormatException('result note must be a string or null');
     }
+    final batchId = json['batchId'];
+    if (batchId != null && batchId is! String) {
+      throw const FormatException('result batchId must be a string or null');
+    }
     return DeviceTestResult(
       kind: kind,
       outcome: outcome,
@@ -424,7 +493,24 @@ class DeviceTestResult {
       readings: _listOf(json['readings'], DeviceTestReading.fromJson),
       steps: _listOf(json['steps'], DeviceTestStep.fromJson),
       note: note as String?,
+      batchId: batchId as String?,
+      repeatIndex: _counter(json['repeatIndex'], 'repeatIndex'),
+      repeatTarget: _counter(json['repeatTarget'], 'repeatTarget'),
     );
+  }
+
+  /// A batch counter out of a saved file.
+  ///
+  /// ABSENT MEANS ONE, which is what keeps every result written before batches
+  /// existed readable: a lone run IS sample 1 of 1. A value below one is
+  /// nonsense rather than a different meaning, so it is pulled up to one rather
+  /// than costing the row - a mangled counter must not lose a measurement.
+  static int _counter(Object? raw, String name) {
+    if (raw == null) return 1;
+    if (raw is! int) {
+      throw FormatException('result $name must be an integer');
+    }
+    return raw < 1 ? 1 : raw;
   }
 
   static List<T> _listOf<T>(
@@ -445,5 +531,6 @@ class DeviceTestResult {
 
   @override
   String toString() => 'DeviceTestResult(${kind.wireName}, '
-      '${outcome.wireName}, $startedAt, ${readings.length} readings)';
+      '${outcome.wireName}, $startedAt, ${readings.length} readings, '
+      'sample $repeatIndex of $repeatTarget)';
 }

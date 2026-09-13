@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../drivers/file_store.dart';
+import '../model/device_test_aggregate.dart';
 import '../model/device_test_result.dart';
 
 /// Where device-test results are kept between runs.
@@ -63,6 +64,16 @@ class DeviceTestStore {
     }
     return null;
   }
+
+  /// Every batch of [kind], newest first.
+  ///
+  /// THE UNIT OF COMPARISON IS A BATCH, not a run: one noisy measurement cannot
+  /// be compared against one noisy measurement. The grouping arithmetic lives in
+  /// `model/device_test_aggregate.dart`, which is pure and host-testable; this
+  /// class only knows which rows to hand it.
+  List<DeviceTestBatch> batchesOf(DeviceTestKind kind) => DeviceTestBatch.group(
+        _results.where((result) => result.kind == kind),
+      );
 
   /// Reads the file, tolerating everything except being lied to.
   ///

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import '../drivers/ble_transport.dart';
 import '../model/audio_codec.dart';
 import '../model/device_state.dart';
+import '../model/device_test_aggregate.dart';
 import '../model/device_test_result.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
@@ -27,6 +28,15 @@ import 'level_meter.dart';
 /// one subscriber, so a test that streams cannot run while a recording is in
 /// progress. The caller checks that (see `AppController.testBlocker`); this
 /// class reports a failure rather than crashing if it is called anyway.
+///
+/// EVERY TEST IS RUN MORE THAN ONCE. All five measurements are noisy, so one
+/// reading before the enclosure and one after cannot be compared - see
+/// `model/device_test_aggregate.dart`. Each `run…` method therefore takes a
+/// `repeats` count and collects a BATCH of samples under one
+/// [DeviceTestResult.batchId]. Two of the five can repeat unattended; the other
+/// three need the operator between samples, and those wait in
+/// [DeviceTestPhase.awaitingNextSample] for [continueBatch] - or [endBatch],
+/// which keeps every sample taken so far.
 class DeviceTestService {
   /// Private initializing formals keep the public parameter names
   /// (`transport:`, `store:`) while assigning the private fields - the same
@@ -94,6 +104,11 @@ class DeviceTestService {
   /// How often [elapsed] is republished while a test runs.
   final Duration tick;
 
+  /// Samples taken per test unless the operator says otherwise, and the reasons
+  /// for the number. Lives in `model/` so the screen can offer the choice
+  /// without reaching into a service - see [DeviceTestSampling].
+  static const int defaultRepeatCount = DeviceTestSampling.defaultCount;
+
   final StreamController<void> _changes = StreamController<void>.broadcast();
 
   /// Fires whenever anything a screen renders changes.
@@ -139,6 +154,51 @@ class DeviceTestService {
   /// Every saved run, newest first.
   List<DeviceTestResult> get history => _store.results;
 
+  /// Every saved batch of [kind], newest first - what the screen compares.
+  List<DeviceTestBatch> batchesOf(DeviceTestKind kind) =>
+      _store.batchesOf(kind);
+
+  // -------------------------------------------------------------------------
+  // The running batch.
+  // -------------------------------------------------------------------------
+
+  String? _batchId;
+  DeviceTestKind? _batchKind;
+  int _batchTarget = 1;
+  int _batchDone = 0;
+  bool _batchStopped = false;
+  String? _batchDeviceId;
+  AudioCodec? _batchCodec;
+  Duration? _batchSoak;
+
+  /// Distinguishes two batches started in the same microsecond, which only an
+  /// injected clock can manage but a test WILL.
+  int _batchSequence = 0;
+
+  /// True from the first sample of a batch until the last one is saved -
+  /// INCLUDING while a manual batch waits for the operator, when [running] is
+  /// null. The caller uses it to keep the other tests out; see
+  /// `AppController.testBlocker`.
+  bool get isBatchActive => _batchKind != null;
+
+  /// Which test the running batch belongs to, or null.
+  DeviceTestKind? get batchKind => _batchKind;
+
+  /// Samples the running batch was asked for.
+  int get batchTarget => _batchTarget;
+
+  /// Samples of the running batch that are saved. NEVER discarded when a batch
+  /// ends early: three samples labelled n=3 beat five samples thrown away.
+  int get samplesTaken => _batchDone;
+
+  /// 1-based number of the sample now running, or of the one next up.
+  int get sampleNumber => _batchDone + 1;
+
+  /// True when a batch is between samples, waiting for the operator to be ready
+  /// for the next one.
+  bool get awaitingNextSample =>
+      _batchKind != null && _phase == DeviceTestPhase.awaitingNextSample;
+
   /// Name of the file the history is kept in, for the screen to name it. The
   /// view asks the service rather than the store, so `view/` does not have to
   /// know how persistence is arranged.
@@ -154,9 +214,56 @@ class DeviceTestService {
   }
 
   /// Stops whatever is running. The partial readings are kept and saved.
+  ///
+  /// In a batch it stops the BATCH as well as the sample: the operator pressed
+  /// stop, and starting the next sample of five would ignore them. Everything
+  /// already saved stays saved.
   void cancel() {
+    if (_batchKind != null) _batchStopped = true;
     final cancelled = _cancelled;
     if (cancelled != null && !cancelled.isCompleted) cancelled.complete();
+    // A batch waiting for the operator has no sample to cancel, so there is
+    // nothing that will come back and end it. Ended here, or the screen sits
+    // asking for a sample nobody is going to give it.
+    if (_running == null && _batchKind != null) _endBatch();
+  }
+
+  /// Abandons the samples a batch has not taken yet and keeps the ones it has.
+  ///
+  /// This is "stop at three of five" and it is a FIRST-CLASS OUTCOME, not a
+  /// failure: the batch is saved as n=3 of 5 and the screen says it was stopped
+  /// early. Nothing measured is thrown away.
+  void endBatch() {
+    if (_batchKind == null) return;
+    _batchStopped = true;
+    if (_running != null) {
+      cancel();
+      return;
+    }
+    _endBatch();
+  }
+
+  /// The operator is ready for the next sample of a manual batch.
+  ///
+  /// Does nothing unless a batch is actually waiting - a double tap cannot start
+  /// two samples, and this is never the way to start a batch.
+  Future<DeviceTestResult?> continueBatch() async {
+    final kind = _batchKind;
+    if (kind == null ||
+        _running != null ||
+        _phase != DeviceTestPhase.awaitingNextSample) {
+      return null;
+    }
+    if (kind == DeviceTestKind.range) {
+      // A walk is begun here and ended by the operator with [finishRangeWalk],
+      // which is where the sample is counted.
+      final opened = await _beginRangeWalkOnce();
+      if (!opened) _afterSample(failed: true);
+      return null;
+    }
+    final result = await _runSample();
+    _afterSample(failed: _endsTheBatch(result));
+    return result;
   }
 
   /// The operator says they have just shaken the device. Starts the wake clock.
@@ -217,8 +324,24 @@ class DeviceTestService {
   Future<bool> beginRangeWalk({
     required String deviceId,
     required AudioCodec requestCodec,
+    int repeats = 1,
   }) async {
-    if (isRunning) return false;
+    if (isRunning || isBatchActive) return false;
+    _beginBatch(
+      DeviceTestKind.range,
+      repeats,
+      deviceId: deviceId,
+      requestCodec: requestCodec,
+    );
+    final opened = await _beginRangeWalkOnce();
+    if (!opened) _afterSample(failed: true);
+    return opened;
+  }
+
+  /// One walk of a range batch: opens the stream and starts counting.
+  Future<bool> _beginRangeWalkOnce() async {
+    final deviceId = _batchDeviceId!;
+    final requestCodec = _batchCodec!;
     _begin(DeviceTestKind.range, DeviceTestPhase.walking);
     final capture = await _openCapture(
       deviceId: deviceId,
@@ -241,8 +364,18 @@ class DeviceTestService {
   }
 
   /// Ends the range walk and saves what the stops recorded.
+  ///
+  /// In a batch of walks this ends ONE of them, and the next is offered rather
+  /// than started: the operator has to carry the phone back before they can walk
+  /// away again.
   Future<DeviceTestResult?> finishRangeWalk() async {
     if (_running != DeviceTestKind.range) return null;
+    final result = await _finishRangeWalkOnce();
+    _afterSample(failed: _endsTheBatch(result));
+    return result;
+  }
+
+  Future<DeviceTestResult?> _finishRangeWalkOnce() async {
     // A final stop, so the last leg of the walk is measured too rather than
     // being thrown away with the subscription.
     await markRangeStep();
@@ -338,37 +471,58 @@ class DeviceTestService {
   // `LevelWindow` for why averaging dBFS would under-report a transient.
   // -------------------------------------------------------------------------
 
-  /// Ten seconds of a quiet room.
+  static const String _noiseFloorNote =
+      'Recorded in a quiet room with nothing touching the device. A '
+      'noise floor that rose after the enclosure went on is the case '
+      'itself - a rattle, a resonance, or vibration coupling into the '
+      'microphone.';
+
+  static const String _sensitivityNote =
+      'Spoken at ${DeviceTestReadings.sensitivityDistanceCm} cm from the '
+      'microphone port, '
+      'at a normal speaking level. Comparable between runs only because '
+      'the distance is fixed - move it and the numbers mean nothing.';
+
+  /// Ten seconds of a quiet room, [repeats] times over.
+  ///
+  /// Repeats UNATTENDED: the operator's only job is to leave the room alone, and
+  /// they can do that for fifty seconds as easily as ten.
   Future<DeviceTestResult?> runNoiseFloor({
     required String deviceId,
     required AudioCodec requestCodec,
-  }) =>
-      _runAcoustic(
-        kind: DeviceTestKind.noiseFloor,
-        deviceId: deviceId,
-        requestCodec: requestCodec,
-        window: noiseFloorWindow,
-        note: 'Recorded in a quiet room with nothing touching the device. A '
-            'noise floor that rose after the enclosure went on is the case '
-            'itself - a rattle, a resonance, or vibration coupling into the '
-            'microphone.',
-      );
+    int repeats = 1,
+  }) async {
+    if (isRunning || isBatchActive) return null;
+    _beginBatch(
+      DeviceTestKind.noiseFloor,
+      repeats,
+      deviceId: deviceId,
+      requestCodec: requestCodec,
+    );
+    return _runAutomaticBatch();
+  }
 
-  /// A voice at [sensitivityDistanceCm], which is what the port costs.
+  /// A voice at [DeviceTestReadings.sensitivityDistanceCm], [repeats] times.
+  ///
+  /// Each sample is PROMPTED, because each one needs somebody to be there
+  /// speaking at the marked distance. Looping this unattended would record
+  /// silence and report it as a quiet voice.
   Future<DeviceTestResult?> runSensitivity({
     required String deviceId,
     required AudioCodec requestCodec,
-  }) =>
-      _runAcoustic(
-        kind: DeviceTestKind.sensitivity,
-        deviceId: deviceId,
-        requestCodec: requestCodec,
-        window: sensitivityWindow,
-        note: 'Spoken at ${DeviceTestReadings.sensitivityDistanceCm} cm from the '
-            'microphone port, '
-            'at a normal speaking level. Comparable between runs only because '
-            'the distance is fixed - move it and the numbers mean nothing.',
-      );
+    int repeats = 1,
+  }) async {
+    if (isRunning || isBatchActive) return null;
+    _beginBatch(
+      DeviceTestKind.sensitivity,
+      repeats,
+      deviceId: deviceId,
+      requestCodec: requestCodec,
+    );
+    final result = await _runSample();
+    _afterSample(failed: _endsTheBatch(result));
+    return result;
+  }
 
   Future<DeviceTestResult?> _runAcoustic({
     required DeviceTestKind kind,
@@ -377,7 +531,6 @@ class DeviceTestService {
     required Duration window,
     required String note,
   }) async {
-    if (isRunning) return null;
     _begin(kind, DeviceTestPhase.measuring);
     final capture = await _openCapture(
       deviceId: deviceId,
@@ -457,13 +610,29 @@ class DeviceTestService {
   // link went away entirely.
   // -------------------------------------------------------------------------
 
+  /// Minutes of streaming, [repeats] times over. Repeats UNATTENDED.
   Future<DeviceTestResult?> runLinkSoak({
     required String deviceId,
     required AudioCodec requestCodec,
     Duration? window,
+    int repeats = 1,
   }) async {
-    if (isRunning) return null;
-    final soak = window ?? linkSoakWindow;
+    if (isRunning || isBatchActive) return null;
+    _beginBatch(
+      DeviceTestKind.linkSoak,
+      repeats,
+      deviceId: deviceId,
+      requestCodec: requestCodec,
+      soak: window ?? linkSoakWindow,
+    );
+    return _runAutomaticBatch();
+  }
+
+  Future<DeviceTestResult?> _runLinkSoakOnce({
+    required String deviceId,
+    required AudioCodec requestCodec,
+    required Duration soak,
+  }) async {
     _begin(DeviceTestKind.linkSoak, DeviceTestPhase.measuring);
     final capture = await _openCapture(
       deviceId: deviceId,
@@ -578,9 +747,29 @@ class DeviceTestService {
   // caveat travels with the result rather than living only in this comment.
   // -------------------------------------------------------------------------
 
-  /// Runs the wake test end to end. Needs [confirmShaken] partway through.
-  Future<DeviceTestResult?> runWakeOnMotion({required String deviceId}) async {
-    if (isRunning) return null;
+  /// Runs the wake test [repeats] times. Needs [confirmShaken] in each sample.
+  ///
+  /// Each sample is PROMPTED: somebody has to shake it.
+  Future<DeviceTestResult?> runWakeOnMotion({
+    required String deviceId,
+    int repeats = 1,
+  }) async {
+    if (isRunning || isBatchActive) return null;
+    _beginBatch(DeviceTestKind.wakeOnMotion, repeats, deviceId: deviceId);
+    final result = await _runSample();
+    _afterSample(failed: _endsTheBatch(result));
+    return result;
+  }
+
+  Future<DeviceTestResult?> _runWakeOnMotionOnce({
+    required String deviceId,
+  }) async {
+    // THE SECOND SAMPLE HAS NO LINK. The first one ended the link on purpose and
+    // nothing reconnects it, so `fe04` cannot be written again - but it does not
+    // need to be: the flag is kept in the device's flash, which is also why a
+    // cancelled run says so. A failure to enable it is therefore fatal on the
+    // first sample and expected on every one after.
+    final firstSample = _batchDone == 0;
     final disconnect = _disconnectLink;
     _begin(DeviceTestKind.wakeOnMotion, DeviceTestPhase.waitingForSystemOff);
     if (disconnect == null) {
@@ -597,20 +786,24 @@ class DeviceTestService {
     try {
       await _transport.setAutoSleep(deviceId, true);
     } on BleTransportException catch (e) {
-      return _finish(
-        DeviceTestResult.unavailable(
-          kind: DeviceTestKind.wakeOnMotion,
-          at: _startedAt!,
-          because: 'auto-sleep could not be enabled: ${e.message}',
-        ),
-      );
+      if (firstSample) {
+        return _finish(
+          DeviceTestResult.unavailable(
+            kind: DeviceTestKind.wakeOnMotion,
+            at: _startedAt!,
+            because: 'auto-sleep could not be enabled: ${e.message}',
+          ),
+        );
+      }
+      // See the note at the top of this method: no link, and none needed.
     }
 
     // Read BEFORE the link goes. Afterwards the device is asleep and then
     // freshly awake, and there is no characteristic to read either way.
     final die = await _dieReading(deviceId);
 
-    // The link is the thing keeping it awake, so it goes first.
+    // The link is the thing keeping it awake, so it goes first. On a later
+    // sample it is already gone, and the controller's disconnect is a no-op.
     await disconnect();
 
     final asleep = await _watchAdvertising(
@@ -696,6 +889,122 @@ class DeviceTestService {
       );
 
   // -------------------------------------------------------------------------
+  // Batch machinery.
+  //
+  // A batch is n samples of one test saved under one id. The two rules it keeps
+  // are: NOTHING MEASURED IS DISCARDED, whether the batch finished or not; and a
+  // batch stops asking for more samples the moment the answer stopped being
+  // measurable.
+  // -------------------------------------------------------------------------
+
+  void _beginBatch(
+    DeviceTestKind kind,
+    int repeats, {
+    required String deviceId,
+    AudioCodec? requestCodec,
+    Duration? soak,
+  }) {
+    _batchKind = kind;
+    _batchTarget = repeats < 1 ? 1 : repeats;
+    _batchDone = 0;
+    _batchStopped = false;
+    _batchDeviceId = deviceId;
+    _batchCodec = requestCodec;
+    _batchSoak = soak;
+    _batchId = '${kind.wireName}-'
+        '${_clock().microsecondsSinceEpoch}-${_batchSequence++}';
+    _notify();
+  }
+
+  void _endBatch() {
+    if (_batchKind == null) return;
+    _batchKind = null;
+    _batchId = null;
+    _batchDeviceId = null;
+    _batchCodec = null;
+    _batchSoak = null;
+    _batchStopped = false;
+    if (_phase == DeviceTestPhase.awaitingNextSample) {
+      _phase = DeviceTestPhase.idle;
+    }
+    _notify();
+  }
+
+  /// Whether [result] means the batch should stop asking for samples.
+  ///
+  /// A FAILED OR UNAVAILABLE SAMPLE ENDS THE BATCH, and deliberately: those two
+  /// outcomes mean the conditions the test needs have gone - the link went away,
+  /// the device never slept, the firmware cannot answer - and four more attempts
+  /// would fill the history with identical non-measurements, three minutes at a
+  /// time. What is already collected is kept and labelled partial, and the
+  /// failure is one of the saved samples, so the reason is not lost.
+  bool _endsTheBatch(DeviceTestResult? result) =>
+      result == null ||
+      result.outcome == DeviceTestOutcome.failed ||
+      result.outcome == DeviceTestOutcome.unavailable;
+
+  /// Counts a finished sample and decides what happens next.
+  void _afterSample({required bool failed}) {
+    if (_batchKind == null) return;
+    _batchDone++;
+    if (failed || _batchStopped || _batchDone >= _batchTarget) {
+      _endBatch();
+      return;
+    }
+    _setPhase(DeviceTestPhase.awaitingNextSample);
+  }
+
+  /// Takes every sample of a batch that needs nobody present.
+  Future<DeviceTestResult?> _runAutomaticBatch() async {
+    DeviceTestResult? last;
+    while (true) {
+      last = await _runSample();
+      // Counted AFTER the sample is saved: `_finish` stamps the sample number
+      // from this field.
+      _batchDone++;
+      if (_endsTheBatch(last) ||
+          _batchStopped ||
+          _batchDone >= _batchTarget) {
+        break;
+      }
+    }
+    _endBatch();
+    return last;
+  }
+
+  /// One sample of the running batch, whatever test it is.
+  Future<DeviceTestResult?> _runSample() async {
+    final kind = _batchKind!;
+    final deviceId = _batchDeviceId!;
+    return switch (kind) {
+      DeviceTestKind.noiseFloor => _runAcoustic(
+          kind: kind,
+          deviceId: deviceId,
+          requestCodec: _batchCodec!,
+          window: noiseFloorWindow,
+          note: _noiseFloorNote,
+        ),
+      DeviceTestKind.sensitivity => _runAcoustic(
+          kind: kind,
+          deviceId: deviceId,
+          requestCodec: _batchCodec!,
+          window: sensitivityWindow,
+          note: _sensitivityNote,
+        ),
+      DeviceTestKind.linkSoak => _runLinkSoakOnce(
+          deviceId: deviceId,
+          requestCodec: _batchCodec!,
+          soak: _batchSoak ?? linkSoakWindow,
+        ),
+      DeviceTestKind.wakeOnMotion => _runWakeOnMotionOnce(deviceId: deviceId),
+      // The walk is begun and ended by the operator, so it has no "run one and
+      // come back with a result" shape at all.
+      DeviceTestKind.range =>
+        throw StateError('a range walk is begun and finished by the operator'),
+    };
+  }
+
+  // -------------------------------------------------------------------------
   // Machinery.
   // -------------------------------------------------------------------------
 
@@ -742,17 +1051,17 @@ class DeviceTestService {
   Future<DeviceTestResult> _finish(DeviceTestResult result) async {
     _setPhase(DeviceTestPhase.saving);
     final started = _startedAt;
-    final finished = result.duration == Duration.zero && started != null
-        ? DeviceTestResult(
-            kind: result.kind,
-            outcome: result.outcome,
-            startedAt: result.startedAt,
-            duration: _clock().difference(started),
-            readings: result.readings,
-            steps: result.steps,
-            note: result.note,
-          )
-        : result;
+    // Stamped with its place in the batch on the way to disk, so the eight
+    // places that build a result do not each have to carry the batch fields -
+    // and so a sample can never be saved without them.
+    final finished = result.inBatch(
+      batchId: _batchId,
+      repeatIndex: _batchDone + 1,
+      repeatTarget: _batchTarget,
+      duration: result.duration == Duration.zero && started != null
+          ? _clock().difference(started)
+          : result.duration,
+    );
 
     await _closeCapture();
     _ticker?.cancel();
@@ -981,6 +1290,7 @@ class DeviceTestService {
 
   Future<void> dispose() async {
     cancel();
+    _endBatch();
     _ticker?.cancel();
     _ticker = null;
     await _closeCapture();

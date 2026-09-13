@@ -204,6 +204,178 @@ void main() {
     final store = storeOn(MemoryFileStore());
     expect(store.path, '/recordings/${DeviceTestStore.defaultFileName}');
   });
+
+  // -------------------------------------------------------------------------
+  // BATCHES
+  //
+  // The store's rows are single runs; the unit of COMPARISON is a batch of
+  // samples. These tests pin down that the grouping survives the file, and -
+  // the one that matters - that a file written before batches existed still
+  // loads, every row of it, as the batches of one it always was.
+  // -------------------------------------------------------------------------
+
+  DeviceTestResult inBatch(
+    DeviceTestKind kind,
+    int minute, {
+    required String? batchId,
+    int index = 1,
+    int target = 3,
+    num? value,
+  }) =>
+      DeviceTestResult(
+        kind: kind,
+        outcome: DeviceTestOutcome.completed,
+        startedAt: DateTime.utc(2026, 9, 13, 14, minute),
+        duration: const Duration(seconds: 10),
+        readings: <DeviceTestReading>[
+          DeviceTestReading(
+            label: 'Noise floor (RMS)',
+            value: value ?? -minute,
+            unit: 'dBFS',
+          ),
+        ],
+        batchId: batchId,
+        repeatIndex: index,
+        repeatTarget: target,
+      );
+
+  test('a batch survives the file and comes back as one batch', () async {
+    final files = MemoryFileStore();
+    final store = storeOn(files);
+    await store.load();
+    for (var i = 1; i <= 3; i++) {
+      await store.append(
+        inBatch(DeviceTestKind.noiseFloor, i, batchId: 'nf-1', index: i),
+      );
+    }
+
+    final reopened = storeOn(files);
+    await reopened.load();
+    final batches = reopened.batchesOf(DeviceTestKind.noiseFloor);
+
+    expect(batches, hasLength(1));
+    expect(batches.single.sampleCount, 3);
+    expect(batches.single.isPartial, isFalse);
+    expect(batches.single.spreadOf('Noise floor (RMS)').median, -2);
+  });
+
+  test('two sittings of the same test are two batches, newest first', () async {
+    final store = storeOn(MemoryFileStore());
+    await store.load();
+    await store.append(
+      inBatch(DeviceTestKind.noiseFloor, 1, batchId: 'before', target: 1),
+    );
+    await store.append(
+      inBatch(DeviceTestKind.noiseFloor, 9, batchId: 'after', target: 1),
+    );
+
+    final batches = store.batchesOf(DeviceTestKind.noiseFloor);
+
+    // "Latest beside Before" - and both halves are batches, never single runs.
+    expect(batches.map((batch) => batch.batchId), <String>['after', 'before']);
+  });
+
+  test('batchesOf never mixes one test into another', () async {
+    final store = storeOn(MemoryFileStore());
+    await store.load();
+    await store.append(inBatch(DeviceTestKind.noiseFloor, 1, batchId: 'a'));
+    await store.append(inBatch(DeviceTestKind.linkSoak, 2, batchId: 'b'));
+
+    expect(store.batchesOf(DeviceTestKind.noiseFloor), hasLength(1));
+    expect(store.batchesOf(DeviceTestKind.linkSoak), hasLength(1));
+    expect(store.batchesOf(DeviceTestKind.range), isEmpty);
+  });
+
+  test('a file written before batches existed still loads, every row',
+      () async {
+    // The exact bytes the previous build wrote: version 1, no batch keys. It is
+    // read at the SAME version - nothing was migrated and nothing was bumped,
+    // because the three new keys are additive and "absent" already means "a run
+    // on its own".
+    final files = MemoryFileStore();
+    final store = storeOn(files);
+    await files.writeBytes(
+      store.path,
+      utf8.encode(
+        jsonEncode(<String, Object?>{
+          'version': 1,
+          'results': <Object?>[
+            <String, Object?>{
+              'kind': 'noise-floor',
+              'outcome': 'completed',
+              'startedAt': '2026-09-13T14:05:00.000Z',
+              'durationMs': 10000,
+              'readings': <Object?>[
+                <String, Object?>{
+                  'label': 'Noise floor (RMS)',
+                  'value': -54.2,
+                  'unit': 'dBFS',
+                },
+              ],
+              'steps': <Object?>[],
+              'note': null,
+            },
+            <String, Object?>{
+              'kind': 'noise-floor',
+              'outcome': 'completed',
+              'startedAt': '2026-09-12T14:05:00.000Z',
+              'durationMs': 10000,
+              'readings': <Object?>[
+                <String, Object?>{
+                  'label': 'Noise floor (RMS)',
+                  'value': -68.9,
+                  'unit': 'dBFS',
+                },
+              ],
+              'steps': <Object?>[],
+              'note': null,
+            },
+          ],
+        }),
+      ),
+    );
+
+    await store.load();
+
+    expect(DeviceTestStore.formatVersion, 1);
+    expect(store.results, hasLength(2));
+    final batches = store.batchesOf(DeviceTestKind.noiseFloor);
+    // Two runs, two batches of one - which is what they were.
+    expect(batches, hasLength(2));
+    expect(batches.every((batch) => batch.isSingle), isTrue);
+    expect(batches.first.spreadOf('Noise floor (RMS)').median, -54.2);
+    expect(batches[1].spreadOf('Noise floor (RMS)').median, -68.9);
+    // And a new batch appends alongside them rather than replacing them.
+    await store.append(inBatch(DeviceTestKind.noiseFloor, 7, batchId: 'new'));
+    expect(store.results, hasLength(3));
+    expect(store.batchesOf(DeviceTestKind.noiseFloor), hasLength(3));
+  });
+
+  test('a partial batch on disk reports the n it actually has', () async {
+    final files = MemoryFileStore();
+    final store = storeOn(files);
+    await store.load();
+    // Stopped after three of five. Nothing is discarded and nothing is invented.
+    for (var i = 1; i <= 3; i++) {
+      await store.append(
+        inBatch(
+          DeviceTestKind.sensitivity,
+          i,
+          batchId: 'partial',
+          index: i,
+          target: 5,
+        ),
+      );
+    }
+
+    final batch = storeOn(files);
+    await batch.load();
+    final only = batch.batchesOf(DeviceTestKind.sensitivity).single;
+
+    expect(only.sampleCount, 3);
+    expect(only.requested, 5);
+    expect(only.isPartial, isTrue);
+  });
 }
 
 /// A store whose writes always fail, for the "the result was not saved" path.

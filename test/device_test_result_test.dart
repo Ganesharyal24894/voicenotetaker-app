@@ -193,4 +193,145 @@ void main() {
       expect(back.steps, isEmpty);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // WHERE A RUN SITS IN A BATCH
+  //
+  // These three fields are what let five noisy samples be read as one figure
+  // with a spread instead of five unrelated numbers. They were ADDED to a
+  // format that already had results saved in it, so the rule they have to keep
+  // is that a file written before they existed still reads - as the one thing it
+  // honestly is, a batch of one.
+  // -------------------------------------------------------------------------
+  group('a run in a batch', () {
+    final walk = DeviceTestResult(
+      kind: DeviceTestKind.range,
+      outcome: DeviceTestOutcome.completed,
+      startedAt: DateTime.utc(2026, 9, 13, 14, 2, 11),
+      duration: const Duration(seconds: 96),
+      readings: const <DeviceTestReading>[
+        DeviceTestReading(label: 'Stops', value: 4),
+      ],
+      steps: const <DeviceTestStep>[
+        DeviceTestStep(
+          index: 1,
+          rssiDbm: -54,
+          framesReceived: 300,
+          framesLost: 0,
+        ),
+      ],
+      note: 'Frames first went missing at stop 3.',
+    );
+
+    DeviceTestResult inBatch({
+      String? batchId = 'noise-floor-1700000000000-0',
+      int index = 2,
+      int target = 5,
+    }) =>
+        DeviceTestResult(
+          kind: DeviceTestKind.noiseFloor,
+          outcome: DeviceTestOutcome.completed,
+          startedAt: DateTime.utc(2026, 9, 13, 14, 2),
+          duration: const Duration(seconds: 10),
+          batchId: batchId,
+          repeatIndex: index,
+          repeatTarget: target,
+        );
+
+    test('the batch fields round-trip', () {
+      final back = DeviceTestResult.fromJson(inBatch().toJson());
+
+      expect(back.batchId, 'noise-floor-1700000000000-0');
+      expect(back.repeatIndex, 2);
+      expect(back.repeatTarget, 5);
+    });
+
+    test('a run saved before batches existed reads as a lone sample', () {
+      // EXACTLY what is on disk from the previous build: no batch keys at all.
+      // Nothing is migrated and no version is bumped - absent means one.
+      final legacy = <String, Object?>{
+        'kind': 'noise-floor',
+        'outcome': 'completed',
+        'startedAt': '2026-09-13T14:02:00.000Z',
+        'durationMs': 10000,
+        'readings': <Object?>[
+          <String, Object?>{
+            'label': 'Noise floor (RMS)',
+            'value': -54.2,
+            'unit': 'dBFS',
+          },
+        ],
+        'steps': <Object?>[],
+        'note': null,
+      };
+
+      final back = DeviceTestResult.fromJson(legacy);
+
+      expect(back.batchId, isNull);
+      expect(back.repeatIndex, 1);
+      expect(back.repeatTarget, 1);
+      // And the measurement itself is untouched, which is the entire point.
+      expect(back.reading('Noise floor (RMS)')?.value, -54.2);
+    });
+
+    test('a lone run is sample one of one, not sample zero', () {
+      final lone = DeviceTestResult(
+        kind: DeviceTestKind.range,
+        outcome: DeviceTestOutcome.completed,
+        startedAt: DateTime.utc(2026, 9, 13),
+        duration: Duration.zero,
+      );
+
+      expect(lone.batchId, isNull);
+      expect(lone.repeatIndex, 1);
+      expect(lone.repeatTarget, 1);
+    });
+
+    test('a counter that is not a number is rejected, not guessed at', () {
+      final json = inBatch().toJson()..['repeatIndex'] = 'second';
+      expect(() => DeviceTestResult.fromJson(json), throwsFormatException);
+    });
+
+    test('a batch id that is not a string is rejected', () {
+      final json = inBatch().toJson()..['batchId'] = 7;
+      expect(() => DeviceTestResult.fromJson(json), throwsFormatException);
+    });
+
+    test('a nonsense counter costs the counter, never the measurement', () {
+      // A zero or a negative has no meaning here, and losing a whole row of
+      // readings over it would be the wrong trade.
+      final json = inBatch().toJson()..['repeatTarget'] = 0;
+      expect(DeviceTestResult.fromJson(json).repeatTarget, 1);
+    });
+
+    test('inBatch stamps the fields and changes nothing else', () {
+      final stamped = walk.inBatch(
+        batchId: 'range-1-0',
+        repeatIndex: 3,
+        repeatTarget: 5,
+      );
+
+      expect(stamped.batchId, 'range-1-0');
+      expect(stamped.repeatIndex, 3);
+      expect(stamped.repeatTarget, 5);
+      expect(stamped.kind, walk.kind);
+      expect(stamped.outcome, walk.outcome);
+      expect(stamped.startedAt, walk.startedAt);
+      expect(stamped.duration, walk.duration);
+      expect(stamped.readings, walk.readings);
+      expect(stamped.steps, walk.steps);
+      expect(stamped.note, walk.note);
+    });
+
+    test('inBatch can measure the duration a run did not know', () {
+      final stamped = walk.inBatch(
+        batchId: null,
+        repeatIndex: 1,
+        repeatTarget: 1,
+        duration: const Duration(seconds: 4),
+      );
+
+      expect(stamped.duration, const Duration(seconds: 4));
+    });
+  });
 }

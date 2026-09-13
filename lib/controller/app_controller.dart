@@ -325,13 +325,42 @@ class AppController extends ChangeNotifier {
   /// The reading itself, for callers that want the raw decidegrees.
   DieTemperature? get dieTemperature => _temperature;
 
+  int _samplesPerTest = DeviceTestService.defaultRepeatCount;
+
+  /// How many samples each device test takes before it is aggregated.
+  ///
+  /// A SETTING AND NOT A CONSTANT, because the three tests that need somebody
+  /// walking, speaking or shaking cost real minutes each, and the person doing
+  /// that is entitled to say how many. The default and the reasoning behind it
+  /// are [DeviceTestService.defaultRepeatCount]; the choices offered are
+  /// [DeviceTestService.repeatChoices].
+  int get samplesPerTest => _samplesPerTest;
+
+  /// Changes the sample count the NEXT test will take. Never mid-batch: a batch
+  /// carries the count it was started with, or the n on the card would not match
+  /// what was measured.
+  set samplesPerTest(int samples) {
+    final wanted = samples < 1 ? 1 : samples;
+    if (wanted == _samplesPerTest || _tests.isRunning || _tests.isBatchActive) {
+      return;
+    }
+    _samplesPerTest = wanted;
+    notifyListeners();
+  }
+
   /// Why a streaming device test cannot run right now, or null when one can.
   ///
   /// The three-state discipline the auto-sleep and battery readouts follow: a
   /// test with nothing truthful behind it is offered as unavailable WITH A
   /// REASON, never as a control that produces a default result.
   DeviceTestBlocker? get testBlocker {
-    if (_tests.isRunning) return DeviceTestBlocker.testRunning;
+    // A BATCH COUNTS AS RUNNING even between its samples, when nothing is
+    // streaming: the operator is walking back, or getting ready to speak, and
+    // starting a different test then would take the frame subscription out from
+    // under the batch and abandon it half-collected.
+    if (_tests.isRunning || _tests.isBatchActive) {
+      return DeviceTestBlocker.testRunning;
+    }
     if (!isConnected) return DeviceTestBlocker.notConnected;
     // `subscribeFrames` takes one subscriber, so a capture in progress owns it.
     if (isRecording || _recorder.isRecording) {
@@ -637,6 +666,7 @@ class AppController extends ChangeNotifier {
     await _tests.beginRangeWalk(
       deviceId: device.id,
       requestCodec: _preferredCodec,
+      repeats: _samplesPerTest,
     );
   }
 
@@ -655,6 +685,7 @@ class AppController extends ChangeNotifier {
     await _tests.runNoiseFloor(
       deviceId: device.id,
       requestCodec: _preferredCodec,
+      repeats: _samplesPerTest,
     );
   }
 
@@ -665,6 +696,7 @@ class AppController extends ChangeNotifier {
     await _tests.runSensitivity(
       deviceId: device.id,
       requestCodec: _preferredCodec,
+      repeats: _samplesPerTest,
     );
   }
 
@@ -675,6 +707,7 @@ class AppController extends ChangeNotifier {
     await _tests.runLinkSoak(
       deviceId: device.id,
       requestCodec: _preferredCodec,
+      repeats: _samplesPerTest,
     );
   }
 
@@ -684,7 +717,10 @@ class AppController extends ChangeNotifier {
   Future<void> runWakeOnMotionTest() async {
     final device = _connectedDevice;
     if (device == null || wakeTestBlocker != null) return;
-    await _tests.runWakeOnMotion(deviceId: device.id);
+    await _tests.runWakeOnMotion(
+      deviceId: device.id,
+      repeats: _samplesPerTest,
+    );
   }
 
   /// The operator has just shaken the device. Starts the wake clock.
@@ -692,6 +728,17 @@ class AppController extends ChangeNotifier {
 
   /// Stops the running test. Its partial readings are still saved.
   void cancelDeviceTest() => _tests.cancel();
+
+  /// Takes the next sample of a batch that is waiting for the operator.
+  ///
+  /// Needs no connection check: a walk-away or shake batch has the device id it
+  /// started with, and the wake test has deliberately ended the link.
+  Future<void> continueDeviceTestBatch() async {
+    await _tests.continueBatch();
+  }
+
+  /// Stops asking for more samples and keeps the ones already taken.
+  void endDeviceTestBatch() => _tests.endBatch();
 
   /// Re-reads the auto-sleep flag from the connected device.
   ///

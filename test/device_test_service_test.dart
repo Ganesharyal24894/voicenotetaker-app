@@ -890,6 +890,409 @@ void main() {
       verify(() => transport.unsubscribeFrames(knownDevice.id)).called(1);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // REPEATED SAMPLES
+  //
+  // ONE READING CANNOT BE COMPARED AGAINST ONE READING here. Every one of these
+  // five measurements is noisy - RF loss depends on who is standing where, the
+  // noise floor on the fridge compressor, the wake figure on the phone's own
+  // scan latency - so a single number before the enclosure and a single number
+  // after would show a difference that is as likely to be noise as anything.
+  // Each test therefore takes n samples under one batch id.
+  //
+  // Two of the five can repeat unattended. The other three ARE the operator, so
+  // they wait between samples - and can be stopped early, which keeps every
+  // sample already taken.
+  // -------------------------------------------------------------------------
+  group('a batch of samples', () {
+    /// Feeds audio into each sample of an automatic batch as it opens.
+    Future<void> feed(int samples, {int amplitude = 1000}) async {
+      for (var i = 1; i <= samples; i++) {
+        await until(() => frameSubscriptions >= i);
+        await pushFrames(3, amplitude: amplitude);
+      }
+    }
+
+    test('the noise floor repeats on its own and saves every sample', () async {
+      final tests = build(acoustic: const Duration(milliseconds: 40));
+      await tests.load();
+
+      final run = tests.runNoiseFloor(
+        deviceId: knownDevice.id,
+        requestCodec: AudioCodec.pcmS16le,
+        repeats: 3,
+      );
+      await feed(3);
+      await run;
+
+      // Three rows on disk, one batch, numbered - not one row that was
+      // overwritten twice.
+      final batch = tests.batchesOf(DeviceTestKind.noiseFloor).single;
+      expect(batch.sampleCount, 3);
+      expect(batch.requested, 3);
+      expect(batch.isPartial, isFalse);
+      expect(batch.runs.map((run) => run.repeatIndex), <int>[1, 2, 3]);
+      expect(batch.runs.map((run) => run.batchId).toSet(), hasLength(1));
+      expect(frameSubscriptions, 3);
+      // Every sample got its own stream and gave it back.
+      verify(() => transport.unsubscribeFrames(knownDevice.id)).called(3);
+      // And the batch is over: nothing is left holding the screen open.
+      expect(tests.isRunning, isFalse);
+      expect(tests.isBatchActive, isFalse);
+      expect(tests.phase, DeviceTestPhase.idle);
+    });
+
+    test('the aggregate of a batch is a median with the spread around it',
+        () async {
+      final tests = build(acoustic: const Duration(milliseconds: 40));
+      await tests.load();
+
+      final run = tests.runNoiseFloor(
+        deviceId: knownDevice.id,
+        requestCodec: AudioCodec.pcmS16le,
+        repeats: 3,
+      );
+      // Three deliberately different levels, the middle one last: a median has
+      // to find it wherever it is.
+      await until(() => frameSubscriptions >= 1);
+      await pushFrames(3, amplitude: 328);
+      await until(() => frameSubscriptions >= 2);
+      await pushFrames(3, amplitude: 32);
+      await until(() => frameSubscriptions >= 3);
+      await pushFrames(3, amplitude: 104);
+      await run;
+
+      final spread = tests
+          .batchesOf(DeviceTestKind.noiseFloor)
+          .single
+          .spreadOf(DeviceTestReadings.noiseFloorRms);
+      expect(spread.n, 3);
+      // 328 is -40 dBFS, 104 is -50, 32 is -60.
+      expect(spread.median, closeTo(-50, 0.5));
+      expect(spread.min, closeTo(-60, 0.5));
+      expect(spread.max, closeTo(-40, 0.5));
+      expect(spread.spread, closeTo(20, 1));
+    });
+
+    test('an automatic batch stops at the first sample that cannot measure',
+        () async {
+      final tests = build(acoustic: const Duration(milliseconds: 30));
+      await tests.load();
+
+      // Nothing is ever pushed, so the first sample has no audio at all and is
+      // failed. Four more three-minute attempts against a device that is not
+      // streaming would be noise in the history, not data.
+      await tests.runNoiseFloor(
+        deviceId: knownDevice.id,
+        requestCodec: AudioCodec.pcmS16le,
+        repeats: 5,
+      );
+
+      final batch = tests.batchesOf(DeviceTestKind.noiseFloor).single;
+      expect(batch.sampleCount, 1);
+      expect(batch.requested, 5);
+      expect(batch.isPartial, isTrue);
+      // The reason is not lost: the failure IS one of the saved samples.
+      expect(batch.countOf(DeviceTestOutcome.failed), 1);
+      expect(tests.isBatchActive, isFalse);
+    });
+
+    test('cancelling an automatic batch keeps the samples already taken',
+        () async {
+      final tests = build(acoustic: const Duration(milliseconds: 60));
+      await tests.load();
+
+      final run = tests.runNoiseFloor(
+        deviceId: knownDevice.id,
+        requestCodec: AudioCodec.pcmS16le,
+        repeats: 5,
+      );
+      await feed(2);
+      // Mid third sample.
+      await until(() => frameSubscriptions >= 3);
+      await pushFrames(3, amplitude: 1000);
+      tests.cancel();
+      await run;
+
+      final batch = tests.batchesOf(DeviceTestKind.noiseFloor).single;
+      // Three samples: two finished and one cancelled with its partial numbers.
+      expect(batch.sampleCount, 3);
+      expect(batch.requested, 5);
+      expect(batch.isPartial, isTrue);
+      expect(batch.countOf(DeviceTestOutcome.cancelled), 1);
+      // And the aggregate is computed over what there is, not refused.
+      expect(batch.spreadOf(DeviceTestReadings.noiseFloorRms).n, 3);
+      expect(tests.isBatchActive, isFalse);
+    });
+
+    test('the sensitivity test waits for the operator between samples',
+        () async {
+      final tests = build(acoustic: const Duration(milliseconds: 40));
+      await tests.load();
+
+      final first = tests.runSensitivity(
+        deviceId: knownDevice.id,
+        requestCodec: AudioCodec.pcmS16le,
+        repeats: 3,
+      );
+      await until(() => frameSubscriptions >= 1);
+      await pushFrames(3, amplitude: 4000);
+      await first;
+
+      // It did NOT loop into a second sample: somebody has to be there speaking
+      // at the marked distance, and recording the silence after the first sample
+      // would report it as a quiet voice.
+      expect(tests.awaitingNextSample, isTrue);
+      expect(tests.batchKind, DeviceTestKind.sensitivity);
+      expect(tests.samplesTaken, 1);
+      expect(tests.batchTarget, 3);
+      expect(tests.sampleNumber, 2);
+      expect(frameSubscriptions, 1);
+      // The batch still counts as running, so nothing else can take the stream.
+      expect(tests.isBatchActive, isTrue);
+
+      final second = tests.continueBatch();
+      await until(() => frameSubscriptions >= 2);
+      await pushFrames(3, amplitude: 4000);
+      await second;
+
+      expect(tests.samplesTaken, 2);
+      expect(tests.awaitingNextSample, isTrue);
+      expect(tests.batchesOf(DeviceTestKind.sensitivity).single.sampleCount, 2);
+    });
+
+    test('stopping at two of five keeps both and labels the batch partial',
+        () async {
+      final tests = build(acoustic: const Duration(milliseconds: 40));
+      await tests.load();
+
+      final first = tests.runSensitivity(
+        deviceId: knownDevice.id,
+        requestCodec: AudioCodec.pcmS16le,
+        repeats: 5,
+      );
+      await until(() => frameSubscriptions >= 1);
+      await pushFrames(3, amplitude: 4000);
+      await first;
+      final second = tests.continueBatch();
+      await until(() => frameSubscriptions >= 2);
+      await pushFrames(3, amplitude: 4000);
+      await second;
+
+      // THE PARTIAL-RUN REQUIREMENT: they had enough, and what they measured is
+      // not thrown away for being fewer than five.
+      tests.endBatch();
+
+      expect(tests.isBatchActive, isFalse);
+      expect(tests.awaitingNextSample, isFalse);
+      final batch = tests.batchesOf(DeviceTestKind.sensitivity).single;
+      expect(batch.sampleCount, 2);
+      expect(batch.requested, 5);
+      expect(batch.isPartial, isTrue);
+      expect(batch.spreadOf(DeviceTestReadings.rms).n, 2);
+    });
+
+    test('continueBatch does nothing when no batch is waiting', () async {
+      final tests = build();
+      await tests.load();
+
+      // A double tap cannot start a second sample, and this is never the way to
+      // start a batch.
+      expect(await tests.continueBatch(), isNull);
+      expect(tests.isBatchActive, isFalse);
+      expect(frameSubscriptions, 0);
+    });
+
+    test('a walk is offered again rather than started for the operator',
+        () async {
+      final tests = build();
+      await tests.load();
+
+      await tests.beginRangeWalk(
+        deviceId: knownDevice.id,
+        requestCodec: AudioCodec.pcmS16le,
+        repeats: 2,
+      );
+      await streaming();
+      await pushFrames(4);
+      await tests.markRangeStep();
+      await tests.finishRangeWalk();
+
+      // Between walks: the phone has to be carried back to the device first.
+      expect(tests.isRunning, isFalse);
+      expect(tests.awaitingNextSample, isTrue);
+      expect(tests.batchKind, DeviceTestKind.range);
+      expect(tests.samplesTaken, 1);
+
+      await tests.continueBatch();
+      expect(tests.running, DeviceTestKind.range);
+      expect(tests.phase, DeviceTestPhase.walking);
+      // A fresh walk, not a continuation of the last one's stops.
+      expect(tests.steps, isEmpty);
+
+      await tests.markRangeStep();
+      await tests.finishRangeWalk();
+
+      final batch = tests.batchesOf(DeviceTestKind.range).single;
+      expect(batch.sampleCount, 2);
+      expect(batch.isPartial, isFalse);
+      expect(tests.isBatchActive, isFalse);
+    });
+
+    test('a batch in progress keeps another test out', () async {
+      final tests = build(acoustic: const Duration(milliseconds: 40));
+      await tests.load();
+
+      final first = tests.runSensitivity(
+        deviceId: knownDevice.id,
+        requestCodec: AudioCodec.pcmS16le,
+        repeats: 3,
+      );
+      await until(() => frameSubscriptions >= 1);
+      await pushFrames(3, amplitude: 4000);
+      await first;
+      expect(tests.awaitingNextSample, isTrue);
+
+      // Nothing is streaming, but the batch is half collected - starting
+      // something else here would abandon it.
+      expect(
+        await tests.runNoiseFloor(
+          deviceId: knownDevice.id,
+          requestCodec: AudioCodec.pcmS16le,
+        ),
+        isNull,
+      );
+      expect(
+        await tests.beginRangeWalk(
+          deviceId: knownDevice.id,
+          requestCodec: AudioCodec.pcmS16le,
+        ),
+        isFalse,
+      );
+      expect(tests.batchKind, DeviceTestKind.sensitivity);
+      expect(frameSubscriptions, 1);
+    });
+
+    test('a second wake sample needs no link to enable auto-sleep', () async {
+      final tests = build();
+      await tests.load();
+
+      final first = tests.runWakeOnMotion(
+        deviceId: knownDevice.id,
+        repeats: 2,
+      );
+      await until(() => disconnects == 1);
+      advertising = false;
+      await until(() => tests.phase == DeviceTestPhase.waitingForShake);
+      advertising = true;
+      tests.confirmShaken();
+      expect((await first)!.outcome, DeviceTestOutcome.completed);
+      expect(tests.awaitingNextSample, isTrue);
+
+      // THE LINK IS GONE - the first sample ended it on purpose and nothing
+      // reconnects it, so `fe04` cannot be written again. It does not need to
+      // be: the flag lives in the device's flash. A failure here must not turn
+      // the second sample into "unavailable".
+      when(() => transport.setAutoSleep(any(), any()))
+          .thenThrow(const BleTransportException('not connected'));
+
+      final second = tests.continueBatch();
+      await until(() => tests.phase == DeviceTestPhase.waitingForSystemOff);
+      advertising = false;
+      await until(() => tests.phase == DeviceTestPhase.waitingForShake);
+      advertising = true;
+      tests.confirmShaken();
+      final result = await second;
+
+      expect(result!.outcome, DeviceTestOutcome.completed);
+      expect(result.reading(DeviceTestReadings.wakeDelay)?.value, isNotNull);
+      final batch = tests.batchesOf(DeviceTestKind.wakeOnMotion).single;
+      expect(batch.sampleCount, 2);
+      expect(batch.spreadOf(DeviceTestReadings.wakeDelay).n, 2);
+    });
+
+    test('the FIRST sample still refuses when auto-sleep cannot be enabled',
+        () async {
+      when(() => transport.setAutoSleep(any(), any()))
+          .thenThrow(const BleTransportException('no such characteristic'));
+      final tests = build();
+      await tests.load();
+
+      final result = await tests.runWakeOnMotion(
+        deviceId: knownDevice.id,
+        repeats: 3,
+      );
+
+      // Firmware with no `fe04` has nothing to put to sleep, and asking for it
+      // three times over would not change that.
+      expect(result!.outcome, DeviceTestOutcome.unavailable);
+      expect(disconnects, 0);
+      expect(tests.isBatchActive, isFalse);
+      expect(tests.batchesOf(DeviceTestKind.wakeOnMotion).single.sampleCount, 1);
+    });
+
+    test('a single sample is still a batch of one, and says so', () async {
+      final tests = build(acoustic: const Duration(milliseconds: 40));
+      await tests.load();
+
+      final run = tests.runNoiseFloor(
+        deviceId: knownDevice.id,
+        requestCodec: AudioCodec.pcmS16le,
+      );
+      await streaming();
+      await pushFrames(3, amplitude: 1000);
+      final result = await run;
+
+      expect(result!.repeatIndex, 1);
+      expect(result.repeatTarget, 1);
+      final batch = tests.batchesOf(DeviceTestKind.noiseFloor).single;
+      expect(batch.isSingle, isTrue);
+      expect(batch.isPartial, isFalse);
+      // With one sample there is no spread, and it must not read as zero.
+      expect(
+        batch.spreadOf(DeviceTestReadings.noiseFloorRms).spread,
+        isNull,
+      );
+    });
+
+    test('two sittings of the same test stay two batches', () async {
+      final tests = build(acoustic: const Duration(milliseconds: 40));
+      await tests.load();
+
+      for (var sitting = 0; sitting < 2; sitting++) {
+        final run = tests.runNoiseFloor(
+          deviceId: knownDevice.id,
+          requestCodec: AudioCodec.pcmS16le,
+          repeats: 2,
+        );
+        await feed(2 * (sitting + 1));
+        await run;
+      }
+
+      // "Latest beside Before", and both halves are batches of two.
+      final batches = tests.batchesOf(DeviceTestKind.noiseFloor);
+      expect(batches, hasLength(2));
+      expect(batches.map((batch) => batch.sampleCount), <int>[2, 2]);
+      expect(batches.first.batchId, isNot(batches[1].batchId));
+    });
+
+    test('a repeat count below one is one, never zero samples', () async {
+      final tests = build(acoustic: const Duration(milliseconds: 40));
+      await tests.load();
+
+      final run = tests.runNoiseFloor(
+        deviceId: knownDevice.id,
+        requestCodec: AudioCodec.pcmS16le,
+        repeats: 0,
+      );
+      await streaming();
+      await pushFrames(3, amplitude: 1000);
+      await run;
+
+      expect(tests.batchesOf(DeviceTestKind.noiseFloor).single.sampleCount, 1);
+    });
+  });
 }
 
 /// A store whose writes always fail, for the "measured but not saved" path.

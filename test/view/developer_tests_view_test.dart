@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
+import 'package:voicenotetaker_app/model/device_test_aggregate.dart';
 import 'package:voicenotetaker_app/model/device_test_result.dart';
 import 'package:voicenotetaker_app/model/die_temperature.dart';
 import 'package:voicenotetaker_app/services/device_test_store.dart';
@@ -541,6 +542,435 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
+  // AGGREGATES ON THE CARD
+  //
+  // The thing this card exists to answer is "did the enclosure make it worse",
+  // and the answer is only worth having if the SPREAD of the samples is on the
+  // screen beside the figure. A card that showed a median alone would invite
+  // somebody to call a 3 dB change a regression when the five samples it came
+  // from spanned ten - which is a confident wrong conclusion, and worse than no
+  // baseline at all.
+  // -------------------------------------------------------------------------
+  group('the aggregate comparison', () {
+    /// One sample of a batch, exactly as the service would have saved it.
+    DeviceTestResult sample(
+      DeviceTestKind kind, {
+      required DateTime at,
+      required String? batchId,
+      required int index,
+      required int target,
+      required String label,
+      required num? value,
+      String unit = 'dBFS',
+      DeviceTestOutcome outcome = DeviceTestOutcome.completed,
+    }) =>
+        DeviceTestResult(
+          kind: kind,
+          outcome: outcome,
+          startedAt: at,
+          duration: const Duration(seconds: 10),
+          readings: <DeviceTestReading>[
+            DeviceTestReading(label: label, value: value, unit: unit),
+          ],
+          batchId: batchId,
+          repeatIndex: index,
+          repeatTarget: target,
+        );
+
+    /// A batch of noise-floor samples, NEWEST FIRST the way the file keeps them.
+    List<DeviceTestResult> noiseFloorBatch({
+      required String batchId,
+      required List<num?> values,
+      required int target,
+      required DateTime at,
+    }) =>
+        <DeviceTestResult>[
+          for (var i = values.length - 1; i >= 0; i--)
+            sample(
+              DeviceTestKind.noiseFloor,
+              at: at.add(Duration(minutes: i)),
+              batchId: batchId,
+              index: i + 1,
+              target: target,
+              label: 'Noise floor (RMS)',
+              value: values[i],
+              outcome: values[i] == null
+                  ? DeviceTestOutcome.failed
+                  : DeviceTestOutcome.completed,
+            ),
+        ];
+
+    testWidgets('a batch reads as a median with the spread beside it',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await seedHistory(
+        harness,
+        noiseFloorBatch(
+          batchId: 'nf-after',
+          values: <num?>[-58, -62, -60, -61, -59],
+          target: 5,
+          at: DateTime.now().subtract(const Duration(minutes: 10)),
+        ),
+      );
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'DEVICE TESTS');
+
+      // The n, so nobody has to guess how much the figure is worth.
+      expect(find.textContaining('n=5 of 5'), findsOneWidget);
+      // The median - a sample somebody actually took, not a mean.
+      expect(find.textContaining('median −60.0 dBFS'), findsOneWidget);
+      // AND the spread, on the same line. This is the requirement.
+      expect(find.textContaining('−62.0 dBFS to −58.0 dBFS'), findsOneWidget);
+      expect(find.textContaining('spread 4.0 dBFS'), findsOneWidget);
+      // Five runs kept, one batch.
+      expect(find.textContaining('5 runs kept'), findsOneWidget);
+    });
+
+    testWidgets('every sample is printed, so an outlier is visible',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      // One wild reading among five - a resonance, a dropout, a door. It is the
+      // most interesting thing in the batch and it must be on the page.
+      await seedHistory(
+        harness,
+        noiseFloorBatch(
+          batchId: 'nf-outlier',
+          values: <num?>[-60, -61, -59, -60, -12],
+          target: 5,
+          at: DateTime.now().subtract(const Duration(minutes: 10)),
+        ),
+      );
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'DEVICE TESTS');
+
+      expect(find.textContaining('samples:'), findsOneWidget);
+      // Never silently dropped: it is in the sample list and in the range.
+      expect(find.textContaining('−12.0 dBFS'), findsWidgets);
+      // And it did not drag the middle value with it, which a mean would have.
+      expect(find.textContaining('median −60.0 dBFS'), findsOneWidget);
+    });
+
+    testWidgets('a sample with no reading is counted, not quietly dropped',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await seedHistory(
+        harness,
+        noiseFloorBatch(
+          batchId: 'nf-partial-readings',
+          values: <num?>[-60, null, -62, -61, null],
+          target: 5,
+          at: DateTime.now().subtract(const Duration(minutes: 10)),
+        ),
+      );
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'DEVICE TESTS');
+
+      // The only thing ever left out of a median is a sample that had no number
+      // to contribute, and the card says how many that was.
+      expect(find.textContaining('2 of 5 had no reading'), findsOneWidget);
+      expect(find.textContaining('median −61.0 dBFS'), findsOneWidget);
+      // The two failures are named rather than averaged away.
+      expect(find.textContaining('2 failed'), findsOneWidget);
+    });
+
+    testWidgets('a batch stopped early says n and says it was stopped',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await seedHistory(
+        harness,
+        noiseFloorBatch(
+          batchId: 'nf-stopped',
+          values: <num?>[-58, -60, -62],
+          target: 5,
+          at: DateTime.now().subtract(const Duration(minutes: 10)),
+        ),
+      );
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'DEVICE TESTS');
+
+      // Three of five is a usable baseline. It is NOT five, and it is not
+      // discarded either.
+      expect(find.textContaining('n=3 of 5'), findsOneWidget);
+      expect(find.textContaining('stopped early'), findsOneWidget);
+      expect(find.textContaining('median −60.0 dBFS'), findsOneWidget);
+    });
+
+    testWidgets('a single run is labelled as one, not dressed up as a baseline',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      // No batch id: exactly what every run saved by the previous build looks
+      // like, and what a deliberate one-sample run looks like too.
+      await seedHistory(harness, <DeviceTestResult>[
+        run(
+          DeviceTestKind.noiseFloor,
+          at: DateTime.now(),
+          readings: const <DeviceTestReading>[
+            DeviceTestReading(
+              label: 'Noise floor (RMS)',
+              value: -54.2,
+              unit: 'dBFS',
+            ),
+          ],
+        ),
+      ]);
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'DEVICE TESTS');
+
+      expect(find.textContaining('n=1'), findsOneWidget);
+      expect(find.textContaining('no spread to judge it by'), findsOneWidget);
+      // The figure is still shown - it is just not called a spread of nothing.
+      expect(find.textContaining('−54.2 dBFS'), findsOneWidget);
+      expect(find.textContaining('samples:'), findsNothing);
+      expect(find.textContaining('spread 0.0'), findsNothing);
+    });
+
+    testWidgets('Latest and Before are two BATCHES, each with its own n',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      final now = DateTime.now();
+      await seedHistory(harness, <DeviceTestResult>[
+        ...noiseFloorBatch(
+          batchId: 'nf-after',
+          values: <num?>[-52, -54, -53],
+          target: 3,
+          at: now.subtract(const Duration(minutes: 20)),
+        ),
+        ...noiseFloorBatch(
+          batchId: 'nf-before',
+          values: <num?>[-68, -70, -66, -69, -67],
+          target: 5,
+          at: now.subtract(const Duration(days: 1)),
+        ),
+      ]);
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'DEVICE TESTS');
+
+      expect(find.textContaining('Latest ·'), findsOneWidget);
+      expect(find.textContaining('Before ·'), findsOneWidget);
+      // An n on each half, because five samples against three is a different
+      // comparison from five against five.
+      expect(find.textContaining('n=3 of 3'), findsOneWidget);
+      expect(find.textContaining('n=5 of 5'), findsOneWidget);
+      // The finding: about 15 dB, and both spreads are small enough to trust it.
+      expect(find.textContaining('median −53.0 dBFS'), findsOneWidget);
+      expect(find.textContaining('median −68.0 dBFS'), findsOneWidget);
+      expect(find.textContaining('spread 2.0 dBFS'), findsOneWidget);
+      expect(find.textContaining('spread 4.0 dBFS'), findsOneWidget);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  group('the samples-per-test control', () {
+    testWidgets('offers the counts and starts at five', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'DEVICE TESTS');
+
+      expect(harness.controller.samplesPerTest, 5);
+      expect(harness.controller.samplesPerTest, DeviceTestSampling.defaultCount);
+      expect(find.text('Samples per test · 5'), findsOneWidget);
+      for (final count in DeviceTestSampling.choices) {
+        expect(
+          find.bySemanticsLabel(
+            count == 1
+                ? 'Take a single sample per test'
+                : 'Take $count samples per test',
+          ),
+          findsOneWidget,
+        );
+      }
+      // And it says why more than one is taken at all.
+      expect(find.textContaining('reported as a median'), findsOneWidget);
+      expect(find.textContaining('stop early'), findsOneWidget);
+    });
+
+    testWidgets('choosing a count changes what the next test will take',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'Samples per test · 5');
+
+      await tester.tap(find.bySemanticsLabel('Take 3 samples per test'));
+      await tester.pump();
+
+      expect(harness.controller.samplesPerTest, 3);
+      expect(find.text('Samples per test · 3'), findsOneWidget);
+    });
+
+    testWidgets('a single sample is still offered', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'Samples per test · 5');
+
+      await tester.tap(find.bySemanticsLabel('Take a single sample per test'));
+      await tester.pump();
+
+      // The right answer when the question is "is this board alive" rather than
+      // "is this enclosure worse" - and the card then says n=1 out loud.
+      expect(harness.controller.samplesPerTest, 1);
+    });
+
+    testWidgets('the count is fixed while a batch is in progress',
+        (tester) async {
+      final harness = ViewHarness(testWindow: const Duration(seconds: 30));
+      addTearDown(harness.dispose);
+
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'DEVICE TESTS');
+      await tester.tap(find.bySemanticsLabel('Run the noise floor test'));
+      await flush(tester);
+
+      harness.controller.samplesPerTest = 1;
+      await tester.pump();
+
+      // A batch carries the count it started with, or the n on the card would
+      // not be the n that was measured.
+      expect(harness.controller.samplesPerTest, 5);
+
+      harness.controller.cancelDeviceTest();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await flush(tester);
+    });
+
+    testWidgets('a running test says which sample of how many it is on',
+        (tester) async {
+      final harness = ViewHarness(testWindow: const Duration(seconds: 30));
+      addTearDown(harness.dispose);
+
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'DEVICE TESTS');
+      await tester.tap(find.bySemanticsLabel('Run the noise floor test'));
+      await flush(tester);
+
+      // Progress has to be obvious: a test that looks identical on sample four
+      // as on sample one is a test somebody abandons.
+      expect(find.text('Sample 1 of 5'), findsOneWidget);
+
+      harness.controller.cancelDeviceTest();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await flush(tester);
+    });
+
+    testWidgets('between samples it prompts, and offers to keep what it has',
+        (tester) async {
+      final harness = ViewHarness(testWindow: const Duration(seconds: 30));
+      addTearDown(harness.dispose);
+
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'DEVICE TESTS');
+
+      // The range walk is the clearest case: one person carries the phone away
+      // and has to carry it back before they can walk it again, so the next
+      // sample cannot possibly start on its own.
+      await tester.tap(find.bySemanticsLabel('Run the range test'));
+      await flush(tester);
+      expect(find.text('Sample 1 of 5'), findsOneWidget);
+
+      await tester.tap(find.bySemanticsLabel('Mark a range step'));
+      await flush(tester);
+      await tester.runAsync(
+        () => tester.tap(find.bySemanticsLabel('Finish the range walk')),
+      );
+      await flush(tester);
+
+      final tests = harness.controller.deviceTests;
+      expect(tests.running, isNull);
+      expect(tests.awaitingNextSample, isTrue);
+      expect(tests.samplesTaken, 1);
+      // Progress, and what the operator has to do before the next one.
+      expect(find.textContaining('1 of 5 samples taken'), findsOneWidget);
+      expect(find.textContaining('walk it again'), findsOneWidget);
+      expect(
+        find.bySemanticsLabel('Take the next sample of the range test'),
+        findsOneWidget,
+      );
+
+      // The next walk starts only when they say so, and starts clean.
+      await tester.tap(
+        find.bySemanticsLabel('Take the next sample of the range test'),
+      );
+      await flush(tester);
+      expect(tests.running, DeviceTestKind.range);
+      expect(find.text('Sample 2 of 5'), findsOneWidget);
+      expect(tests.steps, isEmpty);
+
+      // And stopping keeps what was measured rather than discarding it.
+      await tester.runAsync(
+        () => tester.tap(find.bySemanticsLabel('Stop the range test')),
+      );
+      await flush(tester);
+
+      expect(tests.isBatchActive, isFalse);
+      final batch = tests.batchesOf(DeviceTestKind.range).single;
+      expect(batch.sampleCount, 2);
+      expect(batch.requested, 5);
+      expect(batch.isPartial, isTrue);
+    });
+
+    testWidgets('stopping between samples keeps the samples already taken',
+        (tester) async {
+      final harness = ViewHarness(testWindow: const Duration(seconds: 30));
+      addTearDown(harness.dispose);
+
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester, 'DEVICE TESTS');
+
+      await tester.tap(find.bySemanticsLabel('Run the range test'));
+      await flush(tester);
+      await tester.tap(find.bySemanticsLabel('Mark a range step'));
+      await flush(tester);
+      await tester.runAsync(
+        () => tester.tap(find.bySemanticsLabel('Finish the range walk')),
+      );
+      await flush(tester);
+
+      final tests = harness.controller.deviceTests;
+      expect(tests.awaitingNextSample, isTrue);
+
+      await tester.tap(
+        find.bySemanticsLabel(
+          'Stop the range test and keep the 1 sample already taken',
+        ),
+      );
+      await flush(tester);
+
+      // NOTHING MEASURED IS THROWN AWAY for the batch having been incomplete.
+      expect(tests.isBatchActive, isFalse);
+      final batch = tests.batchesOf(DeviceTestKind.range).single;
+      expect(batch.sampleCount, 1);
+      expect(batch.requested, 5);
+      expect(batch.isPartial, isTrue);
+      expect(batch.runs.single.steps, isNotEmpty);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   group('the diagnostics export', () {
     Future<void> export(WidgetTester tester) async {
       await tester.tap(find.text('Export diagnostics'));
@@ -630,6 +1060,86 @@ void main() {
       );
       expect(
         find.textContaining('note: Frames first went missing at stop 2.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('carries the median and the range of every batch',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      // Three samples, newest first the way the file keeps them.
+      await seedHistory(harness, <DeviceTestResult>[
+        for (var i = 3; i >= 1; i--)
+          DeviceTestResult(
+            kind: DeviceTestKind.noiseFloor,
+            outcome: DeviceTestOutcome.completed,
+            startedAt: DateTime.utc(2026, 9, 13, 14, i),
+            duration: const Duration(seconds: 10),
+            readings: <DeviceTestReading>[
+              DeviceTestReading(
+                label: 'Noise floor (RMS)',
+                value: -60.0 - i,
+                unit: 'dBFS',
+              ),
+            ],
+            batchId: 'nf-1',
+            repeatIndex: i,
+            repeatTarget: 5,
+          ),
+      ]);
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await export(tester);
+
+      // Whoever receives this report is the person deciding whether the
+      // enclosure made it worse, so the aggregate travels with the samples - and
+      // so does the n it was computed from.
+      expect(
+        find.textContaining('--- device test batches'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('noise-floor  n=3 of 5  (stopped early)'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          'Noise floor (RMS): median −62.0 dBFS, range −63.0 dBFS to '
+          '−61.0 dBFS, spread 2.0 dBFS (n=3)',
+        ),
+        findsOneWidget,
+      );
+      // And the run-by-run list is still there underneath it, so the aggregate
+      // can be checked rather than taken on trust.
+      expect(
+        find.textContaining('--- device tests (3 runs kept) ---'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a lone run is exported as n=1 with no spread', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await seedHistory(harness, <DeviceTestResult>[
+        run(
+          DeviceTestKind.noiseFloor,
+          at: DateTime.utc(2026, 9, 13, 14, 2),
+          readings: const <DeviceTestReading>[
+            DeviceTestReading(
+              label: 'Noise floor (RMS)',
+              value: -54.2,
+              unit: 'dBFS',
+            ),
+          ],
+        ),
+      ]);
+
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await export(tester);
+
+      expect(
+        find.textContaining('Noise floor (RMS): −54.2 dBFS (n=1, no spread)'),
         findsOneWidget,
       );
     });

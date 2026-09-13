@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../controller/app_controller.dart';
 import '../model/audio_codec.dart';
 import '../model/battery_bars.dart';
+import '../model/device_test_aggregate.dart';
 import '../model/device_test_result.dart';
 import 'format.dart';
 import 'placeholder_data.dart';
@@ -103,6 +104,7 @@ class _DeveloperViewState extends State<DeveloperView> {
       'die temperature: ${_temperatureLine(_controller)}',
       'last file: ${_controller.lastRecording?.path ?? '—'}',
       'error: ${_controller.errorMessage ?? 'none'}',
+      ..._testAggregateLines(_controller.deviceTests.history),
       ..._testHistoryLines(_controller.deviceTests.history),
     ].join('\n');
   }
@@ -702,6 +704,8 @@ class _DeviceTestsCard extends StatelessWidget {
             const SizedBox(height: 16),
             _TestRow(controller: controller, kind: kind),
           ],
+          const SizedBox(height: 18),
+          _SamplesPerTest(controller: controller),
           const SizedBox(height: 14),
           Text(
             tests.isLoaded
@@ -730,10 +734,14 @@ class _TestRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final tests = controller.deviceTests;
     final isRunning = tests.running == kind;
+    // A batch of this test is part-way through and waiting for the operator.
+    // Nothing is streaming, but the test is very much in progress.
+    final awaiting = tests.awaitingNextSample && tests.batchKind == kind;
+    final active = isRunning || awaiting;
     final blocker = kind == DeviceTestKind.wakeOnMotion
         ? controller.wakeTestBlocker
         : controller.testBlocker;
-    final runs = tests.history.where((r) => r.kind == kind).toList();
+    final batches = tests.batchesOf(kind);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -751,13 +759,15 @@ class _TestRow extends StatelessWidget {
             SizedBox(
               width: 96,
               child: _Segment(
-                label: isRunning ? 'Stop' : 'Run',
+                label: active ? 'Stop' : 'Run',
                 semanticLabel:
-                    '${isRunning ? 'Stop' : 'Run'} the ${_testName(kind).toLowerCase()} test',
-                selected: isRunning,
-                enabled: isRunning || blocker == null,
+                    '${active ? 'Stop' : 'Run'} the ${_testName(kind).toLowerCase()} test',
+                selected: active,
+                // An active batch's own row is never disabled by the blocker it
+                // is itself causing - see `AppController.testBlocker`.
+                enabled: active || blocker == null,
                 onTap: () => unawaited(
-                  isRunning ? _stop(controller, kind) : _start(controller, kind),
+                  active ? _stop(controller, kind) : _start(controller, kind),
                 ),
               ),
             ),
@@ -778,6 +788,13 @@ class _TestRow extends StatelessWidget {
           ),
         ],
         if (isRunning) ...<Widget>[
+          if (tests.batchTarget > 1) ...<Widget>[
+            const SizedBox(height: 8),
+            Text(
+              'Sample ${tests.sampleNumber} of ${tests.batchTarget}',
+              style: AppText.devValue,
+            ),
+          ],
           const SizedBox(height: 8),
           Text(
             _phasePrompt(tests.phase, kind),
@@ -851,20 +868,57 @@ class _TestRow extends StatelessWidget {
             ),
           ],
         ],
-        // The two runs that make a comparison. Nothing is shown when there has
-        // never been a run - an empty row is honest, an invented one is not.
+        // BETWEEN SAMPLES of a batch that needs the operator. Nothing is
+        // running, so none of the live readouts above are on screen - what is
+        // needed here is how far through the batch they are, one control to take
+        // the next sample and one to stop with what they have.
+        if (awaiting) ...<Widget>[
+          const SizedBox(height: 8),
+          Text(
+            '${tests.samplesTaken} of ${tests.batchTarget} samples taken. '
+            '${_nextSamplePrompt(kind)}',
+            style: AppText.footnote11.copyWith(color: AppColors.purpleText),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _Segment(
+                  label: 'Next sample',
+                  semanticLabel: 'Take the next sample of the '
+                      '${_testName(kind).toLowerCase()} test',
+                  selected: false,
+                  onTap: () =>
+                      unawaited(controller.continueDeviceTestBatch()),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _Segment(
+                  label: 'Keep ${tests.samplesTaken}',
+                  semanticLabel: 'Stop the '
+                      '${_testName(kind).toLowerCase()} test and keep the '
+                      '${tests.samplesTaken} sample'
+                      '${tests.samplesTaken == 1 ? '' : 's'} already taken',
+                  selected: false,
+                  onTap: controller.endDeviceTestBatch,
+                ),
+              ),
+            ],
+          ),
+        ],
+        // The two BATCHES that make a comparison - never two single runs, which
+        // is the whole point: these measurements are noisy enough that one
+        // number against one number is a coin toss dressed up as a baseline.
+        // Nothing is shown when there has never been a run: an empty row is
+        // honest, an invented one is not.
         //
-        // A wrapping line rather than a label/value row for the same reason the
-        // stops are: a timestamp plus two readings does not fit a phone's width
-        // on one line, and a clipped measurement is worse than a wrapped one.
-        if (runs.isNotEmpty) ...<Widget>[
-          const SizedBox(height: 6),
-          _RunLine(when: 'Latest', result: runs.first),
-        ],
-        if (runs.length > 1) ...<Widget>[
-          const SizedBox(height: 3),
-          _RunLine(when: 'Before', result: runs[1]),
-        ],
+        // Wrapping lines rather than label/value rows for the same reason the
+        // stops are: a timestamp, an n, a median and a range do not fit a
+        // phone's width on one line, and a clipped measurement is worse than a
+        // wrapped one.
+        if (batches.isNotEmpty) ..._batchLines('Latest', batches.first),
+        if (batches.length > 1) ..._batchLines('Before', batches[1]),
       ],
     );
   }
@@ -876,6 +930,13 @@ class _TestRow extends StatelessWidget {
   /// recorded. Cancelling alone would leave the walk running with its Stop
   /// button already pressed - which is the bug this method exists to prevent.
   Future<void> _stop(AppController controller, DeviceTestKind kind) async {
+    // A batch waiting between samples has nothing streaming to cancel, and
+    // cancelling is not what is wanted anyway: the samples already taken are
+    // kept and aggregated.
+    if (controller.deviceTests.awaitingNextSample) {
+      controller.endDeviceTestBatch();
+      return;
+    }
     controller.cancelDeviceTest();
     if (kind == DeviceTestKind.range) await controller.finishRangeWalk();
   }
@@ -890,23 +951,183 @@ class _TestRow extends StatelessWidget {
       };
 }
 
-/// One saved run on one line: when it was taken, and what it measured.
-class _RunLine extends StatelessWidget {
-  const _RunLine({required this.when, required this.result});
+/// How many samples each test takes, and why it takes more than one.
+///
+/// BELOW THE FIVE ROWS, not above them. It applies to all of them, but the rows
+/// are what people come to this card for and a control inserted above them
+/// pushes every one of them down the screen.
+class _SamplesPerTest extends StatelessWidget {
+  const _SamplesPerTest({required this.controller});
 
-  /// `Latest` or `Before` - which half of the comparison this is.
-  final String when;
-  final DeviceTestResult result;
+  final AppController controller;
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      '$when · ${Fmt.dayAndTime(result.startedAt)} · '
-      '${_resultSummary(result)}',
-      style: AppText.devLabel.copyWith(color: _outcomeColor(result.outcome)),
+    final tests = controller.deviceTests;
+    // Mid-batch the count is fixed: a batch carries the number it was started
+    // with, or the n on the card would not be the n that was measured.
+    final locked = tests.isRunning || tests.isBatchActive;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          'Samples per test · ${controller.samplesPerTest}',
+          style: AppText.devValue,
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Every one of these measurements is noisy, so one reading before the '
+          'case and one after cannot be compared - the difference would be '
+          'noise as often as not. Each test is taken this many times and '
+          'reported as a median with the full range across the samples, so the '
+          'spread is on the screen next to the figure.',
+          style: AppText.footnote11,
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'The noise floor and the link soak repeat on their own. The walk, the '
+          'voice and the shake ask you between samples - and you can stop early '
+          'at any point, which keeps every sample already taken.',
+          style: AppText.footnote11,
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: <Widget>[
+            for (final count in DeviceTestSampling.choices) ...<Widget>[
+              if (count != DeviceTestSampling.choices.first)
+                const SizedBox(width: 8),
+              Expanded(
+                child: _Segment(
+                  label: '$count',
+                  semanticLabel: count == 1
+                      ? 'Take a single sample per test'
+                      : 'Take $count samples per test',
+                  selected: count == controller.samplesPerTest,
+                  enabled: !locked,
+                  onTap: () => controller.samplesPerTest = count,
+                ),
+              ),
+            ],
+          ],
+        ),
+        if (locked) ...<Widget>[
+          const SizedBox(height: 4),
+          const Text(
+            'Fixed while a batch is in progress. The next one can differ.',
+            style: AppText.footnote11,
+          ),
+        ],
+      ],
     );
   }
 }
+
+/// One saved BATCH as the comparison reads it: when, how many samples, the
+/// median of each headline reading, the range those samples spanned, and the
+/// samples themselves.
+///
+/// THE SPREAD IS NOT A FOOTNOTE HERE. A three-decibel change after the
+/// enclosure means nothing if the five samples before it spanned ten, and the
+/// only way somebody reads that off the screen instead of deducing it is for the
+/// range to sit on the line under the median.
+///
+/// THE SAMPLES ARE PRINTED IN FULL, and no reading is ever dropped for being
+/// extreme. A single wild value is frequently the most interesting thing the
+/// batch found - a dropout, a resonance, a scan the OS throttled - and a median
+/// that quietly excluded it would hide exactly that. Nothing is excluded, so
+/// there is nothing to declare; what IS declared is the opposite case, a sample
+/// that produced no reading at all, which cannot enter a median and is counted
+/// out loud.
+List<Widget> _batchLines(String when, DeviceTestBatch batch) {
+  final colour = _batchColour(batch);
+  return <Widget>[
+    const SizedBox(height: 6),
+    Text(
+      '$when · ${Fmt.dayAndTime(batch.startedAt)} · ${_batchCount(batch)}',
+      style: AppText.devLabel.copyWith(color: colour),
+    ),
+    for (final label in _headlineLabels(batch.kind))
+      ..._spreadLines(batch.spreadOf(label), colour),
+  ];
+}
+
+List<Widget> _spreadLines(ReadingSpread spread, Color colour) {
+  final missing = spread.missing == 0
+      ? ''
+      : ' · ${spread.missing} of ${spread.sampleCount} had no reading';
+  return <Widget>[
+    const SizedBox(height: 2),
+    Text(
+      spread.hasSpread
+          ? '${spread.label}: median '
+              '${Fmt.measurement(spread.median, spread.unit)} · '
+              '${Fmt.measurement(spread.min, spread.unit)} to '
+              '${Fmt.measurement(spread.max, spread.unit)} · spread '
+              '${Fmt.measurement(spread.spread, spread.unit)}$missing'
+          : '${spread.label}: '
+              '${Fmt.measurement(spread.median, spread.unit)}$missing',
+      style: AppText.footnote11.copyWith(color: colour),
+    ),
+    // Every sample, so an outlier is visible rather than inferred.
+    if (spread.hasSpread) ...<Widget>[
+      const SizedBox(height: 2),
+      Text(
+        'samples: ${spread.values.map(
+              (value) => Fmt.measurement(value, spread.unit),
+            ).join(' · ')}',
+        style: AppText.footnote11,
+      ),
+    ],
+  ];
+}
+
+/// `n=5 of 5`, plus every caveat that belongs beside an n.
+String _batchCount(DeviceTestBatch batch) {
+  final parts = <String>[
+    'n=${batch.sampleCount}'
+        '${batch.requested > 1 ? ' of ${batch.requested}' : ''}',
+    if (batch.isPartial) 'stopped early',
+    // A COMPARISON AGAINST ONE RUN SAYS SO. It is not a baseline; it is a
+    // single draw from a noisy process, and it cannot show its own spread.
+    if (batch.isSingle) 'one run only, no spread to judge it by',
+    ..._batchOutcomes(batch),
+  ];
+  return parts.join(' · ');
+}
+
+/// The outcomes that were not `completed`, counted. Nothing is said about the
+/// ones that were: that is what a batch is supposed to look like.
+List<String> _batchOutcomes(DeviceTestBatch batch) => <String>[
+      for (final outcome in DeviceTestOutcome.values)
+        if (outcome != DeviceTestOutcome.completed &&
+            batch.countOf(outcome) > 0)
+          batch.isSingle
+              ? outcome.wireName
+              : '${batch.countOf(outcome)} ${outcome.wireName}',
+    ];
+
+Color _batchColour(DeviceTestBatch batch) {
+  if (batch.countOf(DeviceTestOutcome.failed) > 0) return AppColors.warning;
+  if (batch.countOf(DeviceTestOutcome.completed) == batch.sampleCount) {
+    return AppColors.textPrimary;
+  }
+  return AppColors.textSecondary;
+}
+
+/// What the operator has to do before the next sample can be taken.
+String _nextSamplePrompt(DeviceTestKind kind) => switch (kind) {
+      DeviceTestKind.range =>
+        'Bring the phone back to the device and walk it again.',
+      DeviceTestKind.sensitivity =>
+        'Get back to ${DeviceTestReadings.sensitivityDistanceCm} cm and speak '
+            'again when the next sample starts.',
+      DeviceTestKind.wakeOnMotion =>
+        'Put it down and leave it alone - the next sample waits for it to go '
+            'back to sleep before asking for a shake.',
+      // The two that repeat unattended never wait, so this is unreachable.
+      DeviceTestKind.noiseFloor || DeviceTestKind.linkSoak => '',
+    };
 
 String _testName(DeviceTestKind kind) => switch (kind) {
       DeviceTestKind.range => 'Range',
@@ -975,6 +1196,9 @@ String _phasePrompt(DeviceTestPhase phase, DeviceTestKind kind) =>
             'tap, not on this prompt.',
       DeviceTestPhase.waitingForWake => 'Waiting for it to advertise again…',
       DeviceTestPhase.saving => 'Saving the result…',
+      // Nothing is running between samples, so the row draws its own prompt -
+      // see [_nextSamplePrompt].
+      DeviceTestPhase.awaitingNextSample => '',
     };
 
 /// The readings worth putting on the card, per test. Everything else is in the
@@ -1000,32 +1224,6 @@ List<String> _headlineLabels(DeviceTestKind kind) => switch (kind) {
         ],
     };
 
-/// One run in a line. An outcome that is not `completed` is NAMED, so a
-/// cancelled run's partial numbers cannot be mistaken for a finished run's.
-String _resultSummary(DeviceTestResult result) {
-  final parts = <String>[
-    for (final label in _headlineLabels(result.kind))
-      if (result.reading(label) case final reading?)
-        Fmt.measurement(reading.value, reading.unit),
-  ];
-  final word = result.outcome == DeviceTestOutcome.completed
-      ? ''
-      : '${result.outcome.wireName} · ';
-  if (parts.isEmpty) {
-    return result.outcome == DeviceTestOutcome.completed
-        ? PlaceholderData.unknownValue
-        : result.outcome.wireName;
-  }
-  return '$word${parts.join(' · ')}';
-}
-
-Color _outcomeColor(DeviceTestOutcome outcome) => switch (outcome) {
-      DeviceTestOutcome.completed => AppColors.textPrimary,
-      DeviceTestOutcome.cancelled => AppColors.textSecondary,
-      DeviceTestOutcome.unavailable => AppColors.textSecondary,
-      DeviceTestOutcome.failed => AppColors.warning,
-    };
-
 /// The die temperature as the export states it - three outcomes, and the word
 /// "die" in every one of them.
 String _temperatureLine(AppController controller) {
@@ -1034,6 +1232,58 @@ String _temperatureLine(AppController controller) {
   if (celsius == null) return 'unknown (0x8000)';
   return '${celsius.toStringAsFixed(1)} °C die '
       '(${controller.dieTemperature!.deciCelsius} decidegrees, NOT ambient)';
+}
+
+/// Every saved batch reduced to its medians and ranges, for the export.
+///
+/// BEFORE the run-by-run list and not instead of it. This section is what
+/// somebody reading the report actually compares; the individual samples below
+/// it are what lets them check that the aggregate is not hiding a dropout.
+///
+/// Every reading is aggregated here, not just the headline ones the card has
+/// room for.
+List<String> _testAggregateLines(List<DeviceTestResult> history) {
+  final batches = DeviceTestBatch.group(history);
+  if (batches.isEmpty) return const <String>[];
+  return <String>[
+    '',
+    '--- device test batches (median and full range per batch) ---',
+    for (final batch in batches) ...<String>[
+      '',
+      '${batch.startedAt.toIso8601String()}  ${batch.kind.wireName}  '
+          'n=${batch.sampleCount} of ${batch.requested}'
+          '${batch.isPartial ? '  (stopped early)' : ''}',
+      for (final label in _labelsIn(batch))
+        '  ${_aggregateLine(batch.spreadOf(label))}',
+    ],
+  ];
+}
+
+/// Every reading label the batch produced, in the order the samples list them.
+List<String> _labelsIn(DeviceTestBatch batch) {
+  final labels = <String>[];
+  for (final run in batch.runs) {
+    for (final reading in run.readings) {
+      if (!labels.contains(reading.label)) labels.add(reading.label);
+    }
+  }
+  return labels;
+}
+
+String _aggregateLine(ReadingSpread spread) {
+  final missing = spread.missing == 0
+      ? ''
+      : ', ${spread.missing} of ${spread.sampleCount} had no reading';
+  if (!spread.hasSpread) {
+    return '${spread.label}: '
+        '${Fmt.measurement(spread.median, spread.unit)} '
+        '(n=${spread.n}, no spread)$missing';
+  }
+  return '${spread.label}: median '
+      '${Fmt.measurement(spread.median, spread.unit)}, range '
+      '${Fmt.measurement(spread.min, spread.unit)} to '
+      '${Fmt.measurement(spread.max, spread.unit)}, spread '
+      '${Fmt.measurement(spread.spread, spread.unit)} (n=${spread.n})$missing';
 }
 
 /// The whole saved history, for the export.
