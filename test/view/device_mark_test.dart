@@ -49,11 +49,17 @@ void main() {
       moreOrLessEquals(DeviceMark.slotWidth + 12, epsilon: 0.5),
     );
 
-    // The battery is still right-aligned: it did not move to make room.
+    // The battery is still right-aligned: it did not move to make room. It
+    // now ends exactly ON the gutter rather than short of it - the glyph is
+    // the last thing in the header since the percentage figure was dropped,
+    // so there is nothing after it to hold it in.
     final battery = tester.getRect(find.byType(BatteryIcon));
     final screen = tester.getSize(find.byType(HomeView));
     expect(battery.left, greaterThan(screen.width * 0.6));
-    expect(battery.right, lessThan(screen.width - AppShape.gutter));
+    expect(
+      battery.right,
+      moreOrLessEquals(screen.width - AppShape.gutter, epsilon: 0.5),
+    );
   });
 
   testWidgets('disconnected dims the logo without moving anything',

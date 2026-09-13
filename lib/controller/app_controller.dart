@@ -7,6 +7,7 @@ import '../drivers/ble_transport.dart';
 import '../drivers/file_store.dart';
 import '../drivers/platform_settings.dart';
 import '../model/audio_codec.dart';
+import '../model/battery_bars.dart';
 import '../model/battery_status.dart';
 import '../model/device_state.dart';
 import '../model/level_reading.dart';
@@ -107,6 +108,18 @@ class AppController extends ChangeNotifier {
   /// `percent` is null is a device that has the characteristic but no reading
   /// (`0xFF` on the wire). Neither may ever be rendered as 0%.
   BatteryStatus? _battery;
+
+  /// The bucketed view of [_battery], and the ONLY place the hysteresis state
+  /// lives.
+  ///
+  /// It is held here rather than in the widget on purpose. The dead-band in
+  /// [BatteryBars.forPercent] is a function of the PREVIOUS answer, so
+  /// whichever object keeps that answer owns the display. A `StatefulWidget`
+  /// would lose it to any rebuild that replaced the element - a route change,
+  /// a reparent, a hot reload - and the bars would snap to whatever the raw
+  /// reading says the moment the user navigated, which is the flicker the
+  /// dead-band exists to prevent.
+  BatteryBars _batteryBars = BatteryBars.unknown;
 
   StreamSubscription<DiscoveredDevice>? _scanSubscription;
   StreamSubscription<BatteryStatus>? _batterySubscription;
@@ -229,6 +242,15 @@ class AppController extends ChangeNotifier {
 
   /// The reading itself, for callers that want both halves at once.
   BatteryStatus? get batteryStatus => _battery;
+
+  /// How many bars to draw, with full and critical called out.
+  ///
+  /// This is what the main UI renders; [batteryPercent] stays available for
+  /// the developer screen and the diagnostics report, where a precise figure
+  /// is worth more than an honest one. Recomputed as readings arrive, each
+  /// time from the previous answer, so the bars do not flicker on a reading
+  /// sitting astride a boundary.
+  BatteryBars get batteryBars => _batteryBars;
 
   bool get isScanning => _phase == AppPhase.scanning;
   bool get isConnected =>
@@ -367,7 +389,7 @@ class AppController extends ChangeNotifier {
         _autoSleep = null;
         // The reading described a link that is gone; keeping the last
         // percentage on screen would be showing a stale measurement as live.
-        _battery = null;
+        _setBattery(null);
         unawaited(_stopBattery(device.id));
         _setPhase(AppPhase.idle);
       }
@@ -382,6 +404,19 @@ class AppController extends ChangeNotifier {
     _followBattery(device.id);
   }
 
+  /// Records a battery reading - or its absence - and rebuckets the bars.
+  ///
+  /// The single writer for [_battery]: assigning the field directly would
+  /// leave [_batteryBars] describing a reading that is no longer current.
+  /// Note that a null reading rebuckets to [BatteryBars.unknown], which also
+  /// clears the hysteresis - there is no previous answer to hold once the
+  /// device stops answering.
+  void _setBattery(BatteryStatus? status) {
+    _battery = status;
+    _batteryBars =
+        BatteryBars.forPercent(status?.percent, previous: _batteryBars);
+  }
+
   /// Reads the battery status from the connected device.
   ///
   /// A failure is not an app error: it leaves the battery unknown and the
@@ -389,9 +424,9 @@ class AppController extends ChangeNotifier {
   /// be reported as.
   Future<void> _readBattery(String deviceId) async {
     try {
-      _battery = await _transport.readBattery(deviceId);
+      _setBattery(await _transport.readBattery(deviceId));
     } on BleTransportException {
-      _battery = null;
+      _setBattery(null);
     }
     notifyListeners();
   }
@@ -406,7 +441,7 @@ class AppController extends ChangeNotifier {
     try {
       _batterySubscription = _transport.subscribeBattery(deviceId).listen(
         (status) {
-          _battery = status;
+          _setBattery(status);
           notifyListeners();
         },
         onError: (Object _) {},
@@ -493,7 +528,7 @@ class AppController extends ChangeNotifier {
     }
     _connectedDevice = null;
     _autoSleep = null;
-    _battery = null;
+    _setBattery(null);
     _errorMessage = failure;
     // The user ended this, so there is nothing to explain and nothing to
     // offer a retry for.

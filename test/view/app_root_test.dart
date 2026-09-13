@@ -8,6 +8,7 @@ import 'package:voicenotetaker_app/view/library_view.dart';
 import 'package:voicenotetaker_app/view/playback_view.dart';
 import 'package:voicenotetaker_app/view/recording_view.dart';
 import 'package:voicenotetaker_app/view/scan_view.dart';
+import 'package:voicenotetaker_app/view/widgets/app_icons.dart';
 
 import 'harness.dart';
 
@@ -173,7 +174,10 @@ void main() {
     await harness.connect(tester);
     await settleDock(tester);
     expect(find.byType(HomeView), findsOneWidget);
-    expect(find.text('64%'), findsOneWidget);
+    // Three of four bars, and no figure: 64% is in the mushy middle of the
+    // discharge curve, which is exactly what the buckets exist for.
+    expect(tester.widget<BatteryIcon>(find.byType(BatteryIcon)).bars, 3);
+    expect(find.text('64%'), findsNothing);
 
     await tester.tap(find.bySemanticsLabel('Disconnect'));
     await flush(tester);
@@ -199,13 +203,16 @@ void main() {
     await harness.discover(tester);
     await harness.connect(tester);
     await settleDock(tester);
-    expect(find.text('80%'), findsOneWidget);
+    expect(tester.widget<BatteryIcon>(find.byType(BatteryIcon)).bars, 4);
     expect(find.text('Connected'), findsOneWidget);
 
     await harness.notifyBattery(tester, percent: 81, charging: true);
     await tester.pump();
 
-    expect(find.text('81%'), findsOneWidget);
+    // The notification lands in the glyph, and the charging state with it.
+    final icon = tester.widget<BatteryIcon>(find.byType(BatteryIcon));
+    expect(icon.bars, 4);
+    expect(icon.charging, isTrue);
     expect(find.text('Charging'), findsOneWidget);
   });
 }

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../controller/app_controller.dart';
 import '../model/audio_codec.dart';
+import '../model/battery_bars.dart';
 import 'format.dart';
 import 'placeholder_data.dart';
 import 'theme.dart';
@@ -84,6 +85,10 @@ class _DeveloperViewState extends State<DeveloperView> {
       // Same rule: "unknown" rather than a number, so a report from a board
       // running older firmware cannot be misread as a flat battery.
       'battery: ${_controller.batteryAvailable ? (_controller.batteryPercent == null ? 'unknown (0xFF)' : '${_controller.batteryPercent}%') : 'unavailable'}',
+      // What Home was DRAWING at the time, beside the figure it came from:
+      // a report that only carried the percentage could not explain a
+      // complaint about the bars.
+      'battery bars: ${_controller.batteryPercent == null ? 'none' : '${_controller.batteryBars.bars} of ${BatteryBars.maxBars}'}',
       'charging: ${_controller.batteryAvailable ? (_controller.batteryCharging ? 'yes' : 'no') : 'unknown'}',
       'stream: ${info == null ? '—' : info.toString()}',
       'frames received: ${stats.framesReceived}',
@@ -303,6 +308,12 @@ class _DeveloperViewState extends State<DeveloperView> {
                 ),
                 const SizedBox(height: 10),
                 _AutoSleepCard(controller: _controller),
+                // Below auto-sleep: the two cards that talk about the cell
+                // and its power belong together, and appending rather than
+                // inserting leaves every card above exactly where the people
+                // who use this screen already expect to find it.
+                const SizedBox(height: 10),
+                _BatteryCard(controller: _controller),
               ],
             ),
           ),
@@ -310,6 +321,99 @@ class _DeveloperViewState extends State<DeveloperView> {
           QuietButton(
             label: 'Export diagnostics',
             onPressed: () => _export(context),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The battery reading in full - the figure the main screen no longer shows.
+///
+/// WHY THE PERCENTAGE LIVES HERE. Home shows four bars, because that is all
+/// the measurement supports: the device derives its percentage from cell
+/// voltage against an OCV curve, and across the middle of that curve about
+/// 2 mV separate one point from the next, which an uncalibrated reference can
+/// be well outside. The error is not uniform, though - near full it is about
+/// 9 mV per point and near empty about 38, both sound - so the figure is worth
+/// having, as long as the caveat travels with it. This screen is where a
+/// caveat can be written down; a 12px figure in the header is not.
+///
+/// The device still reports the percentage and still logs it. Nothing was
+/// discarded at the protocol layer: bucketing happens in the app, so a future
+/// fuel-gauge IC can drive a finer display without the characteristic
+/// changing.
+class _BatteryCard extends StatelessWidget {
+  const _BatteryCard({required this.controller});
+
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final available = controller.batteryAvailable;
+    final percent = controller.batteryPercent;
+    final bars = controller.batteryBars;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const SectionCaption('Battery', small: true),
+          const SizedBox(height: 12),
+          // Three outcomes, never collapsed into a number: a figure, a device
+          // that has the characteristic but no reading, and firmware that
+          // does not have it at all. The same rule the diagnostics report
+          // follows, and for the same reason - a zero here would be read as a
+          // flat cell.
+          KeyValueRow(
+            label: 'Charge',
+            value: !available
+                ? 'unavailable'
+                : percent == null
+                    ? 'unknown (0xFF)'
+                    : '$percent%',
+          ),
+          const SizedBox(height: 12),
+          // What Home is drawing from that figure, so the two can be compared
+          // when a bucket boundary is in question.
+          KeyValueRow(
+            label: 'Bars',
+            value: percent == null
+                ? PlaceholderData.unknownValue
+                : '${bars.bars} of ${BatteryBars.maxBars}'
+                    '${bars.isFull ? ' (full)' : ''}'
+                    '${bars.isCritical ? ' (critical)' : ''}',
+          ),
+          const SizedBox(height: 12),
+          KeyValueRow(
+            label: 'Charging',
+            value: available
+                ? (controller.batteryCharging ? 'yes' : 'no')
+                : PlaceholderData.unknownValue,
+            valueColor: available && controller.batteryCharging
+                ? AppColors.connected
+                : AppColors.textPrimary,
+          ),
+          const SizedBox(height: 12),
+          // Millivolts belong beside the percentage, and `fe05` does not carry
+          // them: two bytes, a percentage and a flags byte. Shown as unknown
+          // rather than back-calculated from the percentage through the same
+          // curve that produced it, which would be a circle dressed up as a
+          // measurement. Same rule as ATT MTU above.
+          const KeyValueRow(
+            label: 'Cell voltage',
+            value: PlaceholderData.unknownValue,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Home shows four bars, not this figure. Around the middle of the '
+            'discharge curve about 2 mV separate one percentage point from '
+            'the next, so a mid-range reading is precise-looking and not '
+            'reliable; near full and near empty it is 9 and 38 mV per point, '
+            'which is why the ends of the scale can be trusted. The device '
+            'reports and logs the percentage either way - the bucketing is '
+            "the app's.",
+            style: AppText.footnote11,
           ),
         ],
       ),

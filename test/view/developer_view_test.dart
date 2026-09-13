@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
+import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/view/developer_view.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
@@ -320,6 +321,148 @@ void main() {
       // "On" and "Off" say nothing on their own when read aloud.
       expect(find.bySemanticsLabel('Auto-sleep on'), findsOneWidget);
       expect(find.bySemanticsLabel('Auto-sleep off'), findsOneWidget);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE BATTERY CARD
+  //
+  // Home shows four bars, because that is all a percentage derived from cell
+  // voltage can honestly support. The figure itself is not gone - the device
+  // still reports it and still logs it, and it is kept HERE, where a caveat
+  // can be written down next to it and where precision is worth something.
+  // -------------------------------------------------------------------------
+  group('the battery card', () {
+    /// The card is the last one on a screen taller than the phone, so it has
+    /// to be scrolled to before it is even built.
+    Future<void> reveal(WidgetTester tester) async {
+      await tester.scrollUntilVisible(find.text('BATTERY'), 200);
+      await tester.pump();
+    }
+
+    Future<ViewHarness> connected(WidgetTester tester, int? percent,
+        {bool charging = false}) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readBattery(any())).thenAnswer(
+        (_) async => BatteryStatus(percent: percent, charging: charging),
+      );
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester);
+      return harness;
+    }
+
+    testWidgets('keeps the percentage the main screen no longer shows',
+        (tester) async {
+      await connected(tester, 64);
+
+      expect(find.text('Charge'), findsOneWidget);
+      expect(find.text('64%'), findsOneWidget);
+      // And what Home drew from it, so a complaint about the bars can be
+      // checked against the figure that produced them.
+      expect(find.text('Bars'), findsOneWidget);
+      expect(find.text('3 of 4'), findsOneWidget);
+    });
+
+    testWidgets('says why the bars exist', (tester) async {
+      await connected(tester, 64);
+
+      expect(find.textContaining('2 mV'), findsOneWidget);
+      expect(find.textContaining('9 and 38 mV per point'), findsOneWidget);
+    });
+
+    testWidgets('millivolts are not invented from the percentage',
+        (tester) async {
+      // `fe05` carries a percentage and a flags byte, and nothing else.
+      // Back-calculating a voltage through the same curve that produced the
+      // percentage would be a circle dressed up as a measurement, so the row
+      // reads unknown - the same rule ATT MTU follows.
+      await connected(tester, 64);
+
+      expect(find.text('Cell voltage'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.ancestor(
+            of: find.text('Cell voltage'),
+            matching: find.byType(Row),
+          ),
+          matching: find.text('—'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('0xFF reads as unknown, never as a number', (tester) async {
+      await connected(tester, null);
+
+      expect(find.text('unknown (0xFF)'), findsOneWidget);
+      expect(find.text('0%'), findsNothing);
+    });
+
+    testWidgets('firmware without fe05 reads as unavailable', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readBattery(any())).thenThrow(
+        const BleTransportException('no such characteristic'),
+      );
+
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await reveal(tester);
+
+      expect(find.text('unavailable'), findsOneWidget);
+      expect(find.text('0%'), findsNothing);
+    });
+
+    testWidgets('full and critical are named beside the count',
+        (tester) async {
+      await connected(tester, 100);
+      expect(find.text('4 of 4 (full)'), findsOneWidget);
+    });
+
+    testWidgets('a critical reading is named too', (tester) async {
+      await connected(tester, 8);
+      expect(find.text('1 of 4 (critical)'), findsOneWidget);
+    });
+
+    testWidgets('a flat cell is not reported as a full one', (tester) async {
+      await connected(tester, 0);
+      expect(find.text('0%'), findsOneWidget);
+      expect(find.text('0 of 4 (critical)'), findsOneWidget);
+      // The bug this guards: a bucketing loop that fell through with "all
+      // bars" drew a dead cell as a full one.
+      expect(find.textContaining('(full)'), findsNothing);
+      expect(find.text('4 of 4'), findsNothing);
+    });
+
+    testWidgets('charging is stated', (tester) async {
+      await connected(tester, 40, charging: true);
+
+      expect(find.text('Charging'), findsOneWidget);
+      expect(find.text('yes'), findsOneWidget);
+    });
+
+    testWidgets('the diagnostics report carries the figure and the bars',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readBattery(any())).thenAnswer(
+        (_) async => const BatteryStatus(percent: 64, charging: false),
+      );
+
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+
+      await tester.tap(find.text('Export diagnostics'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      // Both halves: a report with only the percentage could not explain a
+      // complaint about the bars, and one with only the bars could not be
+      // checked.
+      expect(find.textContaining('battery: 64%'), findsOneWidget);
+      expect(find.textContaining('battery bars: 3 of 4'), findsOneWidget);
     });
   });
 }

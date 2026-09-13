@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../model/battery_bars.dart';
 import '../model/device_profile.dart';
 import 'placeholder_data.dart';
 import 'recording_entry.dart';
@@ -257,75 +258,104 @@ class _RecordButton extends StatelessWidget {
 
 /// Battery charge and charging state, from the device's `fe05` characteristic.
 ///
+/// FOUR BARS, NOT A FIGURE. The device derives its percentage from cell
+/// voltage against an OCV curve, and across the middle of that curve about two
+/// millivolts separate one point from the next - so a mid-range figure is
+/// precise-looking and not reliable. [BatteryBars] explains the shape of the
+/// error and why four buckets are what the measurement supports. The
+/// percentage itself is not thrown away: the device still reports it, and the
+/// developer screen still shows it, where precision is worth something.
+///
+/// NOTHING REPLACED THE FIGURE. No word stands where "87%" did, for two
+/// reasons: the status line directly under the device name already says
+/// "Charging" or "Connected" in words, so a second word here would either
+/// repeat it or fight it; and every phone in the user's pocket shows this
+/// state as a glyph alone. Dropping the reserved 34px also gives the device
+/// name that much more room before it has to ellipsise, which matters at
+/// 390px and in landscape.
+///
 /// THREE STATES, AND 0% IS NONE OF THEM:
 ///
-///   * a percentage - the device measured it and said so;
+///   * bars - the device measured a charge and said so;
 ///   * unknown because the device has no reading (`0xFF` on the wire);
 ///   * unknown because there is no `fe05` at all - older firmware, a failed
 ///     read, or nothing connected.
 ///
-/// The last two both render as an em dash and an empty battery OUTLINE, never
-/// as `0%` and never as a full one. A flat cell and an unanswered question
-/// look nothing alike here, which is the whole point.
+/// The last two draw an EMPTY SHELL with no slots in it at all, which is a
+/// different picture from the four faint slots of a measured, flat cell. A
+/// flat battery and an unanswered question look nothing alike here, which is
+/// the whole point.
 ///
-/// Charging is shown separately from the percentage, and is knowable even when
-/// the percentage is not: the icon and figure turn green, and the status line
-/// under the device name says "Charging" in words so the state does not rest
-/// on colour alone.
+/// Charging is shown separately from the charge, and is knowable even when the
+/// charge is not: the glyph carries a bolt, turns green, and the status line
+/// says "Charging" in words, so the state never rests on colour alone.
 class _BatteryReadout extends StatelessWidget {
   const _BatteryReadout({required this.controller});
-
-  /// Space kept for the figure, whatever it currently reads - see the comment
-  /// at the call site. Sized for the widest value the contract allows, "100%".
-  static const double _readingWidth = 34;
 
   final AppController controller;
 
   @override
   Widget build(BuildContext context) {
+    // The percentage is read for ONE purpose: telling a measured charge from
+    // no measurement at all. `BatteryBars` reports zero bars for both a flat
+    // cell and an unread one - deliberately, since they are both "no bars" -
+    // and the glyph needs to draw them differently.
     final percent = controller.batteryPercent;
+    final bars = controller.batteryBars;
     final charging = controller.batteryCharging;
-    final colour = charging ? AppColors.connected : AppColors.textTertiary;
 
     return Semantics(
-      label: _semanticLabel(percent, charging),
+      label: _semanticLabel(percent, bars, charging),
       container: true,
       excludeSemantics: true,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          BatteryIcon(
-            // Null leaves the outline empty rather than drawing a bar; see
-            // `BatteryIcon`.
-            level: percent == null ? null : percent / 100,
-            color: colour,
-            charging: charging,
-          ),
-          const SizedBox(width: 6),
-          // A RESERVED width, wide enough for "100%", right-aligned. The
-          // readout sits beside the device name in a fixed-height header, so
-          // if it grew with the number the name would be squeezed and re-laid
-          // out every time the charge ticked - and would jump between the
-          // connected and disconnected states.
-          SizedBox(
-            width: _readingWidth,
-            child: Text(
-              percent == null
-                  ? PlaceholderData.unknownValue
-                  : '$percent%',
-              style: AppText.batteryValue.copyWith(color: colour),
-              textAlign: TextAlign.right,
-            ),
-          ),
-        ],
+      // The glyph is a fixed 18px in every state, so the header cannot reflow
+      // as the charge moves, as the link comes and goes, or when the reading
+      // disappears entirely.
+      child: BatteryIcon(
+        bars: percent == null ? null : bars.bars,
+        color: _tint(bars, charging),
+        charging: charging,
       ),
     );
   }
 
-  /// Spelt out for a screen reader, where the green means nothing.
-  static String _semanticLabel(int? percent, bool charging) {
-    final charge = percent == null ? 'level unknown' : '$percent percent';
-    return charging ? 'Battery $charge, charging' : 'Battery $charge';
+  /// The tint, from the theme's existing tokens only.
+  ///
+  /// Charging outranks everything: the user has already done the thing a red
+  /// shell would be asking for, so amber-thinking here would be nagging. Full
+  /// and charging share the green - the BOLT is what separates them, which is
+  /// why it is drawn as a shape rather than as a colour change.
+  static Color _tint(BatteryBars bars, bool charging) {
+    if (charging) return AppColors.connected;
+    if (bars.isCritical) return AppColors.error;
+    if (bars.isFull) return AppColors.connected;
+    return AppColors.textTertiary;
+  }
+
+  /// Spelt out for a screen reader, where the colour means nothing and the
+  /// bars cannot be counted.
+  ///
+  /// IN WORDS, AND STILL NOT AS A PERCENTAGE. A screen-reader user cannot see
+  /// that the display only has four positions, so reading them "47 percent"
+  /// would hand them a precision the measurement does not have AND hide the
+  /// fact that it is an estimate - a worse deal than a sighted user gets, not
+  /// an equal one. Full, empty and critically low are named outright, because
+  /// those are the states a count of bars is worst at conveying.
+  static String _semanticLabel(int? percent, BatteryBars bars, bool charging) {
+    final String state;
+    if (percent == null) {
+      state = 'level unknown';
+    } else if (bars.isFull) {
+      state = 'full';
+    } else if (bars.bars == 0) {
+      // Already the emptiest thing the glyph can draw; ", critically low"
+      // after "empty" would add nothing.
+      state = 'empty';
+    } else {
+      state = '${bars.bars} of ${BatteryBars.maxBars} bars'
+          '${bars.isCritical ? ', critically low' : ''}';
+    }
+    return charging ? 'Battery $state, charging' : 'Battery $state';
   }
 }
 

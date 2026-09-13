@@ -3,6 +3,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/controller/app_controller.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
+import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/model/device_profile.dart';
 
 import 'view/harness.dart';
@@ -273,6 +274,135 @@ void main() {
 
       expect(harness.controller.batteryPercent, 55);
       expect(harness.controller.phase, AppPhase.connected);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE BARS THE MAIN UI RENDERS
+  //
+  // Home shows four bars instead of a percentage, and the hysteresis that
+  // keeps a bar from flickering needs the PREVIOUS answer. That state lives
+  // here, in the controller, and not in the widget: a view that held it would
+  // lose it to any rebuild that replaced the element, and the bars would snap
+  // to the raw reading the moment the user navigated. The percentage is kept
+  // alongside for the developer screen - nothing was thrown away.
+  // -------------------------------------------------------------------------
+  group('the bars the UI renders', () {
+    test('the reading on connect is bucketed, and the figure kept', () async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await harness.controller.connect(knownDevice);
+
+      expect(harness.controller.batteryPercent, 76);
+      expect(harness.controller.batteryBars.bars, 3);
+      expect(harness.controller.batteryBars.isFull, isFalse);
+      expect(harness.controller.batteryBars.isCritical, isFalse);
+    });
+
+    test('the controller holds the hysteresis across notifications', () async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readBattery(any())).thenAnswer(
+        (_) async => const BatteryStatus(percent: 80, charging: false),
+      );
+
+      await harness.controller.connect(knownDevice);
+      expect(harness.controller.batteryBars.bars, 4);
+
+      // 74% buckets to THREE bars from cold and holds FOUR when the last
+      // answer was four. Four here proves the previous answer was passed in.
+      harness.battery.add(const BatteryStatus(percent: 74, charging: false));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(harness.controller.batteryPercent, 74);
+      expect(harness.controller.batteryBars.bars, 4);
+    });
+
+    test('a reading going unknown clears the hysteresis', () async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readBattery(any())).thenAnswer(
+        (_) async => const BatteryStatus(percent: 80, charging: false),
+      );
+
+      await harness.controller.connect(knownDevice);
+      harness.battery.add(const BatteryStatus(percent: null, charging: false));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(harness.controller.batteryBars.bars, 0);
+      expect(harness.controller.batteryBars.isCritical, isFalse,
+          reason: 'unknown is not empty');
+
+      // There is no previous answer to hold any more, so this is a first
+      // reading again and buckets down to three.
+      harness.battery.add(const BatteryStatus(percent: 74, charging: false));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(harness.controller.batteryBars.bars, 3);
+    });
+
+    test('0xFF is unknown bars, and a measured 0% is empty ones', () async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readBattery(any())).thenAnswer(
+        (_) async => BatteryStatus.fromBytes(<int>[0xFF, 0x00]),
+      );
+
+      await harness.controller.connect(knownDevice);
+      expect(harness.controller.batteryBars.isCritical, isFalse);
+      expect(harness.controller.batteryBars.bars, 0);
+
+      harness.battery.add(BatteryStatus.fromBytes(<int>[0, 0x00]));
+      await Future<void>.delayed(Duration.zero);
+
+      // Same bar count, different fact - which is exactly why the readout
+      // draws the two differently.
+      expect(harness.controller.batteryBars.bars, 0);
+      expect(harness.controller.batteryBars.isCritical, isTrue);
+    });
+
+    test('100% is reported as full', () async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readBattery(any())).thenAnswer(
+        (_) async => BatteryStatus.fromBytes(<int>[100, 0x00]),
+      );
+
+      await harness.controller.connect(knownDevice);
+
+      expect(harness.controller.batteryBars.isFull, isTrue);
+      expect(harness.controller.batteryBars.bars, 4);
+    });
+
+    test('disconnecting resets the bars, not just the figure', () async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await harness.controller.connect(knownDevice);
+      expect(harness.controller.batteryBars.bars, 3);
+
+      await harness.controller.disconnect();
+
+      // Stale bars would be a stale measurement drawn as a live one, and
+      // would also poison the dead-band on the next connection.
+      expect(harness.controller.batteryBars.bars, 0);
+      expect(harness.controller.batteryBars.isCritical, isFalse);
+      expect(harness.controller.batteryPercent, isNull);
+    });
+
+    test('a dropped link resets the bars too', () async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await harness.controller.connect(knownDevice);
+      expect(harness.controller.batteryBars.bars, 3);
+
+      harness.link.add(BleConnectionStatus.disconnected);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(harness.controller.batteryBars.bars, 0);
+      expect(harness.controller.batteryBars.isCritical, isFalse);
     });
   });
 }

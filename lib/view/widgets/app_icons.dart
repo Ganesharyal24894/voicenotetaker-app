@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 
+import '../../model/battery_bars.dart';
 import '../theme.dart';
 
 /// Which glyph an [AppIcon] draws.
@@ -464,28 +465,45 @@ class _GlyphPainter extends CustomPainter {
       old.strokeWidth != strokeWidth;
 }
 
-/// The battery glyph from the Home header: a stroked shell, a nub, and a solid
-/// bar whose length tracks [level].
+/// The battery glyph from the Home header: a stroked shell, a nub, and four
+/// discrete bars inside it.
 ///
-/// [level] is `0.0 .. 1.0`, or `null` when the charge is not known - there is
-/// no battery service on the device yet, so `null` is the state the app is
-/// actually in until one exists.
+/// WHY FOUR SLOTS AND NOT A SLIDING FILL. A continuous bar is a picture of a
+/// percentage, and the percentage is not that trustworthy - see
+/// [BatteryBars]. Four slots show exactly as much as the measurement
+/// supports, and a bar that only ever moves in quarters cannot creep back and
+/// forth while the user watches it.
+///
+/// THREE RENDERINGS, because there are three facts to tell apart:
+///
+///   * [bars] null - nothing was measured. The shell is EMPTY: no slots at
+///     all, so an unanswered question does not look like an answer.
+///   * [bars] zero - measured, and flat. Four ghost slots, none filled: the
+///     glyph shows that it knows, and knows it is empty.
+///   * [bars] one to [BatteryBars.maxBars] - that many slots filled.
+///
+/// The tint is the caller's: it carries full, critical and charging, all from
+/// the theme's existing tokens.
 class BatteryIcon extends StatelessWidget {
   const BatteryIcon({
-    required this.level,
+    required this.bars,
     this.size = 18,
     this.color = AppColors.textTertiary,
     this.charging = false,
     super.key,
   });
 
-  final double? level;
+  /// Slots to fill, `0 .. BatteryBars.maxBars`, or null when there is no
+  /// reading. Null and zero are DIFFERENT pictures - see the class comment.
+  final int? bars;
+
   final double size;
   final Color color;
 
   /// Draws the bolt inside the shell, the way a phone's own indicator does.
-  /// Deliberately a SHAPE and not only a colour change: charging at 40% and
-  /// draining at 40% have to be tellable apart without relying on the tint.
+  /// Deliberately a SHAPE and not only a colour change: charging at two bars
+  /// and draining at two bars have to be tellable apart without relying on
+  /// the tint, and a full cell and a charging one share the same green.
   final bool charging;
 
   @override
@@ -494,7 +512,7 @@ class BatteryIcon extends StatelessWidget {
       dimension: size,
       child: CustomPaint(
         painter: _BatteryPainter(
-          level: level,
+          bars: bars,
           color: color,
           charging: charging,
         ),
@@ -506,12 +524,29 @@ class BatteryIcon extends StatelessWidget {
 
 class _BatteryPainter extends CustomPainter {
   const _BatteryPainter({
-    required this.level,
+    required this.bars,
     required this.color,
     required this.charging,
   });
 
-  final double? level;
+  /// The shell's inner track, in the 24-unit view box: 3.5 .. 15.5 across,
+  /// 9.5 .. 14.5 down. The bars are laid out inside exactly this.
+  static const double _trackLeft = 3.5;
+  static const double _trackTop = 9.5;
+  static const double _trackWidth = 12;
+  static const double _trackHeight = 5;
+
+  /// Gap between slots. Wide enough to read as a gap at 18px, narrow enough
+  /// to leave each slot wider than the space beside it.
+  static const double _gap = 1;
+
+  /// An unfilled slot, drawn faint rather than left blank so that "one of
+  /// four" is legible instead of just "a short bar". A derived alpha of the
+  /// caller's own colour, not a new one: the glyph has to work in the
+  /// tertiary, green and red tints alike.
+  static const double _ghostAlpha = 0.24;
+
+  final int? bars;
   final Color color;
   final bool charging;
 
@@ -537,27 +572,40 @@ class _BatteryPainter extends CustomPainter {
     );
     canvas.drawLine(const Offset(21.5, 10.5), const Offset(21.5, 13.5), stroke);
 
-    final charge = level;
-    if (charge != null && charge > 0) {
-      // Inner track runs 3.5 .. 15.5 in view-box units.
-      final width = 12.0 * charge.clamp(0.0, 1.0);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(3.5, 9.5, width, 5),
-          const Radius.circular(1),
-        ),
-        Paint()
-          ..color = color
-          ..style = PaintingStyle.fill
-          ..isAntiAlias = true,
-      );
+    final filled = bars;
+    if (filled != null) {
+      const slots = BatteryBars.maxBars;
+      final slotWidth = (_trackWidth - _gap * (slots - 1)) / slots;
+      final fill = Paint()
+        ..color = color
+        ..style = PaintingStyle.fill
+        ..isAntiAlias = true;
+      final ghost = Paint()
+        ..color = color.withValues(alpha: _ghostAlpha)
+        ..style = PaintingStyle.fill
+        ..isAntiAlias = true;
+
+      for (var i = 0; i < slots; i++) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(
+              _trackLeft + i * (slotWidth + _gap),
+              _trackTop,
+              slotWidth,
+              _trackHeight,
+            ),
+            const Radius.circular(0.8),
+          ),
+          i < filled ? fill : ghost,
+        );
+      }
     }
     if (charging) {
-      // A bolt centred in the shell's inner track (3.5..15.5), drawn twice:
-      // once as a fat stroke in the SCREEN colour to knock a gap out of
-      // whatever is behind it, then filled. Without the knockout it
-      // disappears into the charge bar at a high level and into the empty
-      // shell at a low one -- it has to read against both.
+      // A bolt centred in the shell's inner track, drawn twice: once as a fat
+      // stroke in the SCREEN colour to knock a gap out of whatever is behind
+      // it, then filled. Without the knockout it disappears into a filled bar
+      // at a high level and into the ghost slots at a low one -- it has to
+      // read against both.
       final bolt = Path()
         ..moveTo(10.9, 8.2)
         ..lineTo(7.5, 12.6)
@@ -588,5 +636,5 @@ class _BatteryPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_BatteryPainter old) =>
-      old.level != level || old.color != color || old.charging != charging;
+      old.bars != bars || old.color != color || old.charging != charging;
 }
