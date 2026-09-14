@@ -127,6 +127,9 @@ class _PlaybackViewState extends State<PlaybackView> {
     // transcribed until the user asks.
     if (recording != null && _controller.transcriptionAvailable) {
       unawaited(_controller.loadTranscript(recording));
+      // Waiting in the background queue? Then it goes next. Nothing is
+      // notified by this, so it is safe inside the element's own build.
+      _controller.prioritiseTranscription(recording);
     }
   }
 
@@ -204,6 +207,10 @@ class _PlaybackViewState extends State<PlaybackView> {
     final recording = _recording;
     if (recording == null || !_controller.transcriptionAvailable) {
       _notice('Transcription is not available yet.');
+      return;
+    }
+    if (recording.path == _controller.writingNotePath) {
+      _notice('This note is still being written.');
       return;
     }
     if (_controller.isTranscribing) {
@@ -703,6 +710,8 @@ class _TranscriptCard extends StatelessWidget {
             style: AppText.rowTitle.copyWith(height: 1.6),
           ),
         );
+      case TranscriptStatus.queued:
+        return const Text('Waiting to transcribe…', style: AppText.meta13);
       case TranscriptStatus.noSpeech:
         return const Text('No speech found.', style: AppText.meta13);
       case TranscriptStatus.modelMissing:

@@ -6,12 +6,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/controller/app_controller.dart';
 import 'package:voicenotetaker_app/drivers/audio_player.dart';
+import 'package:voicenotetaker_app/drivers/background_mode.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/drivers/file_store.dart';
 import 'package:voicenotetaker_app/drivers/platform_settings.dart';
 import 'package:voicenotetaker_app/drivers/speech_recognizer.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
+import 'package:voicenotetaker_app/model/capture_flags.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/model/die_temperature.dart';
 import 'package:voicenotetaker_app/model/stream_info.dart';
@@ -41,6 +43,7 @@ class MockAudioPlayer extends Mock implements AudioPlayer {}
 void registerViewFallbacks() {
   registerFallbackValue(AudioCodec.imaAdpcm);
   registerFallbackValue(Duration.zero);
+  registerFallbackValue(CaptureCommand.gateDisabled);
 }
 
 /// An [AudioPlayer] the tests drive by hand.
@@ -110,6 +113,8 @@ class ViewHarness {
     this.testWindow,
     this.recognizer,
     bool speechModelInstalled = true,
+    BackgroundMode? backgroundMode,
+    Duration continuousKeepalive = const Duration(seconds: 60),
   }) : transport = MockBleTransport() {
     if (recognizer != null && speechModelInstalled) installSpeechModel();
     when(() => transport.currentAvailability())
@@ -170,6 +175,19 @@ class ViewHarness {
     when(() => transport.subscribeFrames(any()))
         .thenAnswer((_) => frames.stream);
     when(() => transport.unsubscribeFrames(any())).thenAnswer((_) async {});
+    when(() => transport.connect(any(), timeout: any(named: 'timeout')))
+        .thenAnswer((_) async {});
+    // Firmware WITHOUT `fe08` unless a test says otherwise - which is every
+    // device the app shipped against before always-listening, so the tests
+    // written then still describe it.
+    when(() => transport.supportsCapture(any()))
+        .thenAnswer((_) async => captureSupported);
+    when(() => transport.readCapture(any()))
+        .thenAnswer((_) async => captureFlags);
+    when(() => transport.writeCapture(any(), any())).thenAnswer((_) async {});
+    when(() => transport.subscribeCapture(any()))
+        .thenAnswer((_) => capture.stream);
+    when(() => transport.unsubscribeCapture(any())).thenAnswer((_) async {});
     when(() => transport.dispose()).thenAnswer((_) async {});
 
     controller = AppController(
@@ -178,6 +196,8 @@ class ViewHarness {
       audioPlayer: audioPlayer,
       platformSettings: settings,
       recordingsDirectory: recordingsDirectory,
+      backgroundMode: backgroundMode,
+      continuousKeepalive: continuousKeepalive,
       transcriptionService: recognizer == null
           ? null
           : TranscriptionService(
@@ -263,6 +283,20 @@ class ViewHarness {
   /// it, so a readout that moves on its own cannot pass unnoticed.
   final StreamController<BatteryStatus> battery =
       StreamController<BatteryStatus>.broadcast();
+
+  /// What `supportsCapture` answers. Settable before connecting.
+  bool captureSupported = false;
+
+  /// What a `fe08` read answers.
+  CaptureFlags captureFlags = const CaptureFlags(
+    muted: false,
+    speechOpen: false,
+    gateEnabled: true,
+  );
+
+  /// `fe08` notifications, pushed by hand.
+  final StreamController<CaptureFlags> capture =
+      StreamController<CaptureFlags>.broadcast();
 
   /// `fe07` notifications, pushed by hand. Same rule as [battery].
   final StreamController<DieTemperature> temperature =
@@ -428,6 +462,7 @@ class ViewHarness {
     await frames.close();
     if (!battery.isClosed) await battery.close();
     if (!temperature.isClosed) await temperature.close();
+    if (!capture.isClosed) await capture.close();
     await controller.teardown();
   }
 }
@@ -532,6 +567,17 @@ class MemoryFileStore implements FileStore {
     files[path] = <int>[...bytes];
   }
 
+  /// Paths [patchBytes] was called on, for the startup repair pass.
+  final List<String> patched = <String>[];
+
+  @override
+  Future<void> patchBytes(String path, int offset, List<int> bytes) async {
+    patched.add(path);
+    final target = files[path];
+    if (target == null) throw Exception('no such file: $path');
+    target.setRange(offset, offset + bytes.length, bytes);
+  }
+
   @override
   Future<bool> exists(String path) async => files.containsKey(path);
 
@@ -598,6 +644,9 @@ class ScriptedRecognizer implements SpeechRecognizer {
 
   int calls = 0;
 
+  /// The recording each job was started on, in order.
+  final List<String> audioPaths = <String>[];
+
   /// True once a running job has been cancelled by its listener.
   bool cancelled = false;
 
@@ -607,6 +656,7 @@ class ScriptedRecognizer implements SpeechRecognizer {
   @override
   Stream<RecognitionEvent> transcribe(RecognitionJob job) {
     calls++;
+    audioPaths.add(job.audioPath);
     released = false;
     late final StreamController<RecognitionEvent> controller;
     var stopped = false;
@@ -650,4 +700,53 @@ class ScriptedRecognizer implements SpeechRecognizer {
     );
     return controller.stream;
   }
+}
+
+
+/// A [BackgroundMode] that records what the controller asked of it.
+class FakeBackgroundMode implements BackgroundMode {
+  /// Every notification text the service was started or updated with, in
+  /// order; null entries are stops.
+  final List<String?> texts = <String?>[];
+
+  bool running = false;
+  bool notifications = true;
+  bool batteryExempt = true;
+  int permissionRequests = 0;
+
+  @override
+  Future<void> start({required String title, required String text}) async {
+    running = true;
+    texts.add(text);
+  }
+
+  @override
+  Future<void> stop() async {
+    running = false;
+    texts.add(null);
+  }
+
+  @override
+  Future<bool> notificationsAllowed() async => notifications;
+
+  @override
+  Future<void> requestNotifications() async {
+    permissionRequests++;
+    notifications = true;
+  }
+
+  @override
+  Future<bool> ignoringBatteryOptimizations() async => batteryExempt;
+
+  @override
+  Future<void> requestIgnoreBatteryOptimizations() async {
+    permissionRequests++;
+    batteryExempt = true;
+  }
+
+  @override
+  Future<bool> hasAutostartSettings() async => false;
+
+  @override
+  Future<bool> openAutostartSettings() async => false;
 }

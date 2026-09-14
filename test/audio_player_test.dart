@@ -176,6 +176,9 @@ class EmptyFileStore implements FileStore {
   Future<void> writeBytes(String path, List<int> bytes) async {}
 
   @override
+  Future<void> patchBytes(String path, int offset, List<int> bytes) async {}
+
+  @override
   Future<bool> exists(String path) async => false;
 
   @override

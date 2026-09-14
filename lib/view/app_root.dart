@@ -80,10 +80,22 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   /// `inactive` is deliberately not acted on - see the note in
   /// `diagnostics_view.dart`; it fires for a notification shade and an app
   /// switcher preview, and neither means the user left.
+  ///
+  /// Leaving the screen - `hidden`, then `paused` - pauses background
+  /// transcription, which is too heavy to run behind the user's back.
+  /// Always-listening is not touched either way.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      unawaited(widget.controller.refreshAvailability());
+    switch (state) {
+      case AppLifecycleState.resumed:
+        // `appForegrounded` re-reads the adapter first, as this used to.
+        unawaited(widget.controller.appForegrounded());
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        unawaited(widget.controller.appBackgrounded());
+      case AppLifecycleState.inactive:
+        break;
     }
   }
 
@@ -92,8 +104,23 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   }
 
   /// The saved recordings, newest first, as the library service found them.
-  List<RecordingEntry> get _entries =>
-      widget.controller.recordings.map(RecordingEntry.fromInfo).toList();
+  ///
+  /// Each row carries whether it is still being written and where its
+  /// transcript stands, from the controller.
+  List<RecordingEntry> get _entries {
+    final controller = widget.controller;
+    final writing = controller.writingNotePath;
+    return <RecordingEntry>[
+      for (final info in controller.recordings)
+        RecordingEntry.fromInfo(
+          info,
+          isWriting: info.path == writing,
+          transcript: controller.transcriptionAvailable
+              ? controller.listTranscriptStatusFor(info)
+              : null,
+        ),
+    ];
+  }
 
   /// Pushes one of the screens the user chose to go to.
   ///
@@ -218,10 +245,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     final recording =
         controller.isRecording || controller.phase == AppPhase.stopping;
     final connected = controller.connectedDevice != null;
+    // Always-listening keeps Home up without a link: the app is reaching for
+    // the device on its own, Home says so, and the toggle to stop it is there.
+    final home = connected || controller.continuousEnabled;
     // A link that dropped by itself gets Home's slot, not the scan screen's:
     // see `ConnectionLostView`. A disconnect the user asked for leaves
     // `linkOutcome` at `none` and so lands back on the scan screen as before.
-    final lost = !connected &&
+    final lost = !home &&
         !recording &&
         controller.linkOutcome == LinkOutcome.connectionLost;
     final instant = AppMotion.isReduced(context);
@@ -233,7 +263,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         // nothing for the navigator to remove on its own account.
         onDidRemovePage: (_) {},
         pages: <Page<void>>[
-          if (!connected && !recording && !lost)
+          if (!home && !recording && !lost)
             _DockPage(
               key: const ValueKey<String>('scan'),
               instant: instant,
@@ -251,7 +281,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
               instant: instant,
               child: ConnectionLostView(controller: controller),
             ),
-          if (connected)
+          if (home)
             _DockPage(
               key: const ValueKey<String>('home'),
               instant: instant,

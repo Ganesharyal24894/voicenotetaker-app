@@ -7,6 +7,7 @@ import 'package:universal_ble/universal_ble.dart' as ub;
 import '../model/audio_codec.dart';
 import '../model/auto_sleep.dart';
 import '../model/battery_status.dart';
+import '../model/capture_flags.dart';
 import '../model/device_profile.dart';
 import '../model/device_state.dart';
 import '../model/die_temperature.dart';
@@ -24,6 +25,10 @@ class UniversalBleTransport implements BleTransport {
 
   /// Guarded so `connect` does not rediscover services on every call.
   final Set<String> _servicesDiscovered = <String>{};
+
+  /// Characteristic UUIDs, lower case, found by the discovery pass in
+  /// [connect], per device. What [supportsCapture] answers from.
+  final Map<String, Set<String>> _characteristics = <String, Set<String>>{};
 
   /// 247 carries our 244-byte notification value plus the 3-byte ATT header.
   /// Android 14+ forces 517 on the first request and ignores later ones, so
@@ -53,6 +58,12 @@ class UniversalBleTransport implements BleTransport {
   StreamSubscription<Uint8List>? _temperatureSubscription;
   StreamController<DieTemperature>? _temperatureController;
   String? _temperatureDeviceId;
+
+  /// Capture-state notifications, a fourth independent subscription: they
+  /// report the mute and the speech gate whether or not audio is flowing.
+  StreamSubscription<Uint8List>? _captureSubscription;
+  StreamController<CaptureFlags>? _captureController;
+  String? _captureDeviceId;
 
   bool _scanning = false;
   bool _disposed = false;
@@ -165,8 +176,13 @@ class UniversalBleTransport implements BleTransport {
       await ub.UniversalBle.connect(deviceId, timeout: timeout);
       // Several platforms require an explicit discovery pass before any
       // read/write/subscribe on a custom service will resolve.
-      await ub.UniversalBle.discoverServices(deviceId);
+      final services = await ub.UniversalBle.discoverServices(deviceId);
       _servicesDiscovered.add(deviceId);
+      _characteristics[deviceId] = <String>{
+        for (final service in services)
+          for (final characteristic in service.characteristics)
+            characteristic.uuid.toLowerCase(),
+      };
 
       // Negotiate up from the 23-byte default ATT MTU, which leaves only
       // 20 bytes of notification payload -- far too small for a 166-byte
@@ -202,6 +218,10 @@ class UniversalBleTransport implements BleTransport {
   @override
   Future<void> disconnect(String deviceId) async {
     _servicesDiscovered.remove(deviceId);
+    _characteristics.remove(deviceId);
+    if (_captureDeviceId == deviceId) {
+      await unsubscribeCapture(deviceId);
+    }
     if (_frameDeviceId == deviceId) {
       await unsubscribeFrames(deviceId);
     }
@@ -484,6 +504,118 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
+  Future<bool> supportsCapture(String deviceId) async =>
+      _characteristics[deviceId]
+          ?.contains(DeviceProfile.captureCharacteristicUuid.toLowerCase()) ??
+      false;
+
+  @override
+  Future<CaptureFlags> readCapture(String deviceId) async {
+    try {
+      final bytes = await ub.UniversalBle.read(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.captureCharacteristicUuid,
+      );
+      return CaptureFlags.fromBytes(bytes);
+    } on FormatException catch (e) {
+      throw BleTransportException('malformed capture state', e);
+    } catch (e) {
+      // Firmware without `fe08` fails here, and so does a link that dropped
+      // mid-read. `supportsCapture` is what tells the two apart.
+      throw BleTransportException('could not read the capture state', e);
+    }
+  }
+
+  @override
+  Future<void> writeCapture(String deviceId, CaptureCommand command) async {
+    try {
+      await ub.UniversalBle.write(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.captureCharacteristicUuid,
+        command.toBytes(),
+      );
+    } catch (e) {
+      throw BleTransportException('could not send ${command.name}', e);
+    }
+  }
+
+  @override
+  Stream<CaptureFlags> subscribeCapture(String deviceId) {
+    if (_captureController != null) {
+      throw const BleTransportException(
+        'already subscribed to the capture state',
+      );
+    }
+
+    final controller = StreamController<CaptureFlags>(
+      onCancel: () => unsubscribeCapture(deviceId),
+    );
+    _captureController = controller;
+    _captureDeviceId = deviceId;
+
+    _captureSubscription = ub.UniversalBle.characteristicValueStream(
+      deviceId,
+      DeviceProfile.captureCharacteristicUuid,
+    ).listen(
+      (bytes) {
+        try {
+          controller.add(CaptureFlags.fromBytes(bytes));
+        } on FormatException catch (e) {
+          controller.addError(
+            BleTransportException('malformed capture notification', e),
+          );
+        }
+      },
+      onError: controller.addError,
+    );
+
+    unawaited(() async {
+      try {
+        await ub.UniversalBle.subscribeNotifications(
+          deviceId,
+          DeviceProfile.serviceUuid,
+          DeviceProfile.captureCharacteristicUuid,
+        );
+      } catch (e) {
+        if (!controller.isClosed) {
+          controller.addError(
+            BleTransportException('could not subscribe to the capture state', e),
+          );
+        }
+        // Through `unsubscribeCapture`, so a reconnect can subscribe again.
+        await unsubscribeCapture(deviceId);
+      }
+    }());
+
+    return controller.stream;
+  }
+
+  @override
+  Future<void> unsubscribeCapture(String deviceId) async {
+    final subscription = _captureSubscription;
+    final controller = _captureController;
+    _captureSubscription = null;
+    _captureController = null;
+    _captureDeviceId = null;
+
+    await subscription?.cancel();
+    try {
+      await ub.UniversalBle.unsubscribe(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.captureCharacteristicUuid,
+      );
+    } catch (_) {
+      // A link that has already dropped has nothing left to unsubscribe.
+    }
+    if (controller != null && !controller.isClosed) {
+      await controller.close();
+    }
+  }
+
+  @override
   Future<int> readRssi(String deviceId) async {
     try {
       return await ub.UniversalBle.readRssi(deviceId);
@@ -568,6 +700,8 @@ class UniversalBleTransport implements BleTransport {
     if (temperatureDeviceId != null) {
       await unsubscribeDieTemperature(temperatureDeviceId);
     }
+    final captureDeviceId = _captureDeviceId;
+    if (captureDeviceId != null) await unsubscribeCapture(captureDeviceId);
     if (_scanning) {
       try {
         await stopScan();

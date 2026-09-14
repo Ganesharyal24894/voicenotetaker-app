@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
 import '../model/battery_bars.dart';
+import '../model/continuous_status.dart';
 import '../model/device_profile.dart';
 import 'placeholder_data.dart';
 import 'recording_entry.dart';
@@ -44,6 +45,14 @@ class HomeView extends StatelessWidget {
 
   /// See [LibraryView.now]: the day labels are relative to this.
   final DateTime? now;
+
+  /// The line under the record button.
+  String _recordCaption(bool connected) {
+    if (controller.continuousActive) return 'Notes save on their own';
+    if (connected) return 'Tap to record';
+    if (controller.continuousEnabled) return 'Waiting for the recorder';
+    return 'Connect a recorder to start';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -150,6 +159,8 @@ class HomeView extends StatelessWidget {
               _BatteryReadout(controller: controller),
             ],
           ),
+          const SizedBox(height: 22),
+          AlwaysListeningCard(controller: controller),
           Expanded(
             // Center, not just a centred Column: the surrounding Column aligns
             // to the start, so without this the record button hugs the left
@@ -158,15 +169,21 @@ class HomeView extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
+                  // Off while always-listening makes the notes: the two
+                  // would need the same single audio subscription.
                   _RecordButton(
-                    onTap: connected ? controller.startRecording : null,
+                    onTap: connected && !controller.continuousActive
+                        ? controller.startRecording
+                        : null,
                   ),
                   const SizedBox(height: 24),
                   Text(
-                    connected ? 'Tap to record' : 'Connect a recorder to start',
+                    _recordCaption(connected),
                     style: AppText.meta14,
                   ),
-                  if (connected) ...<Widget>[
+                  // The toggle is how always-listening ends; a Disconnect
+                  // beside it would be a second, conflicting way.
+                  if (connected && !controller.continuousEnabled) ...<Widget>[
                     const SizedBox(height: 24),
                     _DisconnectChip(
                       onTap: () => unawaited(controller.disconnect()),
@@ -207,6 +224,143 @@ class HomeView extends StatelessWidget {
         },
       ),
     );
+  }
+}
+
+/// The always-listening switch and, while it is on, what it is doing.
+///
+/// A CARD, NOT A SETTINGS PAGE: it is the one mode the app has, and the status
+/// line under it ("Hearing speech", "Muted on device") is something the wearer
+/// glances at, so it lives on Home under the device it describes.
+///
+/// Turning it on asks for the background permissions first - with one sentence
+/// on why - when the phone has not already granted them. Declining still turns
+/// it on: it then works while the app is open, which is better than a switch
+/// that refuses.
+class AlwaysListeningCard extends StatelessWidget {
+  const AlwaysListeningCard({required this.controller, super.key});
+
+  final AppController controller;
+
+  static const String title = 'Always listening';
+
+  @override
+  Widget build(BuildContext context) {
+    final status = controller.continuousStatus;
+    final enabled = controller.continuousEnabled;
+    final available = enabled || controller.canUseContinuous;
+
+    return AppCard(
+      padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(title, style: AppText.rowTitle),
+                const SizedBox(height: 4),
+                Row(
+                  children: <Widget>[
+                    if (enabled) ...<Widget>[
+                      StatusDot(color: statusColor(status)),
+                      const SizedBox(width: 7),
+                    ],
+                    Flexible(
+                      child: Text(
+                        enabled ? status.label : 'Notes save when you speak',
+                        style: AppText.rowMeta,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Semantics(
+            label: title,
+            child: Switch(
+              value: enabled,
+              onChanged: available
+                  ? (on) => unawaited(_toggle(context, on))
+                  : null,
+              thumbColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.selected)
+                    ? AppColors.onPrimaryFill
+                    : AppColors.textSecondary,
+              ),
+              trackColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.selected)
+                    ? AppColors.primaryFill
+                    : AppColors.raised,
+              ),
+              trackOutlineColor:
+                  const WidgetStatePropertyAll<Color>(AppColors.border),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The dot beside the status. Green while it works, rose while speech is
+  /// being written - the recording colour - amber where the wearer or the
+  /// firmware has to act, grey while there is no link.
+  static Color statusColor(ContinuousStatus status) => switch (status) {
+        ContinuousStatus.listening => AppColors.connected,
+        ContinuousStatus.hearingSpeech => AppColors.recording,
+        ContinuousStatus.muted ||
+        ContinuousStatus.needsFirmwareUpdate =>
+          AppColors.warning,
+        ContinuousStatus.notConnected ||
+        ContinuousStatus.off =>
+          AppColors.disconnected,
+      };
+
+  Future<void> _toggle(BuildContext context, bool on) async {
+    if (!on) {
+      await controller.setContinuousEnabled(false);
+      return;
+    }
+    if (!await controller.backgroundPermissionsGranted()) {
+      final autostart = await controller.hasAutostartSettings();
+      if (!context.mounted) return;
+      final allow = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: AppColors.card,
+          shape: const RoundedRectangleBorder(borderRadius: AppShape.card),
+          title: const Text('Keep listening', style: AppText.title22),
+          content: Text(
+            'To save notes while your phone is locked, allow notifications '
+            'and turn off battery limits for this app.'
+            '${autostart ? '\n\nOn Xiaomi phones, also turn on Autostart.' : ''}',
+            style: AppText.footnote12,
+          ),
+          actions: <Widget>[
+            if (autostart)
+              TextButton(
+                onPressed: () => unawaited(controller.openAutostartSettings()),
+                child: const Text('Autostart', style: AppText.label13),
+              ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Not now', style: AppText.label13),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(
+                'Allow',
+                style: AppText.label13.copyWith(color: AppColors.purpleText),
+              ),
+            ),
+          ],
+        ),
+      );
+      if (allow == true) await controller.requestBackgroundPermissions();
+    }
+    await controller.setContinuousEnabled(true);
   }
 }
 

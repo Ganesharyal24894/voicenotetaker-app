@@ -60,6 +60,10 @@ class InMemoryFileStore implements FileStore {
   }
 
   @override
+  Future<void> patchBytes(String path, int offset, List<int> bytes) async =>
+      files[path]!.setRange(offset, offset + bytes.length, bytes);
+
+  @override
   Future<bool> exists(String path) async =>
       files.containsKey(path) || sinks.containsKey(path);
 

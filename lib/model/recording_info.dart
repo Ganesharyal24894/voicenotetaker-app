@@ -11,6 +11,8 @@ class RecordingInfo {
     this.duration,
     this.sampleRateHz,
     this.channels,
+    this.hasTranscript = false,
+    this.transcriptFailed = false,
   });
 
   /// Absolute path of the WAV file.
@@ -37,6 +39,13 @@ class RecordingInfo {
   /// Channel count from the header, `null` when it could not be read.
   final int? channels;
 
+  /// Whether a saved transcript sits beside the file.
+  final bool hasTranscript;
+
+  /// Whether a transcription was tried and failed, and the failure was saved
+  /// so the background queue passes this recording over.
+  final bool transcriptFailed;
+
   @override
   String toString() => 'RecordingInfo($name, $sizeBytes B, '
       '${duration == null ? 'unknown' : '${duration!.inMilliseconds} ms'})';
@@ -50,7 +59,9 @@ class RecordingInfo {
       other.sizeBytes == sizeBytes &&
       other.duration == duration &&
       other.sampleRateHz == sampleRateHz &&
-      other.channels == channels;
+      other.channels == channels &&
+      other.hasTranscript == hasTranscript &&
+      other.transcriptFailed == transcriptFailed;
 
   @override
   int get hashCode => Object.hash(
@@ -61,5 +72,7 @@ class RecordingInfo {
         duration,
         sampleRateHz,
         channels,
+        hasTranscript,
+        transcriptFailed,
       );
 }

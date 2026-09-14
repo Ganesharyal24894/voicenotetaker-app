@@ -181,8 +181,11 @@ class _LibraryViewState extends State<LibraryView> {
                         onTap: () => widget.onOpen(group.value[i]),
                         // A row with no file behind it has nothing to delete,
                         // so it gets no delete control rather than a dead one.
+                        // Nor does a note still being written: its file is
+                        // open.
                         onDelete: widget.onDelete == null ||
-                                group.value[i].path == null
+                                group.value[i].path == null ||
+                                group.value[i].isWriting
                             ? null
                             : () => unawaited(
                                   _confirmDelete(context, group.value[i]),

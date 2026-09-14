@@ -22,6 +22,7 @@ Fixed peripheral; the app adapts to it, never the other way around.
 | `fe01` | NOTIFY — audio frames |
 | `fe02` | READ — stream info |
 | `fe03` | WRITE — 1 byte codec select |
+| `fe08` | READ/NOTIFY/WRITE — capture state: mute, speech gate (always listening; see `doc/continuous-mode.md`) |
 
 **Every notification** starts with a 2-byte little-endian sequence number,
 followed by the payload. Gaps in that sequence are packets dropped on the link
@@ -80,6 +81,9 @@ lib/
                  speech_recognizer_sherpa.dart sherpa_onnx implementation, in
                                                its own isolate per job
                  process_memory.dart           /proc RSS probe (Linux/Android)
+                 background_mode.dart          abstract keep-alive while always
+                                               listening + MethodChannel impl
+                                               (Android foreground service)
 
   services/    Domain logic on top of the driver interfaces. No package
                imports, no dart:io.
@@ -95,6 +99,11 @@ lib/
                                            first, with real metadata; delete
                  level_meter.dart          peak / RMS dBFS of the PCM the
                                            app already decodes
+                 continuous/               always listening: one session per
+                                           link, speech -> notes, settings.
+                                           See doc/continuous-mode.md
+                 wav_repair.dart           startup fix for headers left by a
+                                           capture the app was killed in
                  transcription/            offline speech-to-text: window
                                            planning (8 s), model presence
                                            check, the transcription service.

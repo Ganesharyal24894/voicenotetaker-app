@@ -37,6 +37,19 @@ abstract final class RecordingNaming {
     return '$stem$transcriptSuffix';
   }
 
+  /// Suffix of the marker saved beside a recording whose transcription
+  /// failed, so the background queue does not try it again on every launch.
+  static const String transcriptFailureSuffix = '.transcript-failed.json';
+
+  /// Where the failure marker of the recording at [audioPath] is kept.
+  static String transcriptFailurePathOf(String audioPath) {
+    final lower = audioPath.toLowerCase();
+    final stem = lower.endsWith(extension)
+        ? audioPath.substring(0, audioPath.length - extension.length)
+        : audioPath;
+    return '$stem$transcriptFailureSuffix';
+  }
+
   /// The capture time encoded in [name], or `null` when it is not one of ours.
   static DateTime? timestampOf(String name) {
     if (!name.startsWith(prefix) || !name.endsWith(extension)) return null;
@@ -103,10 +116,19 @@ class LibraryService {
   /// a recording that exists on disk must be visible so the user can delete it.
   Future<List<RecordingInfo>> refresh() async {
     final paths = await _fileStore.list(_directory);
+    // The sidecars come out of the same listing, so knowing whether a
+    // recording has a transcript costs no extra I/O at all.
+    final present = paths.toSet();
     final found = <RecordingInfo>[];
     for (final path in paths) {
       if (!path.toLowerCase().endsWith(RecordingNaming.extension)) continue;
-      final info = await describe(path);
+      final info = await describe(
+        path,
+        hasTranscript:
+            present.contains(RecordingNaming.transcriptPathOf(path)),
+        transcriptFailed:
+            present.contains(RecordingNaming.transcriptFailurePathOf(path)),
+      );
       if (info != null) found.add(info);
     }
     // Newest first.
@@ -119,7 +141,14 @@ class LibraryService {
   }
 
   /// Describes the single file at [path], or `null` when it is gone.
-  Future<RecordingInfo?> describe(String path) async {
+  ///
+  /// [hasTranscript] and [transcriptFailed] are passed in by [refresh], which
+  /// already knows them from its directory listing.
+  Future<RecordingInfo?> describe(
+    String path, {
+    bool hasTranscript = false,
+    bool transcriptFailed = false,
+  }) async {
     final stat = await _fileStore.stat(path);
     if (stat == null) return null;
 
@@ -136,6 +165,8 @@ class LibraryService {
       duration: _durationFrom(header, stat.sizeBytes),
       sampleRateHz: header?.sampleRateHz,
       channels: header?.channels,
+      hasTranscript: hasTranscript,
+      transcriptFailed: transcriptFailed,
     );
   }
 
@@ -148,6 +179,7 @@ class LibraryService {
   Future<void> delete(String path) async {
     await _fileStore.delete(path);
     await _fileStore.delete(RecordingNaming.transcriptPathOf(path));
+    await _fileStore.delete(RecordingNaming.transcriptFailurePathOf(path));
     await refresh();
   }
 

@@ -17,6 +17,22 @@
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
 
+    <!-- Always listening. A foreground service of type connectedDevice keeps
+         the process alive with the screen off; the _CONNECTED_DEVICE
+         permission is what Android 14+ demands for that type, and it is
+         granted at runtime only while BLUETOOTH_CONNECT is.
+         POST_NOTIFICATIONS is a runtime permission from Android 13; without it
+         the service still runs but its notification is hidden.
+         REQUEST_IGNORE_BATTERY_OPTIMIZATIONS lets the app show the one-tap
+         exemption dialog: without the exemption Doze and vendor task killers
+         stop the service, and Android 12+ will not let a killed service
+         restart itself in the foreground.
+         No WAKE_LOCK: audio notifications wake the CPU by themselves. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- The device is a BLE peripheral; the app is useless without a radio. -->
     <uses-feature android:name="android.hardware.bluetooth_le"
         android:required="true" />
@@ -47,6 +63,11 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <service
+            android:name=".ListeningService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="connectedDevice" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

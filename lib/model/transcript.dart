@@ -129,6 +129,9 @@ enum TranscriptStatus {
   /// This recording is being transcribed now.
   running,
 
+  /// Waiting its turn in the background queue.
+  queued,
+
   /// Saved, with words in it.
   done,
 

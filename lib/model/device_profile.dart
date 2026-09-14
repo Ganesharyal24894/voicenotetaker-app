@@ -52,6 +52,19 @@ abstract final class DeviceProfile {
   static const String temperatureCharacteristicUuid =
       '6e40fe07-b5a3-f393-e0a9-e50e24dcca9e';
 
+  /// `fe08` - READ + NOTIFY + WRITE, one byte of capture state (see
+  /// [CaptureFlags] and [CaptureCommand]). Drives always-listening: the app
+  /// writes "speech only" and the device then streams `fe01` only while it
+  /// hears speech.
+  ///
+  /// THE LIVENESS CONTRACT RIDES ON IT TOO. The firmware drops a link that has
+  /// seen no GATT activity from the phone for ten minutes, so while always
+  /// listening the app reads this characteristic every minute. Firmware older
+  /// than `fe08` simply does not have it; the app treats the absence as "needs
+  /// a firmware update", and manual recording keeps working.
+  static const String captureCharacteristicUuid =
+      '6e40fe08-b5a3-f393-e0a9-e50e24dcca9e';
+
   /// Every notification is prefixed with a little-endian uint16 sequence
   /// number; gaps in it are packets dropped on the link.
   static const int sequenceHeaderBytes = 2;

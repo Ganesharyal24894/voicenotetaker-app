@@ -1,5 +1,6 @@
 import '../model/recording_info.dart';
 import '../model/recording_metadata.dart';
+import '../model/transcript.dart';
 import 'format.dart';
 
 /// One row in the recordings lists, and the subject of the playback screen.
@@ -18,6 +19,8 @@ class RecordingEntry {
     this.sampleRateHz = 16000,
     this.channels = 1,
     this.isPlaceholder = false,
+    this.isWriting = false,
+    this.statusLabel,
   });
 
   /// Built from a real, finished capture.
@@ -35,7 +38,15 @@ class RecordingEntry {
   }
 
   /// Built from a saved file the library service described.
-  factory RecordingEntry.fromInfo(RecordingInfo info) {
+  ///
+  /// [isWriting] marks the note always-listening is still writing, and
+  /// [transcript] is what the list says about its transcript - see
+  /// [statusLabelFor].
+  factory RecordingEntry.fromInfo(
+    RecordingInfo info, {
+    bool isWriting = false,
+    TranscriptStatus? transcript,
+  }) {
     return RecordingEntry(
       title: 'Voice note ${Fmt.timeOfDay(info.recordedAt)}',
       recordedAt: info.recordedAt,
@@ -46,7 +57,36 @@ class RecordingEntry {
       path: info.path,
       sampleRateHz: info.sampleRateHz ?? 16000,
       channels: info.channels ?? 1,
+      isWriting: isWriting,
+      statusLabel: statusLabelFor(isWriting: isWriting, transcript: transcript),
     );
+  }
+
+  /// The short word the recordings list puts after a row's size, or null for
+  /// nothing.
+  ///
+  /// "Writing" wins: a note that is still growing has no transcript to speak
+  /// of yet. States with nothing useful to say - not looked at, none, no
+  /// model - say nothing, so an ordinary list is not a wall of labels.
+  static String? statusLabelFor({
+    required bool isWriting,
+    TranscriptStatus? transcript,
+  }) {
+    if (isWriting) return 'Writing…';
+    return switch (transcript) {
+      TranscriptStatus.done => 'Transcribed',
+      TranscriptStatus.noSpeech => 'No speech',
+      TranscriptStatus.running => 'Transcribing',
+      TranscriptStatus.queued => 'Waiting',
+      TranscriptStatus.failed ||
+      TranscriptStatus.unsupported =>
+        'Not transcribed',
+      TranscriptStatus.checking ||
+      TranscriptStatus.none ||
+      TranscriptStatus.modelMissing ||
+      null =>
+        null,
+    };
   }
 
   final String title;
@@ -62,6 +102,13 @@ class RecordingEntry {
 
   /// True for the sample rows that stand in until a library service exists.
   final bool isPlaceholder;
+
+  /// True while always-listening is still writing this note. It cannot be
+  /// deleted until it is finished.
+  final bool isWriting;
+
+  /// Writing / transcript state for the list, or null for none.
+  final String? statusLabel;
 
   /// `09:14`.
   String get timeLabel => Fmt.timeOfDay(recordedAt);
@@ -80,8 +127,9 @@ class RecordingEntry {
       '${Fmt.dayAndTime(recordedAt, now: now)} · $durationLabel';
 
   /// `09:14 - 4:12 - 7.9 MB` for the Library rows.
-  String libraryLabel() =>
-      '$timeLabel · $durationLabel · $sizeLabel';
+  String libraryLabel() => statusLabel == null
+      ? '$timeLabel · $durationLabel · $sizeLabel'
+      : '$timeLabel · $durationLabel · $sizeLabel · $statusLabel';
 
   /// `Today, 09:14 - 16 kHz mono - 7.9 MB` for the playback header.
   String playbackLabel({DateTime? now}) =>

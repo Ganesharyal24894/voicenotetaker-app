@@ -3,12 +3,15 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../drivers/audio_player.dart';
+import '../drivers/background_mode.dart';
 import '../drivers/ble_transport.dart';
 import '../drivers/file_store.dart';
 import '../drivers/platform_settings.dart';
 import '../model/audio_codec.dart';
 import '../model/battery_bars.dart';
 import '../model/battery_status.dart';
+import '../model/capture_flags.dart';
+import '../model/continuous_status.dart';
 import '../model/device_state.dart';
 import '../model/device_test_aggregate.dart';
 import '../model/device_test_result.dart';
@@ -16,17 +19,23 @@ import '../model/die_temperature.dart';
 import '../model/level_reading.dart';
 import '../model/link_health.dart';
 import '../model/recording_info.dart';
+import '../model/reconnect_backoff.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
 import '../model/transcript.dart';
 import '../model/transcription.dart';
+import '../services/continuous/continuous_session.dart';
+import '../services/continuous/continuous_settings_store.dart';
+import '../services/continuous/note_writer.dart';
 import '../services/device_test_service.dart';
 import '../services/device_test_store.dart';
 import '../services/link_monitor.dart';
 import '../services/library_service.dart';
 import '../services/recording_service.dart';
 import '../services/transcription/transcript_store.dart';
+import '../services/transcription/transcription_queue.dart';
 import '../services/transcription/transcription_service.dart';
+import '../services/wav_repair.dart';
 
 /// What the app is doing right now, as one flat enum the placeholder view can
 /// render without any further interpretation.
@@ -74,6 +83,9 @@ class AppController extends ChangeNotifier {
     PlatformSettings? platformSettings,
     TranscriptionService? transcriptionService,
     TranscriptStore? transcriptStore,
+    BackgroundMode? backgroundMode,
+    String? settingsDirectory,
+    this._continuousKeepalive = ContinuousSession.defaultKeepaliveInterval,
     AudioCodec preferredCodec = AudioCodec.imaAdpcm,
     // The public parameter name `preferredCodec:` is part of the existing API,
     // while the field behind it is private because it is now reached through a
@@ -87,6 +99,14 @@ class AppController extends ChangeNotifier {
         _player = audioPlayer,
         _settings = platformSettings,
         _transcription = transcriptionService,
+        _background = backgroundMode,
+        _settingsStore = ContinuousSettingsStore(
+          fileStore: fileStore,
+          // Beside the recordings when no other place is given, as the mic
+          // check's history already is; `main.dart` passes the support
+          // directory.
+          directory: settingsDirectory ?? _recordingsDirectory,
+        ),
         _transcripts =
             transcriptStore ?? TranscriptStore(fileStore: fileStore),
         _library = libraryService ??
@@ -198,6 +218,7 @@ class AppController extends ChangeNotifier {
   TranscriptStatus transcriptStatusFor(RecordingInfo recording) {
     final path = recording.path;
     if (_transcribingPath == path) return TranscriptStatus.running;
+    if (_queue.contains(path)) return TranscriptStatus.queued;
     final failure = _transcriptFailures[path];
     if (failure != null) return failure;
     if (!_transcriptCache.containsKey(path)) return TranscriptStatus.checking;
@@ -213,7 +234,34 @@ class AppController extends ChangeNotifier {
   Future<void> loadTranscript(RecordingInfo recording) async {
     final transcript = await _transcripts.load(recording.path);
     _transcriptCache[recording.path] = transcript;
+    // A failure saved on an earlier launch is what the card should explain,
+    // rather than offering a Transcribe button as though nothing had been
+    // tried.
+    if (transcript == null && !_transcriptFailures.containsKey(recording.path)) {
+      final failure = await _transcripts.loadFailure(recording.path);
+      if (failure != null) _transcriptFailures[recording.path] = failure;
+    }
     notifyListeners();
+  }
+
+  /// What the recordings list should say about [recording]'s transcript.
+  ///
+  /// Unlike [transcriptStatusFor] it never answers "checking": the list knows
+  /// from its own directory listing whether a transcript or a saved failure
+  /// sits beside the file, so it needs no per-row read.
+  TranscriptStatus listTranscriptStatusFor(RecordingInfo recording) {
+    final status = transcriptStatusFor(recording);
+    if (status != TranscriptStatus.checking) return status;
+    if (recording.hasTranscript) return TranscriptStatus.done;
+    if (recording.transcriptFailed) return TranscriptStatus.failed;
+    return TranscriptStatus.none;
+  }
+
+  /// The user opened [recording]: if it is waiting in the background queue,
+  /// it goes next. A job already running is not interrupted - its model is
+  /// loaded, and throwing that away would cost more than the wait.
+  void prioritiseTranscription(RecordingInfo recording) {
+    _queue.prioritise(recording.path);
   }
 
   /// Transcribes [recording] and saves the transcript beside it.
@@ -225,6 +273,9 @@ class AppController extends ChangeNotifier {
     final service = _transcription;
     if (service == null || _transcribingPath != null) return;
     final path = recording.path;
+    // A note still being written would be transcribed with its end missing.
+    if (path == writingNotePath) return;
+    _queue.remove(path);
     _transcribingPath = path;
     _transcriptionDone = 0;
     _transcriptionTotal = 0;
@@ -252,6 +303,7 @@ class AppController extends ChangeNotifier {
       _transcriptCache[path] = transcript;
       try {
         await _transcripts.save(path, transcript);
+        await _transcripts.clearFailure(path);
       } on Object catch (error) {
         // The words are still on screen for this session; they are simply
         // worked out again next time.
@@ -272,10 +324,127 @@ class AppController extends ChangeNotifier {
           TranscriptStatus.failed,
       };
       if (status != null) _transcriptFailures[path] = status;
+      // SAVED ONLY WHERE TRYING AGAIN WOULD FAIL AGAIN, so the background queue
+      // does not spend a model load on the same file every launch. A missing
+      // model is not about the file, and a cancel is not a failure at all.
+      if (status == TranscriptStatus.unsupported ||
+          status == TranscriptStatus.failed) {
+        try {
+          await _transcripts.saveFailure(path, status!);
+        } on Object catch (error) {
+          debugPrint('STT could not save the failure: $error');
+        }
+      }
     } finally {
       _transcribingPath = null;
       notifyListeners();
     }
+    if (!_pumping) unawaited(_pumpTranscriptions());
+  }
+
+  // -------------------------------------------------------------------------
+  // BACKGROUND TRANSCRIPTION
+  //
+  // Recordings without a transcript are transcribed one at a time, newest
+  // first, WHILE THE APP IS IN THE FOREGROUND ONLY. A job loads a 188 MB model
+  // and holds two cores for minutes; doing that behind the user's back, with
+  // the screen off, is the battery drain the power rule forbids. Going to the
+  // background cancels the running job and puts it back at the front; coming
+  // back plans the queue again.
+  //
+  // Nothing runs until [appForegrounded] is first called, which is what keeps
+  // tests that never call it exactly as they were.
+  // -------------------------------------------------------------------------
+
+  final TranscriptionQueue _queue = TranscriptionQueue();
+  bool _inForeground = false;
+  bool _pumping = false;
+  bool _initialised = false;
+
+  /// Recordings waiting for the background queue, front first.
+  List<String> get transcriptionQueue => _queue.pending;
+
+  /// The app is on screen: re-read the adapter, reach for the device if
+  /// always-listening wants it, and start the transcription queue.
+  Future<void> appForegrounded() async {
+    _inForeground = true;
+    if (!_initialised) return;
+    await refreshAvailability();
+    _ensureContinuousLink();
+    await _planTranscriptions();
+  }
+
+  /// The app left the screen: stop transcribing. Always-listening carries on.
+  Future<void> appBackgrounded() async {
+    if (!_inForeground) return;
+    _inForeground = false;
+    final running = _transcribingPath;
+    if (running != null) {
+      _queue.addFront(running);
+      await cancelTranscription();
+    }
+  }
+
+  Future<void> _planTranscriptions() async {
+    final service = _transcription;
+    if (service == null || !_inForeground) return;
+    try {
+      if (!(await service.modelStatus()).isReady) return;
+    } on Object {
+      return;
+    }
+    if (!_inForeground) return;
+    await refreshLibrary();
+    _queue.replace(
+      TranscriptionQueue.plan(
+        recordings: _recordings,
+        failed: <String>{
+          for (final entry in _transcriptFailures.entries)
+            if (entry.value == TranscriptStatus.unsupported ||
+                entry.value == TranscriptStatus.failed)
+              entry.key,
+        },
+        writing: writingNotePath,
+        running: _transcribingPath,
+      ),
+    );
+    notifyListeners();
+    unawaited(_pumpTranscriptions());
+  }
+
+  /// Runs queued jobs one after another until the queue is empty, the app
+  /// leaves the foreground, or something else is already transcribing.
+  Future<void> _pumpTranscriptions() async {
+    if (_pumping || _transcription == null) return;
+    _pumping = true;
+    try {
+      while (_inForeground && _transcribingPath == null) {
+        final path = _queue.takeNext(skip: writingNotePath);
+        if (path == null) break;
+        RecordingInfo? recording;
+        for (final info in _recordings) {
+          if (info.path == path) recording = info;
+        }
+        if (recording == null || _transcriptCache[path] != null) continue;
+        await transcribe(recording);
+      }
+    } finally {
+      _pumping = false;
+    }
+  }
+
+  /// A recording has just been finished: if the queue is running, it goes
+  /// first.
+  Future<void> _enqueueFinished(String path) async {
+    if (!_inForeground || _transcription == null) return;
+    try {
+      if (!(await _transcription.modelStatus()).isReady) return;
+    } on Object {
+      return;
+    }
+    _queue.addFront(path);
+    notifyListeners();
+    unawaited(_pumpTranscriptions());
   }
 
   /// Stops the running transcription. Completes once the model is released.
@@ -530,6 +699,8 @@ class AppController extends ChangeNotifier {
       return DeviceTestBlocker.testRunning;
     }
     if (!isConnected) return DeviceTestBlocker.notConnected;
+    // Always-listening owns the frame subscription for as long as it runs.
+    if (_session != null) return DeviceTestBlocker.recording;
     // `subscribeFrames` takes one subscriber, so a capture in progress owns it.
     if (isRecording || _recorder.isRecording) {
       return DeviceTestBlocker.recording;
@@ -544,6 +715,13 @@ class AppController extends ChangeNotifier {
 
   /// Reads the adapter state and starts following it.
   Future<void> initialise() async {
+    _continuous = await _settingsStore.load();
+    // BEFORE the library is read: a note or a capture the app was killed in
+    // the middle of must be listed, played and transcribed at its real length.
+    // Nothing is writing yet, so no header here can be one still in use.
+    final repaired =
+        await WavRepair.repairDirectory(_fileStore, _recordingsDirectory);
+    if (repaired.isNotEmpty) debugPrint('Repaired WAV headers: $repaired');
     _statsSubscription = _recorder.stats.listen((stats) {
       _stats = stats;
       notifyListeners();
@@ -578,7 +756,11 @@ class AppController extends ChangeNotifier {
     }
     _availabilitySubscription =
         _transport.availability.listen(_onAvailabilityChanged);
+    _initialised = true;
+    _syncBackground();
+    _ensureContinuousLink();
     notifyListeners();
+    if (_inForeground) await _planTranscriptions();
   }
 
   /// The adapter changed state. THE STALE-CONNECTED BUG LIVES HERE.
@@ -598,15 +780,23 @@ class AppController extends ChangeNotifier {
   /// "not powered on" acts one event EARLIER than watching for "powered off"
   /// would.
   ///
-  /// The reverse - Bluetooth coming back - deliberately does NOT reconnect. The
+  /// The reverse - Bluetooth coming back - does NOT reconnect by itself. The
   /// link was dropped, nothing is holding it, and claiming otherwise is the bug
   /// this method exists to prevent. The screen returns to the scan control, which
   /// is something the user can act on.
+  ///
+  /// THE ONE EXCEPTION is always-listening, where the user asked for the link
+  /// to be kept: the radio coming back starts a fresh reconnect, and the home
+  /// screen says "Device not connected" until it succeeds.
   void _onAvailabilityChanged(BleAvailability state) {
     final previous = _availability;
     _availability = state;
     if (state != previous && state != BleAvailability.poweredOn) {
       unawaited(_adapterLost());
+    }
+    if (state != previous && state == BleAvailability.poweredOn) {
+      _reconnectAttempt = 0;
+      _ensureContinuousLink();
     }
     notifyListeners();
   }
@@ -727,16 +917,34 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> connect(DiscoveredDevice device) async {
-    await stopScan();
+  Future<void> connect(DiscoveredDevice device) => _connect(device);
+
+  /// [automatic] is always-listening reaching for the remembered device: a
+  /// failure then is not an error screen, only the next attempt scheduled.
+  Future<void> _connect(DiscoveredDevice device, {bool automatic = false}) async {
+    if (!automatic) await stopScan();
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     // Remembered before the attempt, so "Try again" has something to try even
     // when the attempt is what failed.
     _lastDevice = device;
     _linkOutcome = LinkOutcome.none;
     _setPhase(AppPhase.connecting);
     try {
-      await _transport.connect(device.id);
+      if (automatic) {
+        await _transport.connect(
+          device.id,
+          timeout: ReconnectBackoff.attemptTimeout,
+        );
+      } else {
+        await _transport.connect(device.id);
+      }
     } on BleTransportException catch (e) {
+      if (automatic) {
+        _setPhase(AppPhase.idle);
+        _scheduleReconnect();
+        return;
+      }
       // The recorder was found and the handshake did not complete. That is a
       // different fact from a link dropping later, and from nothing being
       // there at all.
@@ -755,6 +963,15 @@ class AppController extends ChangeNotifier {
       }
     });
     _setPhase(AppPhase.connected);
+    _reconnectAttempt = 0;
+    await _rememberDevice(device);
+    // From the discovery the connect already did - no radio time. This is what
+    // tells old firmware ("needs a firmware update") from a read that failed.
+    try {
+      _captureSupported = await _transport.supportsCapture(device.id);
+    } on BleTransportException {
+      _captureSupported = false;
+    }
     // Read rather than assumed: the flag lives in the device's flash and
     // survives reboots, so only the device knows what it is.
     await _readAutoSleep(device.id);
@@ -769,6 +986,9 @@ class AppController extends ChangeNotifier {
     // diagnostics. It is read and followed by [openDiagnostics] and dropped
     // again by [closeDiagnostics].
     if (_diagnosticsOpen) await _startDiagnostics(device.id);
+    if (_continuous.enabled) await _startContinuousSession(device.id);
+    _syncBackground();
+    notifyListeners();
   }
 
   // -------------------------------------------------------------------------
@@ -858,7 +1078,9 @@ class AppController extends ChangeNotifier {
   Future<void> _startDiagnostics(String deviceId) async {
     await _readTemperature(deviceId);
     _followTemperature(deviceId);
-    await _linkMonitor.start(deviceId);
+    // Always-listening holds the one frame subscription; the link view's
+    // counters stay idle rather than taking it away.
+    if (_session == null) await _linkMonitor.start(deviceId);
     notifyListeners();
   }
 
@@ -1053,6 +1275,7 @@ class AppController extends ChangeNotifier {
     final device = _connectedDevice;
     if (!_diagnosticsOpen ||
         device == null ||
+        _session != null ||
         _tests.isRunning ||
         _tests.isBatchActive) {
       notifyListeners();
@@ -1120,7 +1343,13 @@ class AppController extends ChangeNotifier {
   /// and a battery percentage that nothing is refreshing. The failure is
   /// reported instead, on the screen the app returns to; reconnecting is one
   /// tap from there.
-  Future<void> disconnect() => _releaseLink(_LinkEnding.userAsked);
+  ///
+  /// Always-listening is turned off first: a user ending the link has said
+  /// they do not want it kept.
+  Future<void> disconnect() async {
+    if (_continuous.enabled) await setContinuousEnabled(false);
+    await _releaseLink(_LinkEnding.userAsked);
+  }
 
   /// Drops every trace of the current link. THE ONE TEARDOWN.
   ///
@@ -1141,6 +1370,9 @@ class AppController extends ChangeNotifier {
   Future<void> _releaseLink(_LinkEnding ending) async {
     final device = _connectedDevice;
     if (device == null) return;
+    // The open note is closed and kept, whatever ended the link. The device is
+    // only told to stop gating when it can still hear us.
+    await _stopContinuousSession(linkUp: ending == _LinkEnding.userAsked);
     // The capture is finished properly rather than truncated: `stopRecording`
     // patches the WAV header, and a link that has already gone does not stop it
     // from doing that to the bytes already on disk.
@@ -1184,6 +1416,7 @@ class AppController extends ChangeNotifier {
       }
     }
     _connectedDevice = null;
+    _captureSupported = null;
     _autoSleep = null;
     // These readings described a link that is gone; keeping the last percentage
     // or the last temperature on screen would be showing a stale measurement as
@@ -1198,10 +1431,16 @@ class AppController extends ChangeNotifier {
     // user asking needs neither, and the adapter going off has a screen of its
     // own - the Bluetooth-off edge state, which is reached by leaving the
     // outcome at `none`.
-    _linkOutcome = ending == _LinkEnding.peripheralGone
-        ? LinkOutcome.connectionLost
-        : LinkOutcome.none;
+    //
+    // Always-listening explains nothing either: it is already reaching for the
+    // device again, and the home screen says so.
+    _linkOutcome =
+        ending == _LinkEnding.peripheralGone && !_continuous.enabled
+            ? LinkOutcome.connectionLost
+            : LinkOutcome.none;
     _setPhase(AppPhase.idle);
+    if (ending != _LinkEnding.userAsked) _scheduleReconnect();
+    _syncBackground();
   }
 
   /// Connects to [lastDevice] again - the action behind both "Try again" after
@@ -1238,10 +1477,314 @@ class AppController extends ChangeNotifier {
   Future<bool> openAppSettings() async =>
       await _settings?.openAppSettings() ?? false;
 
+  // -------------------------------------------------------------------------
+  // ALWAYS LISTENING
+  //
+  // The user wears the device all day and notes appear by themselves. The
+  // device streams only speech (`fe08` = speech only); a [ContinuousSession]
+  // turns that stream into ordinary recordings; this controller keeps the link
+  // up - reconnecting with backoff after a drop, after Bluetooth comes back and
+  // after a restart - and keeps the Android foreground service's notification
+  // saying what is happening.
+  //
+  // WHEN IT IS OFF, NOTHING HERE RUNS: no session, no timer, no service. The
+  // app behaves exactly as it did before the mode existed.
+  // -------------------------------------------------------------------------
+
+  final BackgroundMode? _background;
+  final ContinuousSettingsStore _settingsStore;
+  final Duration _continuousKeepalive;
+  ContinuousSettings _continuous = const ContinuousSettings();
+  ContinuousSession? _session;
+  StreamSubscription<void>? _sessionChanges;
+  StreamSubscription<NoteChange>? _sessionNotes;
+
+  /// Whether the connected firmware has `fe08`; null with no link.
+  bool? _captureSupported;
+
+  Timer? _reconnectTimer;
+  int _reconnectAttempt = 0;
+
+  /// What the notification says now; null while the service is not running.
+  String? _backgroundText;
+
+  /// Whether the user turned always-listening on. Persisted.
+  bool get continuousEnabled => _continuous.enabled;
+
+  /// Whether notes are being made right now - on, connected, and supported.
+  bool get continuousActive => _session != null;
+
+  /// Whether there is a device to listen through: one connected now, or one
+  /// remembered from before.
+  bool get canUseContinuous =>
+      _connectedDevice != null || _continuous.deviceId != null;
+
+  /// The one status the home screen and the notification both show.
+  ContinuousStatus get continuousStatus => ContinuousStatus.resolve(
+        enabled: _continuous.enabled,
+        connected: isConnected,
+        captureSupported: _captureSupported,
+        flags: _session?.flags,
+      );
+
+  /// The note being written, which the library marks and nothing transcribes.
+  String? get writingNotePath => _session?.currentNotePath;
+
+  /// Turns always-listening on or off, and remembers the choice.
+  ///
+  /// On with a link up starts listening at once; on without one starts
+  /// reaching for the remembered device. Off stops everything and tells the
+  /// device to stream normally again.
+  Future<void> setContinuousEnabled(bool enabled) async {
+    if (enabled == _continuous.enabled) return;
+    if (enabled && !canUseContinuous) return;
+    final device = _connectedDevice;
+    _continuous = _continuous.copyWith(
+      enabled: enabled,
+      deviceId: device?.id,
+      deviceName: device?.name,
+    );
+    await _saveContinuous();
+    if (enabled) {
+      if (device != null) {
+        await _startContinuousSession(device.id);
+      } else {
+        _reconnectAttempt = 0;
+        _ensureContinuousLink();
+      }
+    } else {
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      _reconnectAttempt = 0;
+      await _stopContinuousSession(linkUp: _connectedDevice != null);
+    }
+    _syncBackground();
+    notifyListeners();
+  }
+
+  /// Whether the phone will let always-listening survive the screen going off:
+  /// notifications allowed and battery optimisation lifted. True where the
+  /// platform has nothing to grant.
+  Future<bool> backgroundPermissionsGranted() async {
+    final background = _background;
+    if (background == null) return true;
+    return await background.notificationsAllowed() &&
+        await background.ignoringBatteryOptimizations();
+  }
+
+  /// Asks for what [backgroundPermissionsGranted] checks. The screen explains
+  /// why first.
+  Future<void> requestBackgroundPermissions() async {
+    final background = _background;
+    if (background == null) return;
+    if (!await background.notificationsAllowed()) {
+      await background.requestNotifications();
+    }
+    if (!await background.ignoringBatteryOptimizations()) {
+      await background.requestIgnoreBatteryOptimizations();
+    }
+  }
+
+  /// Whether this phone has a vendor autostart switch worth pointing at.
+  Future<bool> hasAutostartSettings() async =>
+      await _background?.hasAutostartSettings() ?? false;
+
+  Future<bool> openAutostartSettings() async =>
+      await _background?.openAutostartSettings() ?? false;
+
+  Future<void> _saveContinuous() async {
+    try {
+      await _settingsStore.save(_continuous);
+    } on Object catch (error) {
+      // Still on for this run; it is only forgotten across a restart.
+      debugPrint('Could not save the always-listening setting: $error');
+    }
+  }
+
+  /// Remembers [device] as the one to reach after a restart.
+  ///
+  /// Only while always-listening is on: nothing else reconnects by itself, and
+  /// turning it on records the device connected at that moment anyway.
+  Future<void> _rememberDevice(DiscoveredDevice device) async {
+    if (!_continuous.enabled) return;
+    if (_continuous.deviceId == device.id &&
+        (device.name == null || _continuous.deviceName == device.name)) {
+      return;
+    }
+    _continuous = _continuous.copyWith(
+      deviceId: device.id,
+      deviceName: device.name,
+    );
+    await _saveContinuous();
+  }
+
+  /// Makes the link always-listening wants, if it is not there: a session on a
+  /// link that is up, or a reconnect attempt when there is none.
+  void _ensureContinuousLink() {
+    if (!_continuous.enabled || !_initialised) return;
+    final device = _connectedDevice;
+    if (device != null) {
+      if (_session == null && _phase != AppPhase.connecting) {
+        unawaited(_startContinuousSession(device.id));
+      }
+      return;
+    }
+    if (_reconnectTimer == null && _phase != AppPhase.connecting) {
+      _scheduleReconnect();
+    }
+  }
+
+  /// Schedules the next attempt to reach the remembered device - see
+  /// [ReconnectBackoff] for the waits and why.
+  ///
+  /// Only while it can succeed: on, a device remembered, no link and none
+  /// being made, and the radio on. Bluetooth coming back calls this again.
+  void _scheduleReconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    if (!_continuous.enabled ||
+        _continuous.deviceId == null ||
+        _connectedDevice != null ||
+        _phase == AppPhase.connecting ||
+        _availability != BleAvailability.poweredOn) {
+      return;
+    }
+    final delay = ReconnectBackoff.delayFor(_reconnectAttempt++);
+    _reconnectTimer = Timer(delay, () {
+      _reconnectTimer = null;
+      unawaited(_reconnect());
+    });
+  }
+
+  Future<void> _reconnect() async {
+    final id = _continuous.deviceId;
+    if (!_continuous.enabled ||
+        id == null ||
+        _connectedDevice != null ||
+        _phase == AppPhase.connecting ||
+        _availability != BleAvailability.poweredOn) {
+      return;
+    }
+    try {
+      // Without the permission there is nothing to retry: the next time the
+      // app is opened, [appForegrounded] tries again and the OS can ask.
+      if (!await _transport.ensurePermissions()) return;
+    } on BleTransportException {
+      _scheduleReconnect();
+      return;
+    }
+    await _connect(
+      DiscoveredDevice(id: id, name: _continuous.deviceName),
+      automatic: true,
+    );
+  }
+
+  Future<void> _startContinuousSession(String deviceId) async {
+    if (!_continuous.enabled ||
+        _session != null ||
+        _captureSupported != true ||
+        _recorder.isRecording) {
+      _syncBackground();
+      notifyListeners();
+      return;
+    }
+    // THE FRAME SUBSCRIPTION IS EXCLUSIVE. A mic check and the diagnostics link
+    // view stand down; the session is what the user asked for.
+    _tests.cancel();
+    await _linkMonitor.stop();
+    final session = ContinuousSession(
+      transport: _transport,
+      fileStore: _fileStore,
+      directory: _recordingsDirectory,
+      keepaliveInterval: _continuousKeepalive,
+    );
+    _session = session;
+    _sessionChanges = session.changes.listen((_) {
+      _syncBackground();
+      notifyListeners();
+    });
+    _sessionNotes = session.notes.listen(_onNoteChange);
+    try {
+      await session.start(deviceId, requestCodec: _preferredCodec);
+    } on ContinuousSessionException catch (error) {
+      debugPrint('Always listening could not start: $error');
+      if (identical(_session, session)) await _stopContinuousSession(linkUp: true);
+      return;
+    }
+    // Stopped while it was starting - the link dropped, or the user turned it
+    // off - so this one must not be left running.
+    if (!identical(_session, session)) {
+      await session.stop(linkUp: false);
+      await session.dispose();
+      return;
+    }
+    _syncBackground();
+    notifyListeners();
+  }
+
+  /// Ends the session, closing and keeping its open note. [linkUp] as in
+  /// [ContinuousSession.stop].
+  Future<void> _stopContinuousSession({required bool linkUp}) async {
+    final session = _session;
+    if (session == null) return;
+    _session = null;
+    // Stopped BEFORE the listeners go, so the note it closes still reaches the
+    // library and the transcription queue.
+    await session.stop(linkUp: linkUp);
+    await _sessionChanges?.cancel();
+    _sessionChanges = null;
+    await _sessionNotes?.cancel();
+    _sessionNotes = null;
+    await session.dispose();
+    notifyListeners();
+  }
+
+  void _onNoteChange(NoteChange change) {
+    switch (change.kind) {
+      case NoteChangeKind.started:
+      case NoteChangeKind.discarded:
+        unawaited(refreshLibrary());
+      case NoteChangeKind.finished:
+        unawaited(
+          refreshLibrary().then((_) => _enqueueFinished(change.path)),
+        );
+    }
+  }
+
+  /// Keeps the Android foreground service in step with [continuousStatus]:
+  /// running exactly while always-listening is on, and saying what it is
+  /// doing. The platform is only called when the text actually changes.
+  void _syncBackground() {
+    final background = _background;
+    if (background == null) return;
+    if (!_continuous.enabled) {
+      if (_backgroundText != null) {
+        _backgroundText = null;
+        unawaited(background.stop());
+      }
+      return;
+    }
+    final text = continuousStatus.label;
+    if (text == _backgroundText) return;
+    _backgroundText = text;
+    unawaited(background.start(title: 'voiceNotetaker', text: text));
+  }
+
   Future<void> startRecording() async {
     final device = _connectedDevice;
-    if (device == null || isRecording) return;
+    // Not while always-listening: notes are already being made, from the same
+    // single frame subscription.
+    if (device == null || isRecording || _session != null) return;
     _errorMessage = null;
+    // A device that knows about speech-only is told to stream everything, which
+    // is what a recording the user started expects.
+    if (_captureSupported == true) {
+      try {
+        await _transport.writeCapture(device.id, CaptureCommand.gateDisabled);
+      } on BleTransportException {
+        // Its default after a connect is the same, so the capture still works.
+      }
+    }
     _level = null;
     final path = _fileStore.join(
       _recordingsDirectory,
@@ -1281,6 +1824,7 @@ class AppController extends ChangeNotifier {
     // started.
     await refreshLibrary();
     _setPhase(_connectedDevice == null ? AppPhase.idle : AppPhase.connected);
+    unawaited(_enqueueFinished(_lastRecording!.path));
   }
 
   /// Re-reads the recordings directory.
@@ -1309,6 +1853,14 @@ class AppController extends ChangeNotifier {
   /// transcript caches and the published list - and any one of them left
   /// pointing at a deleted path is the orphan entry.
   Future<void> deleteRecording(RecordingInfo recording) async {
+    // The note always-listening is writing has an open file behind it; it can
+    // be deleted once it is finished.
+    if (recording.path == writingNotePath) {
+      _errorMessage = 'This note is still being written.';
+      notifyListeners();
+      return;
+    }
+    _queue.remove(recording.path);
     if (_nowPlaying?.path == recording.path) {
       await stopPlayback();
       _nowPlaying = null;
@@ -1454,6 +2006,9 @@ class AppController extends ChangeNotifier {
 
   /// The awaitable half of [dispose].
   Future<void> teardown() async {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    await _stopContinuousSession(linkUp: false);
     await _transcription?.cancel();
     await _scanSubscription?.cancel();
     _scanSubscription = null;

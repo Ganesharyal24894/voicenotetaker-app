@@ -61,6 +61,10 @@ class InMemoryFileStore implements FileStore {
       put(path, bytes);
 
   @override
+  Future<void> patchBytes(String path, int offset, List<int> bytes) async =>
+      files[path]!.setRange(offset, offset + bytes.length, bytes);
+
+  @override
   Future<bool> exists(String path) async => files.containsKey(path);
 
   @override
@@ -379,6 +383,44 @@ void main() {
         recordings.firstWhere((r) => r.path == broken).duration,
         isNull,
       );
+    });
+  });
+
+  group('transcripts beside the recordings', () {
+    test('the listing says which recordings have a transcript or a failure',
+        () async {
+      final done = seed(DateTime(2026, 9, 10, 9, 14));
+      final failed = seed(DateTime(2026, 9, 10, 10, 14));
+      final untouched = seed(DateTime(2026, 9, 10, 11, 14));
+      store.put(RecordingNaming.transcriptPathOf(done), <int>[]);
+      store.put(RecordingNaming.transcriptFailurePathOf(failed), <int>[]);
+
+      final list = await library.refresh();
+      RecordingInfo of(String path) => list.singleWhere((r) => r.path == path);
+
+      expect(list, hasLength(3));
+      expect(of(done).hasTranscript, isTrue);
+      expect(of(done).transcriptFailed, isFalse);
+      expect(of(failed).transcriptFailed, isTrue);
+      expect(of(untouched).hasTranscript, isFalse);
+      expect(of(untouched).transcriptFailed, isFalse);
+    });
+
+    test('the failure marker is named beside the recording', () {
+      expect(
+        RecordingNaming.transcriptFailurePathOf('$dir/voicenote-1.wav'),
+        '$dir/voicenote-1.transcript-failed.json',
+      );
+    });
+
+    test('delete removes the failure marker with the recording', () async {
+      final path = seed(DateTime(2026, 9, 10, 9, 14));
+      store.put(RecordingNaming.transcriptFailurePathOf(path), <int>[1]);
+      await library.refresh();
+
+      await library.delete(path);
+
+      expect(store.files, isEmpty);
     });
   });
 

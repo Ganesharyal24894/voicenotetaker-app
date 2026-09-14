@@ -61,6 +61,14 @@ abstract class FileStore {
 
   Future<void> writeBytes(String path, List<int> bytes);
 
+  /// Overwrites [bytes] at [offset] in the EXISTING file at [path], without
+  /// truncating it or reading it into memory.
+  ///
+  /// For repairing the length fields of a WAV header left behind by a capture
+  /// the app was killed in the middle of - a file that can be a hundred
+  /// megabytes long.
+  Future<void> patchBytes(String path, int offset, List<int> bytes);
+
   Future<bool> exists(String path);
 
   Future<void> delete(String path);
@@ -122,6 +130,23 @@ class IoFileStore implements FileStore {
     final file = File(path);
     await file.parent.create(recursive: true);
     await file.writeAsBytes(bytes, flush: true);
+  }
+
+  @override
+  Future<void> patchBytes(String path, int offset, List<int> bytes) async {
+    if (offset < 0) {
+      throw ArgumentError.value(offset, 'offset', 'must be >= 0');
+    }
+    // `append` opens read-write WITHOUT truncating; unlike O_APPEND, Dart still
+    // honours `setPosition` for the write.
+    final handle = await File(path).open(mode: FileMode.append);
+    try {
+      await handle.setPosition(offset);
+      await handle.writeFrom(bytes);
+      await handle.flush();
+    } finally {
+      await handle.close();
+    }
   }
 
   @override

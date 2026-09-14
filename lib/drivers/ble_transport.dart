@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import '../model/audio_codec.dart';
 import '../model/battery_status.dart';
+import '../model/capture_flags.dart';
 import '../model/device_state.dart';
 import '../model/die_temperature.dart';
 import '../model/stream_info.dart';
@@ -106,6 +107,32 @@ abstract class BleTransport {
   Stream<DieTemperature> subscribeDieTemperature(String deviceId);
 
   Future<void> unsubscribeDieTemperature(String deviceId);
+
+  /// Whether the connected firmware has the `fe08` capture characteristic.
+  ///
+  /// Answered from the service discovery [connect] already did, so it costs no
+  /// radio time. False for a device that is not connected. This is how the app
+  /// tells "needs a firmware update" apart from a read that merely failed.
+  Future<bool> supportsCapture(String deviceId);
+
+  /// Reads the `fe08` capture state once.
+  ///
+  /// Always-listening calls this every minute as its keep-alive: the firmware
+  /// drops a link with no GATT activity from the phone for ten minutes.
+  /// Throws [BleTransportException] when the characteristic is absent or the
+  /// value is not the one byte the protocol defines.
+  Future<CaptureFlags> readCapture(String deviceId);
+
+  /// Writes one [CaptureCommand] byte to `fe08`.
+  Future<void> writeCapture(String deviceId, CaptureCommand command);
+
+  /// Subscribes to `fe08` and emits each notification, parsed.
+  ///
+  /// A malformed notification arrives as an error on the stream rather than as
+  /// a made-up value, exactly as [subscribeBattery] does.
+  Stream<CaptureFlags> subscribeCapture(String deviceId);
+
+  Future<void> unsubscribeCapture(String deviceId);
 
   /// Signal strength of the LIVE link to [deviceId], in dBm.
   ///

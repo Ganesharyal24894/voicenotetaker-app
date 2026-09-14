@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'controller/app_controller.dart';
 import 'drivers/app_directories.dart';
 import 'drivers/audio_player_just_audio.dart';
+import 'drivers/background_mode_channel.dart';
 import 'drivers/ble_transport_universal.dart';
 import 'drivers/file_store.dart';
 import 'drivers/platform_settings_channel.dart';
@@ -38,6 +41,10 @@ Future<void> main() async {
     fileStore: fileStore,
     audioPlayer: JustAudioPlayer(),
     platformSettings: const MethodChannelPlatformSettings(),
+    backgroundMode: const MethodChannelBackgroundMode(),
+    // App data, not the user's documents: which device to reach, and whether
+    // to keep listening.
+    settingsDirectory: support,
     transcriptionService: TranscriptionService(
       fileStore: fileStore,
       models: SpeechModelStore(
@@ -65,7 +72,20 @@ class _VoiceNotetakerAppState extends State<VoiceNotetakerApp> {
   @override
   void initState() {
     super.initState();
-    widget.controller.initialise();
+    unawaited(_start());
+  }
+
+  /// Starts the controller, then tells it the app is on screen.
+  ///
+  /// Only when it really is: on Android the engine can also be started with no
+  /// activity at all, by the always-listening service after the system killed
+  /// the process, and nothing heavy may start then. A resume that arrives
+  /// later reaches the controller through `AppRoot`.
+  Future<void> _start() async {
+    await widget.controller.initialise();
+    if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+      await widget.controller.appForegrounded();
+    }
   }
 
   @override

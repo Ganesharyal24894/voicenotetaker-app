@@ -159,4 +159,34 @@ void main() {
       expect(library.current, isEmpty);
     });
   });
+
+  group('saved failures', () {
+    test('a failure comes back as the status it was saved with', () async {
+      final files = InMemoryFileStore();
+      final store = TranscriptStore(fileStore: files);
+
+      await store.saveFailure(_wav, TranscriptStatus.unsupported);
+      expect(await store.loadFailure(_wav), TranscriptStatus.unsupported);
+
+      await store.saveFailure(_wav, TranscriptStatus.failed);
+      expect(await store.loadFailure(_wav), TranscriptStatus.failed);
+    });
+
+    test('none saved, cleared, or damaged all read as no failure', () async {
+      final files = InMemoryFileStore();
+      final store = TranscriptStore(fileStore: files);
+      expect(await store.loadFailure(_wav), isNull);
+
+      await store.saveFailure(_wav, TranscriptStatus.failed);
+      await store.clearFailure(_wav);
+      expect(await store.loadFailure(_wav), isNull);
+
+      files.put(RecordingNaming.transcriptFailurePathOf(_wav),
+          utf8.encode('{"status": "done"}'));
+      expect(await store.loadFailure(_wav), isNull);
+      files.put(RecordingNaming.transcriptFailurePathOf(_wav),
+          utf8.encode('garbage'));
+      expect(await store.loadFailure(_wav), isNull);
+    });
+  });
 }

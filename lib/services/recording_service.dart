@@ -8,7 +8,7 @@ import '../model/audio_frame.dart';
 import '../model/level_reading.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
-import 'codec/adpcm_decoder.dart';
+import 'codec/frame_decoder.dart';
 import 'frame_reassembler.dart';
 import 'level_meter.dart';
 import 'wav_writer.dart';
@@ -252,17 +252,8 @@ class RecordingService {
     _emitStats();
   }
 
-  Uint8List _decode(AudioFrame frame) {
-    switch (_streamInfo!.codec!) {
-      case AudioCodec.pcmS16le:
-        // Already s16le on the wire, merely split across notifications.
-        return frame.payload;
-      case AudioCodec.imaAdpcm:
-        // One self-contained block per notification, so a dropped packet costs
-        // exactly one block and never desyncs the decoder.
-        return AdpcmDecoder.decodeBlockToPcmBytes(frame.payload);
-    }
-  }
+  Uint8List _decode(AudioFrame frame) =>
+      FrameDecoder.decode(_streamInfo!.codec!, frame);
 
   void _emitStats() {
     if (!_statsController.isClosed) {
