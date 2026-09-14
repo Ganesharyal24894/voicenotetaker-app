@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../drivers/audio_player.dart';
 import '../drivers/background_mode.dart';
+import '../drivers/ble_pairing.dart';
 import '../drivers/ble_transport.dart';
 import '../drivers/file_store.dart';
 import '../drivers/haptics.dart';
@@ -27,6 +28,9 @@ import '../model/level_reading.dart';
 import '../model/link_health.dart';
 import '../model/not_saving_alert.dart';
 import '../model/notes_saving.dart';
+import '../model/pairing_outcome.dart';
+import '../model/device_profile.dart';
+import '../model/recorder_pairing.dart';
 import '../model/phone_power.dart';
 import '../model/recording_info.dart';
 import '../model/reconnect_backoff.dart';
@@ -45,6 +49,8 @@ import '../services/continuous/note_writer.dart';
 import '../services/device_test_service.dart';
 import '../services/device_test_store.dart';
 import '../services/link_monitor.dart';
+import '../services/pairing/pairing_service.dart';
+import '../services/pairing/pairing_store.dart';
 import '../services/library_service.dart';
 import '../services/recording_service.dart';
 import '../services/transcription/speaker_names_store.dart';
@@ -106,6 +112,7 @@ class AppController extends ChangeNotifier {
   AppController({
     required BleTransport transport,
     required FileStore fileStore,
+    BlePairing? pairing,
     required this._recordingsDirectory,
     RecordingService? recordingService,
     LibraryService? libraryService,
@@ -133,6 +140,16 @@ class AppController extends ChangeNotifier {
         _injectedTests = deviceTestService,
         _injectedLinkMonitor = linkMonitor,
         _transport = transport,
+        _pairingService = pairing == null
+            ? null
+            : PairingService(
+                driver: pairing,
+                store: PairingStore(
+                  fileStore: fileStore,
+                  directory: settingsDirectory ?? _recordingsDirectory,
+                ),
+                clock: clock,
+              ),
         _fileStore = fileStore,
         _player = audioPlayer,
         _settings = platformSettings,
@@ -169,6 +186,10 @@ class AppController extends ChangeNotifier {
 
   final BleTransport _transport;
   final FileStore _fileStore;
+
+  /// Pairing to one phone. Null in a build without it - every test that is
+  /// not about pairing - which connects exactly as the app did before.
+  final PairingService? _pairingService;
   final String _recordingsDirectory;
   final RecordingService _recorder;
   final LibraryService _library;
@@ -1036,6 +1057,7 @@ class AppController extends ChangeNotifier {
   /// Reads the adapter state and starts following it.
   Future<void> initialise() async {
     _continuous = await _settingsStore.load();
+    await _pairingService?.load();
     _autoDeleteAudio = await _retentionSettings.loadAutoDeleteAudio();
     _transcriptionLanguage = await _transcriptionSettings.loadLanguage();
     // BEFORE the library is read: a note or a capture the app was killed in
@@ -1203,10 +1225,21 @@ class AppController extends ChangeNotifier {
     _setPhase(AppPhase.scanning);
     _scanSubscription = _transport.scan().listen(
       (device) {
-        if (!_devices.contains(device)) {
+        // A later result for the same recorder can add its scan response - the
+        // pairing status - so it replaces the card rather than being dropped.
+        final index = _devices.indexOf(device);
+        if (index < 0) {
           _devices.add(device);
           notifyListeners();
+        } else {
+          final merged = _devices[index].mergedWith(device);
+          if (merged.differsFrom(_devices[index])) {
+            _devices[index] = merged;
+            notifyListeners();
+          }
+          device = merged;
         }
+        _connectIfPairingWindowOpen(device);
       },
       // The stream closing IS the end of the scan window - the transport owns
       // the clock, see `BleTransport.scanWindow`. The controller therefore
@@ -1223,6 +1256,11 @@ class AppController extends ChangeNotifier {
   /// outcome [ScanOutcome.pending].
   Future<void> _closeScanWindow() async {
     if (_phase != AppPhase.scanning) return;
+    if (_lookingForPairingWindow) {
+      // "I've done that", and no recorder in range showed its window open.
+      _lookingForPairingWindow = false;
+      _pairingWindowMissed = true;
+    }
     final foundNothing = _devices.isEmpty;
     await stopScan();
     _scanOutcome =
@@ -1244,7 +1282,20 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> connect(DiscoveredDevice device) => _connect(device);
+  Future<void> connect(DiscoveredDevice device) async {
+    // Android knows its own bonds, so a recorder paired to another phone needs
+    // no radio time to say so: straight to the charger instructions. iOS
+    // cannot know (a reinstalled app on the owner's phone looks the same), so
+    // it tries once - the recorder refuses a stranger within milliseconds.
+    if (device.bonded != null &&
+        pairingOf(device) == RecorderPairing.pairedToAnother) {
+      await stopScan();
+      _lastDevice = device;
+      _showPairingProblem(device, PairingOutcome.notOwner);
+      return;
+    }
+    await _connect(device);
+  }
 
   /// [automatic] is always-listening reaching for the remembered device: a
   /// failure then is not an error screen, only the next attempt scheduled.
@@ -1256,7 +1307,11 @@ class AppController extends ChangeNotifier {
     // when the attempt is what failed.
     _lastDevice = device;
     _linkOutcome = LinkOutcome.none;
+    _pairingProblem = null;
+    _lookingForPairingWindow = false;
+    _pairingWindowMissed = false;
     _setPhase(AppPhase.connecting);
+    final attempt = await _pairingService?.begin(device);
     try {
       if (automatic) {
         await _transport.connect(
@@ -1267,9 +1322,13 @@ class AppController extends ChangeNotifier {
         await _transport.connect(device.id);
       }
     } on BleTransportException catch (e) {
+      final outcome = await attempt?.connectFailed(e);
       if (automatic) {
-        _setPhase(AppPhase.idle);
-        _scheduleReconnect();
+        _automaticAttemptFailed(outcome);
+        return;
+      }
+      if (outcome != null && outcome.isPairingProblem) {
+        _showPairingProblem(device, outcome);
         return;
       }
       // The recorder was found and the handshake did not complete. That is a
@@ -1278,6 +1337,33 @@ class AppController extends ChangeNotifier {
       _linkOutcome = LinkOutcome.connectFailed;
       _fail(e.message);
       return;
+    }
+    if (attempt != null) {
+      // Bond (Android) and read `fe02` before anything else touches the
+      // recorder: every value needs encryption, so this is where a stranger,
+      // a stale key or a cancelled prompt shows up - once, and classified.
+      final outcome = await attempt.afterConnect();
+      if (outcome != PairingOutcome.success) {
+        try {
+          await _transport.disconnect(device.id);
+        } on BleTransportException {
+          // The recorder has usually dropped the link already.
+        }
+        if (automatic) {
+          _automaticAttemptFailed(outcome);
+          return;
+        }
+        if (outcome.isPairingProblem) {
+          _showPairingProblem(device, outcome);
+          return;
+        }
+        _linkOutcome = LinkOutcome.connectFailed;
+        _fail("Couldn't pair with the recorder.");
+        return;
+      }
+      _refusedIds.remove(device.id.toLowerCase());
+      _pairingRefusals = 0;
+      _refusal = null;
     }
     _connectedDevice = device;
     _connectionSubscription =
@@ -1291,7 +1377,12 @@ class AppController extends ChangeNotifier {
     });
     _setPhase(AppPhase.connected);
     _reconnectAttempt = 0;
-    await _rememberDevice(device);
+    final ownerId = attempt?.ownerId;
+    await _rememberDevice(
+      ownerId == null
+          ? device
+          : DiscoveredDevice(id: ownerId, name: device.name),
+    );
     // From the discovery the connect already did - no radio time. This is what
     // tells old firmware ("needs a firmware update") from a read that failed.
     try {
@@ -1951,6 +2042,134 @@ class AppController extends ChangeNotifier {
       await _settings?.openAppSettings() ?? false;
 
   // -------------------------------------------------------------------------
+  // PAIRING TO ONE PHONE
+  //
+  // The recorder bonds with one phone. Its scan response says whether it has
+  // an owner and whether its pairing window is open; a phone that is not the
+  // owner is refused right after connecting. The flow itself is
+  // [PairingService] and `model/pairing_flow.dart`; this keeps what the
+  // screens show and what always-listening does about a refusal.
+  //
+  // Without a pairing driver none of this runs and every recorder is
+  // [RecorderPairing.legacy].
+  // -------------------------------------------------------------------------
+
+  /// The pairing problem the scan screen is showing, or null.
+  PairingOutcome? _pairingProblem;
+
+  /// "I've done that" was tapped: the scan is looking for a recorder whose
+  /// pairing window is open.
+  bool _lookingForPairingWindow = false;
+
+  /// The last such scan ended without seeing one.
+  bool _pairingWindowMissed = false;
+
+  /// Recorders that refused this phone since the app started (lower-cased).
+  /// Outranks a stale bond the OS still lists.
+  final Set<String> _refusedIds = <String>{};
+
+  /// Automatic attempts in a row that ended in a pairing problem.
+  int _pairingRefusals = 0;
+
+  /// What always-listening says while the recorder keeps refusing.
+  ContinuousStatus? _refusal;
+
+  /// Why the scan screen shows the pairing instructions or the Bluetooth
+  /// settings advice instead of the list; null when it does not. Only ever
+  /// [PairingOutcome.notOwner], [PairingOutcome.needsPairingWindow] or
+  /// [PairingOutcome.staleBond].
+  PairingOutcome? get pairingProblem => _pairingProblem;
+
+  /// True while "I've done that" is scanning for the open window.
+  bool get lookingForPairingWindow => _lookingForPairingWindow;
+
+  /// True when that scan ended without finding it.
+  bool get pairingWindowMissed => _pairingWindowMissed;
+
+  /// Whether this app supports pairing at all (a pairing driver was given).
+  bool get pairingSupported => _pairingService != null;
+
+  /// How [device] stands with this phone, for its card.
+  RecorderPairing pairingOf(DiscoveredDevice device) =>
+      _pairingService?.stateOf(
+        device,
+        refusedHere: _refusedIds.contains(device.id.toLowerCase()),
+      ) ??
+      RecorderPairing.legacy;
+
+  /// The recorder Settings is about: the one connected, else the remembered
+  /// one.
+  String? get _settingsRecorderId =>
+      _connectedDevice?.id ?? _continuous.deviceId;
+
+  /// Whether this phone is the recorder's owner, as far as the app knows.
+  bool get pairedToThisPhone {
+    final id = _settingsRecorderId;
+    return id != null && (_pairingService?.isOwner(id) ?? false);
+  }
+
+  /// When this phone paired with that recorder, if known.
+  DateTime? get pairedSince {
+    final id = _settingsRecorderId;
+    return id == null ? null : _pairingService?.pairedSince(id);
+  }
+
+  void _showPairingProblem(DiscoveredDevice device, PairingOutcome outcome) {
+    if (outcome.needsCharger) _refusedIds.add(device.id.toLowerCase());
+    _pairingProblem = outcome;
+    _errorMessage = null;
+    _setPhase(AppPhase.idle);
+  }
+
+  /// An automatic (always-listening) attempt failed with [outcome]; null when
+  /// no pairing driver classified it.
+  void _automaticAttemptFailed(PairingOutcome? outcome) {
+    if (outcome != null && outcome.isPairingProblem) {
+      _pairingRefusals++;
+      _refusal = outcome.needsCharger
+          ? ContinuousStatus.pairedToAnother
+          : ContinuousStatus.oldPairing;
+      _syncBackground();
+    }
+    _setPhase(AppPhase.idle);
+    _scheduleReconnect();
+  }
+
+  /// "I've done that": scans for a recorder with its pairing window open and
+  /// connects to it as soon as one shows up.
+  Future<void> retryPairing() async {
+    _pairingWindowMissed = false;
+    _lookingForPairingWindow = true;
+    notifyListeners();
+    await startScan();
+    if (!isScanning) {
+      _lookingForPairingWindow = false;
+      notifyListeners();
+    }
+  }
+
+  /// The user left the pairing screen - "Not now".
+  Future<void> dismissPairingProblem() async {
+    final looking = _lookingForPairingWindow;
+    _pairingProblem = null;
+    _lookingForPairingWindow = false;
+    _pairingWindowMissed = false;
+    if (looking) {
+      await stopScan();
+    } else {
+      notifyListeners();
+    }
+  }
+
+  void _connectIfPairingWindowOpen(DiscoveredDevice device) {
+    if (!_lookingForPairingWindow) return;
+    if (device.name != DeviceProfile.advertisedName) return;
+    if (device.pairing?.windowOpen != true) return;
+    _lookingForPairingWindow = false;
+    unawaited(_connect(device));
+  }
+
+  // -------------------------------------------------------------------------
   // ALWAYS LISTENING
   //
   // The user wears the device all day and notes appear by themselves. The
@@ -1978,6 +2197,12 @@ class AppController extends ChangeNotifier {
   Timer? _reconnectTimer;
   int _reconnectAttempt = 0;
 
+  Duration? _scheduledReconnectDelay;
+
+  /// The wait before the reconnect attempt most recently scheduled.
+  @visibleForTesting
+  Duration? get scheduledReconnectDelay => _scheduledReconnectDelay;
+
   /// What the notification says now; null while the service is not running.
   String? _backgroundText;
 
@@ -1998,6 +2223,7 @@ class AppController extends ChangeNotifier {
         connected: isConnected,
         captureSupported: _captureSupported,
         flags: _session?.flags,
+        refused: _refusal,
       );
 
   /// Where this recorder can keep audio by itself. Every recorder today has
@@ -2031,6 +2257,8 @@ class AppController extends ChangeNotifier {
       deviceName: device?.name,
     );
     await _saveContinuous();
+    _pairingRefusals = 0;
+    _refusal = null;
     if (enabled) {
       if (device != null) {
         await _startContinuousSession(device.id);
@@ -2135,7 +2363,11 @@ class AppController extends ChangeNotifier {
         _availability != BleAvailability.poweredOn) {
       return;
     }
-    final delay = ReconnectBackoff.delayFor(_reconnectAttempt++);
+    final delay = ReconnectBackoff.delayFor(
+      _reconnectAttempt++,
+      refusals: _pairingRefusals,
+    );
+    _scheduledReconnectDelay = delay;
     _reconnectTimer = Timer(delay, () {
       _reconnectTimer = null;
       unawaited(_reconnect());
@@ -2159,8 +2391,11 @@ class AppController extends ChangeNotifier {
       _scheduleReconnect();
       return;
     }
+    // A recorder this phone owns is reached through its bonded identity
+    // address on Android, not a private address a scan once saw.
+    final target = await _pairingService?.reconnectId(id) ?? id;
     await _connect(
-      DiscoveredDevice(id: id, name: _continuous.deviceName),
+      DiscoveredDevice(id: target, name: _continuous.deviceName),
       automatic: true,
     );
   }
@@ -2286,6 +2521,8 @@ class AppController extends ChangeNotifier {
   static String _notSavingReason(NotesSaving saving) => switch (saving) {
         NotesSaving.micOff => 'Mic off to save battery',
         NotesSaving.needsUpdate => 'Recorder needs an update',
+        NotesSaving.pairedToAnother => 'Recorder paired to another phone',
+        NotesSaving.oldPairing => 'Pairing needs a reset',
         _ => 'Recorder disconnected',
       };
 

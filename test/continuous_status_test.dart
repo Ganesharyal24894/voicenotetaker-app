@@ -96,12 +96,57 @@ void main() {
     expect(ContinuousStatus.hearingSpeech.label, 'Hearing speech');
     expect(ContinuousStatus.notConnected.label, 'Device not connected');
     expect(ContinuousStatus.needsFirmwareUpdate.label, 'Needs firmware update');
+    expect(ContinuousStatus.pairedToAnother.label, 'Paired to another phone');
+    expect(ContinuousStatus.oldPairing.label, 'Pairing needs a reset');
     for (final status in ContinuousStatus.values) {
       expect(status.label.length, lessThanOrEqualTo(24), reason: status.name);
     }
   });
 
+  test('a refusal shows only while there is no link', () {
+    expect(
+      ContinuousStatus.resolve(
+        enabled: true,
+        connected: false,
+        captureSupported: null,
+        flags: null,
+        refused: ContinuousStatus.pairedToAnother,
+      ),
+      ContinuousStatus.pairedToAnother,
+    );
+    expect(
+      ContinuousStatus.resolve(
+        enabled: true,
+        connected: true,
+        captureSupported: true,
+        flags: null,
+        refused: ContinuousStatus.pairedToAnother,
+      ),
+      ContinuousStatus.listening,
+    );
+    expect(
+      ContinuousStatus.resolve(
+        enabled: false,
+        connected: false,
+        captureSupported: null,
+        flags: null,
+        refused: ContinuousStatus.oldPairing,
+      ),
+      ContinuousStatus.off,
+    );
+  });
+
   group('ReconnectBackoff', () {
+    test('keeps its minute after one refusal, then waits ten minutes', () {
+      expect(ReconnectBackoff.delayFor(0, refusals: 1), Duration.zero);
+      expect(ReconnectBackoff.delayFor(9, refusals: 1),
+          const Duration(minutes: 1));
+      expect(ReconnectBackoff.delayFor(0, refusals: 2),
+          const Duration(minutes: 10));
+      expect(ReconnectBackoff.delayFor(40, refusals: 7),
+          ReconnectBackoff.refusedDelay);
+    });
+
     test('the first attempt is immediate', () {
       expect(ReconnectBackoff.delayFor(0), Duration.zero);
     });

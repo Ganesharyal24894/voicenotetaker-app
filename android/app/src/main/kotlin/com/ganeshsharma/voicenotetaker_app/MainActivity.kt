@@ -1,5 +1,7 @@
 package com.ganeshsharma.voicenotetaker_app
 
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -29,6 +31,7 @@ class MainActivity : FlutterActivity() {
 
     private companion object {
         const val CHANNEL = "com.ganeshsharma.voicenotetaker_app/settings"
+        const val BLUETOOTH_CHANNEL = "com.ganeshsharma.voicenotetaker_app/bluetooth"
     }
 
     override fun provideFlutterEngine(context: Context): FlutterEngine =
@@ -66,6 +69,33 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // The one Bluetooth fact `universal_ble` does not expose: which LE
+        // devices this phone is bonded with, by IDENTITY address. The recorder
+        // advertises a rotating private address, so reconnecting goes through
+        // the bonded address rather than one seen in a scan.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLUETOOTH_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "bondedDevices" ->
+                        result.success(bondedAddresses(call.argument<String>("name")))
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    /**
+     * Addresses of bonded LE devices named [name] (all bonded LE devices when
+     * null). Empty, not an error, when Bluetooth is off or BLUETOOTH_CONNECT
+     * has not been granted - the caller then falls back to the id it has.
+     */
+    private fun bondedAddresses(name: String?): List<String> = try {
+        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?)?.adapter
+        adapter?.bondedDevices.orEmpty()
+            .filter { it.type != BluetoothDevice.DEVICE_TYPE_CLASSIC }
+            .filter { name == null || it.name == name }
+            .map { it.address }
+    } catch (denied: SecurityException) {
+        emptyList()
     }
 
     /**

@@ -13,6 +13,14 @@ enum ContinuousStatus {
   /// On, and there is no link to the device right now. The app is trying.
   notConnected('Device not connected'),
 
+  /// On, no link, and the recorder keeps refusing this phone: it was paired to
+  /// another phone. Retries slow to one every 10 minutes.
+  pairedToAnother('Paired to another phone'),
+
+  /// On, no link, and this phone holds a key the recorder no longer has. Only
+  /// forgetting the recorder in the phone's Bluetooth settings fixes it.
+  oldPairing('Pairing needs a reset'),
+
   /// On and connected, but the firmware has no `fe08`. Manual recording still
   /// works; always-listening cannot.
   needsFirmwareUpdate('Needs firmware update'),
@@ -37,6 +45,9 @@ enum ContinuousStatus {
 
   /// Resolves the status from the facts the controller holds.
   ///
+  /// [refused] is [pairedToAnother] or [oldPairing] when the last automatic
+  /// attempt ended in that pairing problem; it only shows while unconnected.
+  ///
   /// [captureSupported] is null while it has not been checked yet - a link
   /// that is still coming up - which reads as "listening" rather than as a
   /// firmware problem nobody has found. [flags] is null until the device has
@@ -46,9 +57,10 @@ enum ContinuousStatus {
     required bool connected,
     required bool? captureSupported,
     required CaptureFlags? flags,
+    ContinuousStatus? refused,
   }) {
     if (!enabled) return ContinuousStatus.off;
-    if (!connected) return ContinuousStatus.notConnected;
+    if (!connected) return refused ?? ContinuousStatus.notConnected;
     if (captureSupported == false) return ContinuousStatus.needsFirmwareUpdate;
     // Muted outranks speech: a muted device cannot be hearing anything the
     // app will keep, whatever the gate bit says.

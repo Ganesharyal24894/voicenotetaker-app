@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:developer' as developer;
-import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:universal_ble/universal_ble.dart' as ub;
 
 import '../model/audio_codec.dart';
@@ -11,17 +11,47 @@ import '../model/capture_flags.dart';
 import '../model/device_profile.dart';
 import '../model/device_state.dart';
 import '../model/die_temperature.dart';
+import '../model/pairing_advert.dart';
+import '../model/pairing_outcome.dart';
 import '../model/stream_info.dart';
+import 'ble_pairing.dart';
 import 'ble_transport.dart';
 
-/// [BleTransport] backed by the `universal_ble` package.
+/// [BleTransport] and [BlePairing] backed by the `universal_ble` package.
 ///
 /// This file is the ONLY place in the app allowed to import `universal_ble`.
 /// Everything it exposes is expressed in `lib/model/` types, so swapping the
 /// package means writing a sibling of this file and changing one line in
 /// `main.dart`.
-class UniversalBleTransport implements BleTransport {
+class UniversalBleTransport implements BleTransport, BlePairing {
   UniversalBleTransport();
+
+  /// The app's own channel for what `universal_ble` does not offer: the list of
+  /// bonded devices (Android `BluetoothAdapter.getBondedDevices`), handled in
+  /// `MainActivity.kt`. iOS has no handler and no such list.
+  static const MethodChannel bluetoothChannel =
+      MethodChannel('com.ganeshsharma.voicenotetaker_app/bluetooth');
+
+  /// How recent a disconnect must be for its reason to explain a failure.
+  static const Duration dropReasonWindow = Duration(seconds: 5);
+
+  /// The reason the platform gave for the last disconnect of each device, and
+  /// when - lower-cased ids. `universal_ble` reports it only through its one
+  /// global connection callback, not through `connectionStream`.
+  final Map<String, (String, DateTime)> _dropReasons =
+      <String, (String, DateTime)>{};
+  bool _watchingDrops = false;
+
+  /// Installed on first use rather than in the constructor, so building the
+  /// transport touches no platform code.
+  void _watchDrops() {
+    if (_watchingDrops) return;
+    _watchingDrops = true;
+    ub.UniversalBle.onConnectionChange = (deviceId, connected, error) {
+      if (connected || error == null) return;
+      _dropReasons[deviceId.toLowerCase()] = (error, DateTime.now());
+    };
+  }
 
   /// Guarded so `connect` does not rediscover services on every call.
   final Set<String> _servicesDiscovered = <String>{};
@@ -110,6 +140,7 @@ class UniversalBleTransport implements BleTransport {
 
     controller = StreamController<DiscoveredDevice>(
       onListen: () async {
+        _watchDrops();
         subscription = ub.UniversalBle.scanStream.listen(
           (device) => controller.add(_mapDevice(device)),
           onError: controller.addError,
@@ -172,6 +203,8 @@ class UniversalBleTransport implements BleTransport {
     String deviceId, {
     Duration timeout = const Duration(seconds: 30),
   }) async {
+    _watchDrops();
+    _dropReasons.remove(deviceId.toLowerCase());
     try {
       await ub.UniversalBle.connect(deviceId, timeout: timeout);
       // Several platforms require an explicit discovery pass before any
@@ -743,10 +776,126 @@ class UniversalBleTransport implements BleTransport {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // PAIRING - see `BlePairing`
+  // -------------------------------------------------------------------------
+
+  @override
+  bool get systemBonds => ub.BleCapabilities.hasSystemPairingApi;
+
+  @override
+  Future<bool?> isBonded(String deviceId) async {
+    if (!systemBonds) return null;
+    try {
+      return await ub.UniversalBle.isPaired(deviceId);
+    } catch (e) {
+      _log('bond state unknown: $e');
+      return null;
+    }
+  }
+
+  @override
+  Future<void> bond(String deviceId, {required Duration timeout}) async {
+    if (!systemBonds) return;
+    try {
+      // `createBond`, then waits for `ACTION_BOND_STATE_CHANGED`. Answers at
+      // once when already bonded.
+      await ub.UniversalBle.pair(deviceId, timeout: timeout);
+    } catch (e) {
+      throw BleTransportException('could not pair with $deviceId', e);
+    }
+  }
+
+  @override
+  Future<void> secure(String deviceId, {required Duration timeout}) async {
+    try {
+      // Long enough for a person to read and accept the iOS pairing alert.
+      await ub.UniversalBle.read(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.infoCharacteristicUuid,
+        timeout: timeout,
+      );
+    } catch (e) {
+      throw BleTransportException('could not read an encrypted value', e);
+    }
+  }
+
+  @override
+  Future<List<String>> bondedRecorderIds() async {
+    if (!systemBonds) return const <String>[];
+    try {
+      final ids = await bluetoothChannel.invokeListMethod<String>(
+        'bondedDevices',
+        <String, Object?>{'name': DeviceProfile.advertisedName},
+      );
+      return ids ?? const <String>[];
+    } on PlatformException catch (e) {
+      _log('bonded devices unavailable: $e');
+      return const <String>[];
+    } on MissingPluginException {
+      return const <String>[];
+    }
+  }
+
+  @override
+  BleFailureKind describe(Object error, {required String deviceId}) {
+    var cause = error;
+    // Unwrap our own wrapper to what the platform threw.
+    while (cause is BleTransportException && cause.cause != null) {
+      cause = cause.cause!;
+    }
+    final drop = _dropReasons[deviceId.toLowerCase()];
+    final reason = drop != null &&
+            DateTime.now().difference(drop.$2) <= dropReasonWindow
+        ? drop.$1
+        : null;
+    String? code;
+    String? message;
+    String? details;
+    if (cause is ub.UniversalBleException) {
+      code = cause.code.name;
+      message = cause.message;
+      details = cause.details?.toString();
+      final inner = cause.details;
+      if (inner is PlatformException) {
+        message = '$message ${inner.message ?? ''}';
+        details = inner.details?.toString();
+      }
+    } else if (cause is PlatformException) {
+      final number = int.tryParse(cause.code);
+      if (number != null &&
+          number >= 0 &&
+          number < ub.UniversalBleErrorCode.values.length) {
+        code = ub.UniversalBleErrorCode.values[number].name;
+      }
+      message = cause.message;
+      details = cause.details?.toString();
+    } else {
+      message = cause.toString();
+    }
+    return BleFailureKind.fromError(
+      code: code,
+      message: message,
+      details: details,
+      disconnectReason: reason,
+      isTimeout: cause is TimeoutException,
+    );
+  }
+
   static DiscoveredDevice _mapDevice(ub.BleDevice device) => DiscoveredDevice(
         id: device.deviceId,
         name: device.name,
         rssi: device.rssi,
+        // From the scan response, when the platform merged it in - Android and
+        // iOS both do while scanning actively in the foreground.
+        pairing: PairingAdvert.parse(
+          device.manufacturerDataList.map(
+            (data) => (data.companyId, data.payload.toList()),
+          ),
+        ),
+        // Android reports the bond with every result; iOS leaves it null.
+        bonded: device.paired,
       );
 
   static BleAvailability _mapAvailability(ub.AvailabilityState state) =>

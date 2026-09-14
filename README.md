@@ -24,6 +24,14 @@ Fixed peripheral; the app adapts to it, never the other way around.
 | `fe03` | WRITE — 1 byte codec select |
 | `fe08` | READ/NOTIFY/WRITE — capture state: mute, speech gate (always listening; see `doc/continuous-mode.md`) |
 
+**Pairing.** Recorder firmware that pairs to one phone requires an encrypted
+link for every characteristic and advertises its status in the scan response
+(manufacturer data, company `0xFFFF`, `[0x01, flags]`: bit 0 has an owner,
+bit 1 pairing window open). The app bonds on Android, pairs on the first
+encrypted read on iOS, and shows *Paired to another phone* with the charger
+double-tap instructions when the recorder refuses it. Firmware without the
+field connects exactly as before. See `doc/pairing.md`.
+
 **Every notification** starts with a 2-byte little-endian sequence number,
 followed by the payload. Gaps in that sequence are packets dropped on the link
 and are counted separately from audio quality, so a bad radio environment is
@@ -99,6 +107,9 @@ lib/
                                            first, with real metadata; delete
                  level_meter.dart          peak / RMS dBFS of the PCM the
                                            app already decodes
+                 pairing/                  pairing to one phone: bond, secure,
+                                           remembered owners. See
+                                           doc/pairing.md
                  continuous/               always listening: one session per
                                            link, speech -> notes, settings.
                                            See doc/continuous-mode.md
@@ -120,6 +131,7 @@ lib/
                                        contrast rule that governs them
                  app_root.dart         picks the screen from the device state
                  scan_view.dart        1. scan / pair
+                 pair_new_phone_view.dart  "Pair a new phone" (from Settings)
                  home_view.dart        2. home
                  recording_view.dart   3. capture in progress
                  all_notes_view.dart   4. all notes (see doc/notes.md)

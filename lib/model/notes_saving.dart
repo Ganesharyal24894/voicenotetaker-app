@@ -35,12 +35,22 @@ enum NotesSaving {
   disconnected,
 
   /// The recorder's firmware cannot always-listen.
-  needsUpdate;
+  needsUpdate,
+
+  /// No link: the recorder is paired to another phone.
+  pairedToAnother,
+
+  /// No link: this phone's pairing with the recorder is stale.
+  oldPairing;
 
   /// Notes are being lost and the wearer did not choose it: what the alert
   /// buzzes for.
   bool get isLosingNotes =>
-      this == micOff || this == disconnected || this == needsUpdate;
+      this == micOff ||
+      this == disconnected ||
+      this == needsUpdate ||
+      this == pairedToAnother ||
+      this == oldPairing;
 
   /// Notes are being kept somewhere.
   bool get isSaving => this == saving || this == savingOnRecorder;
@@ -57,6 +67,8 @@ enum NotesSaving {
         ContinuousStatus.muted => NotesSaving.muted,
         ContinuousStatus.micOff => NotesSaving.micOff,
         ContinuousStatus.needsFirmwareUpdate => NotesSaving.needsUpdate,
+        ContinuousStatus.pairedToAnother => NotesSaving.pairedToAnother,
+        ContinuousStatus.oldPairing => NotesSaving.oldPairing,
         ContinuousStatus.notConnected => storage == RecorderStorage.card
             ? NotesSaving.savingOnRecorder
             : NotesSaving.disconnected,

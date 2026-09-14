@@ -27,9 +27,23 @@ abstract final class ReconnectBackoff {
   static const Duration attemptTimeout = Duration(seconds: 20);
 
   /// The wait before attempt number [attempt], counting from zero.
-  static Duration delayFor(int attempt) {
+  ///
+  /// [refusals] is how many attempts in a row ended in a PAIRING problem - the
+  /// recorder paired to another phone, or a key it no longer has. Retrying
+  /// those every minute cannot succeed until someone acts on the recorder or
+  /// in the phone's settings, so from [refusalsBeforeLongWait] on the wait is
+  /// [refusedDelay]. One refusal is not enough: a first "refused" can be a
+  /// window closing or a bond settling.
+  static Duration delayFor(int attempt, {int refusals = 0}) {
+    if (refusals >= refusalsBeforeLongWait) return refusedDelay;
     if (attempt < 0) return schedule.first;
     if (attempt >= schedule.length) return schedule.last;
     return schedule[attempt];
   }
+
+  /// Refusals in a row before the long wait.
+  static const int refusalsBeforeLongWait = 2;
+
+  /// The wait once the recorder keeps refusing this phone.
+  static const Duration refusedDelay = Duration(minutes: 10);
 }

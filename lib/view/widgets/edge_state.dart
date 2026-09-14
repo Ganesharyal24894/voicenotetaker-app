@@ -39,6 +39,9 @@ class EdgeState extends StatelessWidget {
     this.onPrimary,
     this.secondaryLabel,
     this.onSecondary,
+    this.primaryEnabled = true,
+    this.footerLabel,
+    this.onFooter,
     super.key,
   })  : assert(
           (primaryLabel == null) == (onPrimary == null),
@@ -47,6 +50,10 @@ class EdgeState extends StatelessWidget {
         assert(
           (secondaryLabel == null) == (onSecondary == null),
           'a secondary action needs both a label and a callback, or neither',
+        ),
+        assert(
+          (footerLabel == null) == (onFooter == null),
+          'a footer action needs both a label and a callback, or neither',
         );
 
   /// The glyph in the well. Every edge state has one, and they differ.
@@ -63,6 +70,15 @@ class EdgeState extends StatelessWidget {
 
   final String? secondaryLabel;
   final VoidCallback? onSecondary;
+
+  /// False draws the primary button disabled - the action is already under
+  /// way ("Looking…"), rather than offered.
+  final bool primaryEnabled;
+
+  /// A quieter way out below the secondary action - "Not now" - for screens
+  /// that would otherwise leave the user nowhere to go.
+  final String? footerLabel;
+  final VoidCallback? onFooter;
 
   /// Edge of the square icon well.
   static const double wellSize = 64;
@@ -132,7 +148,7 @@ class EdgeState extends StatelessWidget {
               PrimaryButton(
                 label: primaryLabel!,
                 height: 48,
-                onPressed: onPrimary,
+                onPressed: primaryEnabled ? onPrimary : null,
               ),
             if (onSecondary != null)
               TapTarget(
@@ -141,6 +157,16 @@ class EdgeState extends StatelessWidget {
                 child: Text(
                   secondaryLabel!,
                   style: AppText.label13.copyWith(color: AppColors.purpleText),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            if (onFooter != null)
+              TapTarget(
+                onTap: onFooter,
+                semanticLabel: footerLabel,
+                child: Text(
+                  footerLabel!,
+                  style: AppText.label13.copyWith(color: AppColors.textTertiary),
                   textAlign: TextAlign.center,
                 ),
               ),

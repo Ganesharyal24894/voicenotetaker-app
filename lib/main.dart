@@ -43,8 +43,12 @@ Future<void> main() async {
   // `adb push`, later by a download) and loaded only for a transcription.
   final support = await directories.supportDirectory();
 
+  // One object behind both seams: the radio, and pairing on that radio.
+  final ble = UniversalBleTransport();
+
   final controller = AppController(
-    transport: UniversalBleTransport(),
+    transport: ble,
+    pairing: ble,
     fileStore: fileStore,
     audioPlayer: JustAudioPlayer(),
     platformSettings: const MethodChannelPlatformSettings(),

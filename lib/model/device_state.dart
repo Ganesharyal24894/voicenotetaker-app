@@ -1,3 +1,5 @@
+import 'pairing_advert.dart';
+
 /// Bluetooth adapter availability, expressed without reference to any BLE
 /// package's enum.
 enum BleAvailability {
@@ -17,12 +19,39 @@ class DiscoveredDevice {
     required this.id,
     this.name,
     this.rssi,
+    this.pairing,
+    this.bonded,
   });
 
   /// Platform-scoped identifier (MAC on Android/Linux, UUID on Apple).
   final String id;
   final String? name;
   final int? rssi;
+
+  /// The pairing status from the scan response; null when the scan result
+  /// carried none - older firmware, or a result seen without its scan response
+  /// yet, or a device made up from a remembered id.
+  final PairingAdvert? pairing;
+
+  /// Whether the OS holds a bond with this device. Android reports it with
+  /// every scan result; null where the platform cannot say (iOS).
+  final bool? bonded;
+
+  /// This device with what a later scan result added. A result without a scan
+  /// response does not erase a status already seen.
+  DiscoveredDevice mergedWith(DiscoveredDevice later) => DiscoveredDevice(
+        id: id,
+        name: later.name ?? name,
+        rssi: later.rssi ?? rssi,
+        pairing: later.pairing ?? pairing,
+        bonded: later.bonded ?? bonded,
+      );
+
+  /// Whether [other] would show differently - same id, new facts.
+  bool differsFrom(DiscoveredDevice other) =>
+      other.name != name ||
+      other.pairing != pairing ||
+      other.bonded != bonded;
 
   @override
   bool operator ==(Object other) => other is DiscoveredDevice && other.id == id;
@@ -31,7 +60,8 @@ class DiscoveredDevice {
   int get hashCode => id.hashCode;
 
   @override
-  String toString() => 'DiscoveredDevice($id, name: $name, rssi: $rssi)';
+  String toString() =>
+      'DiscoveredDevice($id, name: $name, rssi: $rssi, pairing: $pairing, bonded: $bonded)';
 }
 
 /// What became of the most recent scan WINDOW.

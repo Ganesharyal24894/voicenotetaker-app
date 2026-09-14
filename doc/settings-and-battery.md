@@ -38,7 +38,8 @@ both platforms. Back returns to Home.
 - **Audio** - *Delete audio after 24 h* (`setAutoDeleteAudio`), with *Transcripts
   are kept. Notes you mark Keep are never deleted.* Still off by default.
 - **Diagnostics** row - *Battery, connection, mic check*.
-- **Pairing** section: **omitted** until pairing is built (no placeholder).
+- **Pairing** section: shown only when this phone owns the recorder - see
+  `doc/pairing.md`.
 
 ### `fe04` both ways
 

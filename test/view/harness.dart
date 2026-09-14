@@ -8,6 +8,7 @@ import 'package:voicenotetaker_app/model/auto_sleep.dart';
 import 'package:voicenotetaker_app/controller/app_controller.dart';
 import 'package:voicenotetaker_app/drivers/audio_player.dart';
 import 'package:voicenotetaker_app/drivers/background_mode.dart';
+import 'package:voicenotetaker_app/drivers/ble_pairing.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/drivers/file_store.dart';
 import 'package:voicenotetaker_app/drivers/haptics.dart';
@@ -20,6 +21,7 @@ import 'package:voicenotetaker_app/model/capture_flags.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/model/die_temperature.dart';
 import 'package:voicenotetaker_app/model/not_saving_alert.dart';
+import 'package:voicenotetaker_app/model/pairing_outcome.dart';
 import 'package:voicenotetaker_app/model/phone_power.dart';
 import 'package:voicenotetaker_app/model/stream_info.dart';
 import 'package:voicenotetaker_app/model/transcription.dart';
@@ -128,6 +130,7 @@ class ViewHarness {
     Haptics? haptics,
     NotSavingAlertPolicy? notSavingAlert,
     String? settingsDirectory,
+    BlePairing? pairing,
   }) : transport = MockBleTransport() {
     if (recognizer != null && speechModelInstalled) installSpeechModel();
     when(() => transport.currentAvailability())
@@ -211,6 +214,7 @@ class ViewHarness {
 
     controller = AppController(
       transport: transport,
+      pairing: pairing,
       fileStore: fileStore,
       audioPlayer: audioPlayer,
       platformSettings: settings,
@@ -396,6 +400,24 @@ class ViewHarness {
     final done = controller.startScan();
     await flush(tester);
     await done;
+  }
+
+  /// Delivers one more scan result to the scan in progress - a scan response
+  /// arriving, or a pairing window opening.
+  Future<void> advertise(WidgetTester? tester, DiscoveredDevice device) async {
+    _scan?.add(device);
+    if (tester != null) {
+      await flush(tester);
+    } else {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+  }
+
+  /// Ends the scan window WITHOUT a widget tester, for controller tests.
+  Future<void> endScanWindowNow() async {
+    await _scan?.close();
+    _scan = null;
+    await Future<void>.delayed(const Duration(milliseconds: 5));
   }
 
   /// Ends the scan window, exactly as the transport does when its ten seconds
@@ -837,4 +859,57 @@ class FakePhonePower implements PhonePower {
   }
 
   Future<void> close() => _changes.close();
+}
+
+/// Pairing on a radio the test scripts: Android-like ([systemBonds] true) or
+/// iOS-like (false). Every call is recorded; failures are set per step.
+class FakeBlePairing implements BlePairing {
+  FakeBlePairing({this.systemBonds = true, this.bondedIds = const <String>{}});
+
+  @override
+  final bool systemBonds;
+
+  /// Ids the OS holds a bond with (Android).
+  Set<String> bondedIds;
+
+  /// Identity addresses [bondedRecorderIds] answers; defaults to [bondedIds].
+  List<String>? identities;
+
+  /// Thrown by [bond] / [secure] when set.
+  Object? bondError;
+  Object? secureError;
+
+  /// What [describe] answers for any error.
+  BleFailureKind failureKind = BleFailureKind.other;
+
+  final List<String> calls = <String>[];
+
+  @override
+  Future<bool?> isBonded(String deviceId) async {
+    if (!systemBonds) return null;
+    return bondedIds.contains(deviceId);
+  }
+
+  @override
+  Future<void> bond(String deviceId, {required Duration timeout}) async {
+    calls.add('bond $deviceId');
+    final error = bondError;
+    if (error != null) throw error;
+    bondedIds = <String>{...bondedIds, deviceId};
+  }
+
+  @override
+  Future<void> secure(String deviceId, {required Duration timeout}) async {
+    calls.add('secure $deviceId');
+    final error = secureError;
+    if (error != null) throw error;
+  }
+
+  @override
+  Future<List<String>> bondedRecorderIds() async =>
+      identities ?? bondedIds.toList();
+
+  @override
+  BleFailureKind describe(Object error, {required String deviceId}) =>
+      failureKind;
 }

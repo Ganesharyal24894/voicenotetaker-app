@@ -40,6 +40,9 @@ abstract final class Fmt {
     return '${then.day} ${_months[then.month - 1]}';
   }
 
+  /// A calendar date, always as a date: `2 Sep`.
+  static String dayMonth(DateTime at) => '${at.day} ${_months[at.month - 1]}';
+
   /// `Today, 09:14`.
   static String dayAndTime(DateTime at, {DateTime? now}) =>
       '${day(at, now: now)}, ${timeOfDay(at)}';

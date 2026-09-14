@@ -15,6 +15,7 @@ import 'home/summary_scope.dart';
 import 'home_view.dart';
 import 'all_notes_view.dart';
 import 'note_view.dart';
+import 'pair_new_phone_view.dart';
 import 'recording_entry.dart';
 import 'recording_view.dart';
 import 'scan_view.dart';
@@ -216,6 +217,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         controller: widget.controller,
         onBack: () => Navigator.of(context).pop(),
         onOpenDiagnostics: () => _openDiagnostics(context),
+        onPairNewPhone: () => _push(
+          context,
+          (context) =>
+              PairNewPhoneView(onBack: () => Navigator.of(context).pop()),
+        ),
         onConnect: () {
           if (mounted) setState(() => _pairing = true);
         },

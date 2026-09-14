@@ -32,7 +32,13 @@ void main() {
     test('only lost notes the wearer did not choose count as losing', () {
       expect(
         NotesSaving.values.where((s) => s.isLosingNotes).toSet(),
-        <NotesSaving>{NotesSaving.micOff, NotesSaving.disconnected, NotesSaving.needsUpdate},
+        <NotesSaving>{
+          NotesSaving.micOff,
+          NotesSaving.disconnected,
+          NotesSaving.needsUpdate,
+          NotesSaving.pairedToAnother,
+          NotesSaving.oldPairing,
+        },
       );
     });
   });

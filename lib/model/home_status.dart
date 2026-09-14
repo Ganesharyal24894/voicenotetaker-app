@@ -42,6 +42,10 @@ class HomeStatus {
         const HomeStatus('Not saving — mic off to save battery', HomeStatusTone.warning),
       NotesSaving.needsUpdate =>
         const HomeStatus('Not saving — recorder needs an update', HomeStatusTone.warning),
+      NotesSaving.pairedToAnother =>
+        const HomeStatus('Not saving — paired to another phone', HomeStatusTone.warning),
+      NotesSaving.oldPairing =>
+        const HomeStatus('Not saving — pairing needs a reset', HomeStatusTone.warning),
       NotesSaving.disconnected =>
         const HomeStatus('Not saving — recorder disconnected', HomeStatusTone.warning),
       NotesSaving.off => connected

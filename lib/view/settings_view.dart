@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import '../controller/app_controller.dart';
 import '../model/auto_sleep.dart';
 import '../model/home_status.dart';
+import 'format.dart';
+import 'pair_new_phone_view.dart';
 import 'theme.dart';
 import 'widgets/app_icons.dart';
 import 'widgets/common.dart';
@@ -13,11 +15,13 @@ import 'widgets/motion.dart';
 
 /// Recorder settings - `Settings.dc.html`.
 ///
-/// Reached from Home's status line and its menu, in every build. Three
-/// sections - Listening, Auto-sleep, Audio - and a row into Diagnostics.
+/// Reached from Home's status line and its menu, in every build. Sections -
+/// Listening, Auto-sleep, Audio, and Pairing once this phone is known to be
+/// the recorder's owner - and a row into Diagnostics.
 ///
-/// THE PAIRING SECTION ON THE CANVAS IS NOT HERE YET: pairing is a later
-/// piece of work, and a card that cannot do anything would only be clutter.
+/// PAIRING IS HIDDEN UNTIL IT MEANS SOMETHING: a recorder that does not pair
+/// (older firmware), or one this phone has not paired with, has nothing to
+/// show there.
 ///
 /// CONNECT AND DISCONNECT live under the Listening card, and only while
 /// always-listening is off - the one place the old recorder sheet offered
@@ -28,6 +32,7 @@ class SettingsView extends StatelessWidget {
     this.onBack,
     this.onOpenDiagnostics,
     this.onConnect,
+    this.onPairNewPhone,
     super.key,
   });
 
@@ -38,6 +43,9 @@ class SettingsView extends StatelessWidget {
   /// Goes to pairing; offered while nothing is connected and listening is
   /// off. Null hides it.
   final VoidCallback? onConnect;
+
+  /// Opens the "Pair a new phone" instructions. Null pushes them from here.
+  final VoidCallback? onPairNewPhone;
 
   static const String title = 'Recorder settings';
 
@@ -78,6 +86,21 @@ class SettingsView extends StatelessWidget {
                   const SizedBox(height: 16),
                   const _Section('Audio'),
                   _AudioCard(controller: controller),
+                  if (controller.pairedToThisPhone) ...<Widget>[
+                    const SizedBox(height: 16),
+                    const _Section('Pairing'),
+                    PairingCard(
+                      since: controller.pairedSince,
+                      onPairNewPhone: onPairNewPhone ??
+                          () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (context) => PairNewPhoneView(
+                                    onBack: () => Navigator.of(context).pop(),
+                                  ),
+                                ),
+                              ),
+                    ),
+                  ],
                   if (onOpenDiagnostics != null) ...<Widget>[
                     const SizedBox(height: 16),
                     _DiagnosticsRow(onTap: onOpenDiagnostics!),
@@ -120,6 +143,62 @@ class SettingsView extends StatelessWidget {
         },
       ),
     ];
+  }
+}
+
+/// "Paired to this phone", since when, and a quiet way to pair a new one.
+class PairingCard extends StatelessWidget {
+  const PairingCard({required this.onPairNewPhone, this.since, super.key});
+
+  final DateTime? since;
+  final VoidCallback onPairNewPhone;
+
+  static const String title = 'Paired to this phone';
+
+  @override
+  Widget build(BuildContext context) {
+    final since = this.since;
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          ConstrainedBox(
+            constraints:
+                const BoxConstraints(minHeight: AppShape.minTapTarget),
+            child: Row(
+              children: <Widget>[
+                const AppIcon(
+                  AppGlyph.bluetooth,
+                  size: 18,
+                  color: AppColors.purpleText,
+                  strokeWidth: 1.7,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      const Text(title, style: AppText.rowTitle),
+                      if (since != null) ...<Widget>[
+                        const SizedBox(height: 4),
+                        Text('Since ${Fmt.dayMonth(since)}', style: AppText.rowMeta),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          SheetButton(
+            label: 'Pair a new phone',
+            filled: false,
+            onPressed: onPairNewPhone,
+          ),
+        ],
+      ),
+    );
   }
 }
 

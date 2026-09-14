@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
 import '../model/device_profile.dart';
 import '../model/device_state.dart';
+import '../model/pairing_outcome.dart';
+import '../model/recorder_pairing.dart';
 import 'format.dart';
 import 'theme.dart';
 import 'widgets/app_icons.dart';
@@ -83,6 +86,7 @@ class ScanView extends StatelessWidget {
       if (i < known.length) {
         return _KnownDeviceCard(
           device: known[i],
+          pairing: controller.pairingOf(known[i]),
           connecting: connecting,
           // Only the first card carries the Hero: two of them under one tag
           // in the same route is an error, and the flight has one origin.
@@ -239,6 +243,19 @@ class ScanView extends StatelessWidget {
     // unable to use it, so it is its own fact rather than an availability.
     if (controller.permissionDenied) return _permissionState(context);
 
+    // A recorder that refused this phone, or a key it no longer has: found,
+    // and reachable, but only the user can fix it - before "Couldn't
+    // connect", which would suggest a second try helps.
+    final problem = controller.pairingProblem;
+    if (problem != null) {
+      return _EdgeState(
+        status: foundLabel(controller.devices.length),
+        child: problem == PairingOutcome.staleBond
+            ? _staleBondState()
+            : _pairingModeState(context, problem),
+      );
+    }
+
     if (controller.linkOutcome == LinkOutcome.connectFailed) {
       return _EdgeState(
         status: 'Not connected',
@@ -279,6 +296,73 @@ class ScanView extends StatelessWidget {
     }
 
     return null;
+  }
+
+  /// The charger instructions - `PairingMode.dc.html`.
+  static const String pairedToAnotherHeadline = 'Paired to another phone';
+
+  /// The same instructions for a recorder that knew this phone but will not
+  /// pair with it again until its window is open ("Forget this device" on
+  /// the phone, or replaced by another phone).
+  static const String pairAgainHeadline = 'Pair this phone again';
+
+  static const String pairingBody =
+      'Put your recorder on its charger, then double-tap it. Its light blinks '
+      "white for one minute while it's ready to pair with this phone.";
+
+  static const String pairingMissedBody =
+      "Your recorder isn't ready to pair yet. Put it on its charger, then "
+      'double-tap it. Its light blinks white for one minute.';
+
+  static const String staleBondHeadline = 'Forget the old pairing';
+
+  static const String staleBondBody =
+      "Remove the recorder from this phone's Bluetooth settings, then try "
+      'again.';
+
+  /// iOS cannot open its Bluetooth page for an app, so it says where to go.
+  static const String staleBondBodyIos =
+      "Remove the recorder from this phone's Bluetooth settings, then try "
+      'again: Settings, Bluetooth, tap \u24D8 next to voiceNotetaker, then '
+      'Forget This Device.';
+
+  Widget _pairingModeState(BuildContext context, PairingOutcome problem) {
+    final looking = controller.lookingForPairingWindow;
+    return EdgeState(
+      glyph: AppGlyph.lock,
+      // Amber: the user can fix this, with the recorder in hand.
+      tint: AppColors.warning,
+      headline: problem == PairingOutcome.notOwner
+          ? pairedToAnotherHeadline
+          : pairAgainHeadline,
+      body: controller.pairingWindowMissed ? pairingMissedBody : pairingBody,
+      primaryLabel: looking ? 'Looking…' : "I've done that",
+      primaryEnabled: !looking,
+      onPrimary: () => unawaited(controller.retryPairing()),
+      secondaryLabel: 'Why?',
+      onSecondary: () => unawaited(explainPairing(context)),
+      footerLabel: 'Not now',
+      onFooter: () => unawaited(controller.dismissPairingProblem()),
+    );
+  }
+
+  Widget _staleBondState() {
+    final android = defaultTargetPlatform == TargetPlatform.android;
+    return EdgeState(
+      glyph: AppGlyph.bluetooth,
+      tint: AppColors.warning,
+      headline: staleBondHeadline,
+      body: android ? staleBondBody : staleBondBodyIos,
+      primaryLabel: android ? 'Open Bluetooth settings' : 'Try again',
+      onPrimary: android
+          ? () => unawaited(controller.openBluetoothSettings())
+          : () => unawaited(controller.retryConnection()),
+      secondaryLabel: android ? 'Try again' : null,
+      onSecondary:
+          android ? () => unawaited(controller.retryConnection()) : null,
+      footerLabel: 'Not now',
+      onFooter: () => unawaited(controller.dismissPairingProblem()),
+    );
   }
 
   _EdgeState _permissionState(BuildContext context) {
@@ -386,16 +470,54 @@ Future<void> explainScanPermission(BuildContext context) {
   );
 }
 
+/// Answers "Why?" on the pairing screen, in two sentences.
+Future<void> explainPairing(BuildContext context) {
+  return showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(borderRadius: AppShape.card),
+      title: const Text('Why pair this way', style: AppText.title22),
+      content: const Text(
+        'Your recorder hears everything you say, so it works with one phone '
+        'only. Pairing a new phone needs the recorder in your hands, on its '
+        'charger.',
+        style: AppText.footnote12,
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close', style: AppText.label13),
+        ),
+      ],
+    ),
+  );
+}
+
+/// The words under a recorder's address, and their colour. Null for firmware
+/// that does not pair, whose card stays exactly as it was.
+(String, Color)? pairingLabel(RecorderPairing pairing) => switch (pairing) {
+      RecorderPairing.legacy => null,
+      RecorderPairing.readyToPair => ('Ready to pair', AppColors.textTertiary),
+      RecorderPairing.yours => ('Your recorder', AppColors.connected),
+      RecorderPairing.pairedToAnother =>
+        ('Paired to another phone', AppColors.warning),
+      RecorderPairing.pairingMode =>
+        ('Ready to pair with this phone', AppColors.purpleText),
+    };
+
 /// The primary card: purple hairline, the board as its mark, filled Connect.
 class _KnownDeviceCard extends StatelessWidget {
   const _KnownDeviceCard({
     required this.device,
+    required this.pairing,
     required this.connecting,
     required this.hero,
     required this.onConnect,
   });
 
   final DiscoveredDevice device;
+  final RecorderPairing pairing;
   final bool connecting;
   final bool hero;
   final VoidCallback onConnect;
@@ -433,6 +555,14 @@ class _KnownDeviceCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(device.id, style: AppText.macAddress),
+                    if (pairingLabel(pairing) case (final text, final color))
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          text,
+                          style: AppText.meta12.copyWith(color: color),
+                        ),
+                      ),
                   ],
                 ),
               ),
