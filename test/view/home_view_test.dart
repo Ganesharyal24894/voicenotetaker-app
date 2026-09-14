@@ -1,47 +1,48 @@
+import 'dart:ui' show Tristate;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/controller/app_controller.dart';
+import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
-import 'package:voicenotetaker_app/drivers/ble_transport.dart';
+import 'package:voicenotetaker_app/view/home/notes_tab.dart';
+import 'package:voicenotetaker_app/view/home/today_tab.dart';
 import 'package:voicenotetaker_app/view/home_view.dart';
-import 'package:voicenotetaker_app/view/placeholder_data.dart';
 import 'package:voicenotetaker_app/view/recording_entry.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
 import 'package:voicenotetaker_app/view/widgets/app_icons.dart';
 
 import 'harness.dart';
+import 'home_harness.dart';
 
-/// Home as the app actually mounts it.
-///
-/// The [ListenableBuilder] is not scaffolding for the test: `HomeView` is
-/// stateless and reads the controller, and in the app `AppRoot` rebuilds it on
-/// every notification. Without it here a battery notification or a disconnect
-/// would change the controller and leave the old frame on screen, and the
-/// tests below would be asserting against a view that never updates.
+/// Home as the app actually mounts it - see `homeFor`.
 Widget _home(
   ViewHarness harness, {
   VoidCallback? onOpenDiagnostics,
   VoidCallback? onOpenLibrary,
   ValueChanged<RecordingEntry>? onOpenRecording,
+  VoidCallback? onConnect,
 }) =>
-    ListenableBuilder(
-      listenable: harness.controller,
-      builder: (context, _) => HomeView(
-        controller: harness.controller,
-        recents: PlaceholderData.library(),
-        onOpenLibrary: onOpenLibrary ?? () {},
-        onOpenRecording: onOpenRecording ?? (_) {},
-        onOpenDiagnostics: onOpenDiagnostics,
-      ),
+    homeFor(
+      harness,
+      onOpenDiagnostics: onOpenDiagnostics,
+      onOpenLibrary: onOpenLibrary,
+      onOpenRecording: onOpenRecording,
+      onConnect: onConnect,
     );
+
+Future<void> _openRecorderSheet(WidgetTester tester) async {
+  await tester.tap(recorderStatusLine());
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+}
 
 void main() {
   setUpAll(registerViewFallbacks);
 
-  testWidgets('builds connected: device, state pill, record button, recents',
-      (tester) async {
+  testWidgets('two tabs under one header; Today is the default', (tester) async {
     final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
     addTearDown(harness.dispose);
 
@@ -51,10 +52,22 @@ void main() {
 
     expect(find.text('voiceNotetaker'), findsOneWidget);
     expect(find.text('Connected'), findsOneWidget);
-    expect(find.text('Tap to record'), findsOneWidget);
-    expect(find.text('RECENT'), findsOneWidget);
-    expect(find.text('All'), findsOneWidget);
-    expect(find.text('Standup notes'), findsOneWidget);
+    expect(find.bySemanticsLabel('Record'), findsOneWidget);
+    expect(find.bySemanticsLabel('Today tab'), findsOneWidget);
+    expect(find.bySemanticsLabel('Notes tab'), findsOneWidget);
+    // First run: the three steps.
+    expect(find.text(TodayEmpty.title), findsOneWidget);
+    expect(
+      tester.getSemantics(find.bySemanticsLabel('Today tab')).flagsCollection.isSelected,
+      Tristate.isTrue,
+    );
+
+    await tester.tap(find.bySemanticsLabel('Notes tab'));
+    await tester.pump();
+    expect(find.text('NOTES TODAY'), findsOneWidget);
+    // The header stays.
+    expect(find.text('voiceNotetaker'), findsOneWidget);
+    expect(find.byType(BatteryIcon), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -64,8 +77,7 @@ void main() {
 
     await pumpScreen(tester, _home(harness));
 
-    expect(find.text('Disconnected'), findsOneWidget);
-    expect(find.text('Connect a recorder to start'), findsOneWidget);
+    expect(find.text('Not connected'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -402,8 +414,8 @@ void main() {
     });
   });
 
-  group('the disconnect control', () {
-    testWidgets('is present while connected and drops the link',
+  group('the recorder sheet the status line opens', () {
+    testWidgets('holds always listening, and Disconnect while connected',
         (tester) async {
       final harness =
           ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
@@ -412,22 +424,26 @@ void main() {
       await harness.discover(tester);
       await harness.connect(tester);
       await pumpScreen(tester, _home(harness));
+      await _openRecorderSheet(tester);
 
+      expect(find.byType(AlwaysListeningCard), findsOneWidget);
       expect(find.bySemanticsLabel('Disconnect'), findsOneWidget);
+      final size = tester.getSize(find.bySemanticsLabel('Disconnect'));
+      expect(size.width, greaterThanOrEqualTo(44));
+      expect(size.height, greaterThanOrEqualTo(44));
+      expect(tester.widget<Text>(find.text('Disconnect')).style?.color, AppColors.error);
 
       await tester.tap(find.bySemanticsLabel('Disconnect'));
       await flush(tester);
+      await tester.pump(const Duration(milliseconds: 400));
 
-      // Through the controller, and it reached the transport for the device
-      // that was actually connected.
       verify(() => harness.transport.disconnect(knownDevice.id)).called(1);
       expect(harness.controller.isConnected, isFalse);
-      expect(harness.controller.connectedDevice, isNull);
       expect(harness.controller.phase, AppPhase.idle);
+      expect(find.byType(AlwaysListeningCard), findsNothing, reason: 'the sheet closed');
     });
 
-    testWidgets('leaves no stale device name or battery behind',
-        (tester) async {
+    testWidgets('leaves no stale device name or battery behind', (tester) async {
       final harness =
           ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
       addTearDown(harness.dispose);
@@ -439,37 +455,39 @@ void main() {
       await harness.connect(tester);
       await pumpScreen(tester, _home(harness));
       expect(tester.widget<BatteryIcon>(find.byType(BatteryIcon)).bars, 3);
+      expect(find.text('Charging'), findsOneWidget);
 
+      await _openRecorderSheet(tester);
       await tester.tap(find.bySemanticsLabel('Disconnect'));
       await flush(tester);
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
 
-      // The header falls back to the advertised name rather than keeping the
-      // name of a device that is no longer there, and the readings are gone.
-      expect(harness.controller.connectedDevice, isNull);
-      expect(find.text('Disconnected'), findsOneWidget);
+      expect(find.text('Not connected'), findsOneWidget);
       expect(find.text('Charging'), findsNothing);
-      // Not zero bars and not the last three: an empty shell, because there
-      // is no longer anything measuring.
       final glyph = tester.widget<BatteryIcon>(find.byType(BatteryIcon));
       expect(glyph.bars, isNull);
       expect(glyph.charging, isFalse);
       expect(find.bySemanticsLabel('Battery level unknown'), findsOneWidget);
-      expect(find.text('Connect a recorder to start'), findsOneWidget);
-      expect(harness.controller.autoSleepAvailable, isFalse);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('is absent when nothing is connected', (tester) async {
+    testWidgets('offers Connect when nothing is connected', (tester) async {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
+      var connect = false;
 
-      await pumpScreen(tester, _home(harness));
+      await pumpScreen(tester, _home(harness, onConnect: () => connect = true));
+      await _openRecorderSheet(tester);
 
       expect(find.bySemanticsLabel('Disconnect'), findsNothing);
+      await tester.tap(find.bySemanticsLabel('Connect a recorder'));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(connect, isTrue);
     });
+  });
 
-    testWidgets('clears the 44px minimum', (tester) async {
+  group('the mic in the header', () {
+    testWidgets('starts a manual recording while connected', (tester) async {
       final harness =
           ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
       addTearDown(harness.dispose);
@@ -478,187 +496,116 @@ void main() {
       await harness.connect(tester);
       await pumpScreen(tester, _home(harness));
 
-      final size = tester.getSize(find.bySemanticsLabel('Disconnect'));
+      final size = tester.getSize(find.bySemanticsLabel('Record'));
       expect(size.width, greaterThanOrEqualTo(44));
       expect(size.height, greaterThanOrEqualTo(44));
+
+      await tester.tap(find.bySemanticsLabel('Record'));
+      await flush(tester);
+
+      expect(harness.controller.phase, AppPhase.recording);
+      verify(() => harness.transport.subscribeFrames(knownDevice.id)).called(1);
+    });
+
+    testWidgets('says why, in plain words, when it cannot', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+
+      await pumpScreen(tester, _home(harness));
+      await tester.tap(find.bySemanticsLabel('Record'));
+      await tester.pump();
+
+      expect(find.text('Connect your recorder to record.'), findsOneWidget);
+      expect(harness.controller.isRecording, isFalse);
     });
   });
 
-  testWidgets('the record button starts a capture', (tester) async {
-    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
+  testWidgets('Notes: search and All notes open the library', (tester) async {
+    final harness = ViewHarness();
     addTearDown(harness.dispose);
+    var opened = 0;
 
-    await harness.discover(tester);
-    await harness.connect(tester);
-    await pumpScreen(tester, _home(harness));
-
-    await tester.tap(find.bySemanticsLabel('Record'));
-    await flush(tester);
-
-    expect(harness.controller.phase, AppPhase.recording);
-    verify(() => harness.transport.subscribeFrames(knownDevice.id)).called(1);
-  });
-
-  testWidgets('the record button is at least 44px across', (tester) async {
-    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
-    addTearDown(harness.dispose);
-
-    await harness.discover(tester);
-    await harness.connect(tester);
-    await pumpScreen(tester, _home(harness));
-
-    final size = tester.getSize(find.bySemanticsLabel('Record'));
-    expect(size.width, greaterThanOrEqualTo(44));
-    expect(size.height, greaterThanOrEqualTo(44));
-  });
-
-  testWidgets('"All" opens the library', (tester) async {
-    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
-    addTearDown(harness.dispose);
-    var opened = false;
-
-    await harness.discover(tester);
-    await harness.connect(tester);
-    await pumpScreen(tester, _home(harness, onOpenLibrary: () => opened = true));
-
-    await tester.tap(find.text('All'));
+    await pumpScreen(tester, _home(harness, onOpenLibrary: () => opened++));
+    await tester.tap(find.bySemanticsLabel('Notes tab'));
     await tester.pump();
 
-    expect(opened, isTrue);
+    await tester.tap(find.bySemanticsLabel('All notes'));
+    await tester.tap(find.bySemanticsLabel('Search notes'));
+    await tester.pump();
+    expect(opened, 2);
   });
 
-  testWidgets('a recent row opens playback for that recording',
-      (tester) async {
-    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
+  testWidgets('Notes: a row opens playback for that recording', (tester) async {
+    final now = DateTime.now();
+    final harness = ViewHarness();
     addTearDown(harness.dispose);
     RecordingEntry? opened;
+    final at = DateTime(now.year, now.month, now.day, 0, 1);
+    await harness.seedRecording(at: at);
 
-    await harness.discover(tester);
-    await harness.connect(tester);
-    await pumpScreen(
-      tester,
-      _home(harness, onOpenRecording: (entry) => opened = entry),
-    );
+    await pumpScreen(tester, _home(harness, onOpenRecording: (entry) => opened = entry));
+    await tester.tap(find.bySemanticsLabel('Notes tab'));
+    await tester.pump();
+    expect(find.byType(NotesTab), findsOneWidget);
 
-    await tester.tap(find.text('Standup notes'));
+    await tester.tap(find.text('00:01'));
     await tester.pump();
 
-    expect(opened?.title, 'Standup notes');
+    expect(opened?.title, 'Voice note 00:01');
+    expect(opened?.path, isNotNull);
   });
 
   // Two separate tests rather than two pumps in one: pumping a second screen
   // into the same position reuses the State of the first, which hides bugs.
-  testWidgets('the diagnostics entry point is absent when it is not supplied',
+  testWidgets('the menu is absent when Diagnostics is not supplied',
       (tester) async {
-    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
+    final harness = ViewHarness();
     addTearDown(harness.dispose);
 
-    await harness.discover(tester);
-    await harness.connect(tester);
     await pumpScreen(tester, _home(harness));
 
     expect(find.bySemanticsLabel('Diagnostics'), findsNothing);
   });
 
-  testWidgets('the diagnostics entry point is present when it is supplied',
-      (tester) async {
-    // IN RELEASE BUILDS TOO, unlike the developer screen it replaced in this
-    // slot: everything on Diagnostics is something a user can only watch, so
-    // `AppRoot` passes this callback unconditionally. The debug gate is one tap
-    // further in, on Developer options.
-    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
+  testWidgets('the menu opens Diagnostics when supplied', (tester) async {
+    final harness = ViewHarness();
     addTearDown(harness.dispose);
     var opened = false;
 
-    await harness.discover(tester);
-    await harness.connect(tester);
-    await pumpScreen(
-      tester,
-      _home(harness, onOpenDiagnostics: () => opened = true),
-    );
+    await pumpScreen(tester, _home(harness, onOpenDiagnostics: () => opened = true));
 
-    expect(find.bySemanticsLabel('Diagnostics'), findsOneWidget);
     await tester.tap(find.bySemanticsLabel('Diagnostics'));
     await tester.pump();
     expect(opened, isTrue);
   });
 
-  group('short viewports and status affordances', () {
-    // The bug: in landscape the fixed rows (header, "Recent", three
-    // entries) leave far less height than the record block needs, and Home
-    // overflowed by 201 physical pixels -- a black-and-yellow banner across
-    // the record button in debug, and a SILENTLY CLIPPED Disconnect button
-    // in release, which is worse because nothing says so.
-    testWidgets('landscape does not overflow, and Disconnect stays reachable',
-        (tester) async {
-      final harness = ViewHarness();
-      addTearDown(harness.dispose);
-      await pumpScreen(tester, _home(harness),
-          size: const Size(873, 393));
-      await harness.connect(tester);
-      await tester.pump();
+  group('short viewports', () {
+    for (final tab in <String>['Today tab', 'Notes tab']) {
+      testWidgets('landscape does not overflow on $tab', (tester) async {
+        final harness = ViewHarness();
+        addTearDown(harness.dispose);
+        await pumpScreen(tester, _home(harness), size: const Size(873, 393));
+        await harness.connect(tester);
+        await tester.tap(find.bySemanticsLabel(tab));
+        await tester.pump();
 
-      expect(tester.takeException(), isNull,
-          reason: 'a RenderFlex overflow raises here');
-
-      // Present in the tree, and reachable by scrolling to it.
-      expect(find.text('Disconnect'), findsOneWidget);
-      await tester.ensureVisible(find.text('Disconnect'));
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('portrait still lays out without scrolling', (tester) async {
-      final harness = ViewHarness();
-      addTearDown(harness.dispose);
-      await pumpScreen(tester, _home(harness));
-      await harness.connect(tester);
-      await tester.pump();
-
-      expect(tester.takeException(), isNull);
-      final scroll = tester.widget<SingleChildScrollView>(
-        find.byType(SingleChildScrollView).first,
-      );
-      expect(scroll, isNotNull);
-      // At the design height the content exactly fills, so there is nothing
-      // to scroll: position stays at zero extent.
-      final state = tester.state<ScrollableState>(find.byType(Scrollable).first);
-      expect(state.position.maxScrollExtent, 0,
-          reason: 'portrait must not become a scrolling screen');
-    });
-
-    testWidgets('Disconnect is red -- the one control that takes something away',
-        (tester) async {
-      final harness = ViewHarness();
-      addTearDown(harness.dispose);
-      await pumpScreen(tester, _home(harness));
-      await harness.connect(tester);
-      await tester.pump();
-
-      final label = tester.widget<Text>(find.text('Disconnect'));
-      expect(label.style?.color, AppColors.error);
-    });
-
-    testWidgets('the battery glyph carries a bolt only while charging',
-        (tester) async {
-      final harness = ViewHarness();
-      addTearDown(harness.dispose);
-      await pumpScreen(tester, _home(harness));
-      await harness.connect(tester);
-
-      await harness.notifyBattery(tester, percent: 62, charging: false);
-      expect(
-        tester.widget<BatteryIcon>(find.byType(BatteryIcon)).charging,
-        isFalse,
-      );
-
-      await harness.notifyBattery(tester, percent: 62, charging: true);
-      expect(
-        tester.widget<BatteryIcon>(find.byType(BatteryIcon)).charging,
-        isTrue,
-        reason: 'same percentage, so the SHAPE is what distinguishes them',
-      );
-      expect(tester.takeException(), isNull);
-    });
+        expect(tester.takeException(), isNull, reason: 'a RenderFlex overflow raises here');
+      });
+    }
   });
 
+  testWidgets('the battery glyph carries a bolt only while charging',
+      (tester) async {
+    final harness = ViewHarness();
+    addTearDown(harness.dispose);
+    await pumpScreen(tester, _home(harness));
+    await harness.connect(tester);
+
+    await harness.notifyBattery(tester, percent: 62, charging: false);
+    expect(tester.widget<BatteryIcon>(find.byType(BatteryIcon)).charging, isFalse);
+
+    await harness.notifyBattery(tester, percent: 62, charging: true);
+    expect(tester.widget<BatteryIcon>(find.byType(BatteryIcon)).charging, isTrue);
+    expect(tester.takeException(), isNull);
+  });
 }

@@ -21,7 +21,12 @@ import 'widgets/scan_control.dart';
 /// recorders advertise the same local name, and the address is the only thing
 /// that tells them apart.
 class ScanView extends StatelessWidget {
-  const ScanView({required this.controller, this.onOpenLibrary, super.key});
+  const ScanView({
+    required this.controller,
+    this.onOpenLibrary,
+    this.onBack,
+    super.key,
+  });
 
   final AppController controller;
 
@@ -29,6 +34,10 @@ class ScanView extends StatelessWidget {
   /// this exists: that screen has no primary action, and pointing at what DOES
   /// still work is the only useful thing left to offer.
   final VoidCallback? onOpenLibrary;
+
+  /// Returns to Home, when pairing was opened from there. Null - the app's
+  /// first screen - draws no back control.
+  final VoidCallback? onBack;
 
   /// The [Hero] tag shared with the Home header's logo slot. The board flies
   /// from the device card into that slot when you connect, and the framework
@@ -57,7 +66,7 @@ class ScanView extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            _Header(status: edge.status),
+            _Header(status: edge.status, onBack: onBack),
             Expanded(child: edge.child),
           ],
         ),
@@ -90,7 +99,7 @@ class ScanView extends StatelessWidget {
         children: <Widget>[
           // The count lives in the header now: the control below is a button,
           // not a status line.
-          _Header(status: foundLabel(devices.length)),
+          _Header(status: foundLabel(devices.length), onBack: onBack),
           // Only failures NO edge state covers reach this line - a library
           // that could not be listed, a write that the device refused. The
           // categorised ones have a screen of their own above, and deleting
@@ -301,9 +310,10 @@ class _EdgeState {
 
 /// "Devices", and a status word on the right.
 class _Header extends StatelessWidget {
-  const _Header({required this.status});
+  const _Header({required this.status, this.onBack});
 
   final String status;
+  final VoidCallback? onBack;
 
   @override
   Widget build(BuildContext context) {
@@ -311,6 +321,20 @@ class _Header extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.baseline,
       textBaseline: TextBaseline.alphabetic,
       children: <Widget>[
+        if (onBack != null)
+          Transform.translate(
+            offset: const Offset(-12, 0),
+            child: TapTarget(
+              onTap: onBack,
+              semanticLabel: 'Back',
+              child: const AppIcon(
+                AppGlyph.chevronLeft,
+                size: 20,
+                color: AppColors.textSecondary,
+                strokeWidth: 1.7,
+              ),
+            ),
+          ),
         const Text('Devices', style: AppText.h1),
         const Spacer(),
         // Flexible, because the edge states put a word here rather than "0

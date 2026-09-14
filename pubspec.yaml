@@ -36,6 +36,14 @@ dependencies:
   # lib/drivers/phone_power_battery_plus.dart and nowhere else.
   battery_plus: ^7.1.1
 
+  # The platform share sheet, so a summary prompt can go straight to an AI
+  # app instead of through the clipboard. BSD-3-Clause, Flutter Community (a
+  # Flutter Favorite), text only - no permission, no file access. The
+  # alternative is two MethodChannels of our own (ACTION_SEND and
+  # UIActivityViewController) with iPad popover anchoring to get right.
+  # Named in lib/drivers/share_sheet_share_plus.dart and nowhere else.
+  share_plus: ^13.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

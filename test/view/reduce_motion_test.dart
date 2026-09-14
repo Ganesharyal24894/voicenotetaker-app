@@ -10,6 +10,7 @@ import 'package:voicenotetaker_app/view/widgets/motion.dart';
 import 'package:voicenotetaker_app/view/widgets/scan_control.dart';
 
 import 'harness.dart';
+import 'home_harness.dart';
 
 /// Pumps [child] at the mock's frame with the platform's reduce-motion setting
 /// forced on or off.
@@ -39,13 +40,6 @@ Future<void> pumpWithMotion(
   );
   await tester.pump();
 }
-
-Widget _home(ViewHarness harness) => HomeView(
-      controller: harness.controller,
-      recents: const [],
-      onOpenLibrary: () {},
-      onOpenRecording: (_) {},
-    );
 
 void main() {
   setUpAll(registerViewFallbacks);
@@ -97,7 +91,7 @@ void main() {
       await harness.discover(tester);
       await harness.connect(tester);
 
-      await pumpWithMotion(tester, _home(harness), reduced: false);
+      await pumpWithMotion(tester, homeFor(harness), reduced: false);
       expect(find.text('Connected'), findsOneWidget);
       expect(
         find.descendant(
@@ -110,7 +104,7 @@ void main() {
 
       await pumpWithMotion(
         tester,
-        _home(harness),
+        homeFor(harness),
         reduced: true,
       );
       // The dot is a plain dot: no opacity animation wrapping it at all.
@@ -189,21 +183,19 @@ void main() {
       expect(tester.binding.transientCallbackCount, 0);
     });
 
-    testWidgets('the record button does not scale on press', (tester) async {
-      final harness =
-          ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
+    testWidgets('a ticked to-do folds into Done at once, with no settle',
+        (tester) async {
+      final harness = ViewHarness();
       addTearDown(harness.dispose);
-      await harness.discover(tester);
-      await harness.connect(tester);
+      final summaries = summariesFor(harness, now: DateTime(2026, 9, 15, 18));
+      await summaries.acceptReply('## To-dos\n- [ ] Pay rent | me | - | 09:00');
 
-      await pumpWithMotion(tester, _home(harness), reduced: true);
+      await pumpWithMotion(tester, homeFor(harness, summaries: summaries), reduced: true);
+      await tester.tap(find.bySemanticsLabel('Pay rent'));
+      await tester.pump();
 
-      final resting = tester.getRect(find.bySemanticsLabel('Record'));
-      final gesture = await tester.startGesture(resting.center);
-      await tester.pump(const Duration(milliseconds: 120));
-      expect(tester.getRect(find.bySemanticsLabel('Record')), resting);
-      await gesture.up();
-      await flush(tester);
+      expect(find.text('Done (1)'), findsOneWidget);
+      expect(tester.binding.transientCallbackCount, 0);
     });
 
     testWidgets('docking into the header is instant, with no hero flight',

@@ -3,229 +3,344 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../controller/summary_controller.dart';
 import '../model/battery_bars.dart';
 import '../model/continuous_status.dart';
 import '../model/device_profile.dart';
-import 'placeholder_data.dart';
+import '../model/home_status.dart';
+import '../model/notes_overview.dart';
+import '../model/recording_info.dart';
+import 'home/notes_tab.dart';
+import 'home/summarize_sheet.dart';
+import 'home/today_tab.dart';
 import 'recording_entry.dart';
-import 'scan_view.dart';
 import 'theme.dart';
 import 'widgets/app_icons.dart';
 import 'widgets/common.dart';
-import 'widgets/device_mark.dart';
+import 'widgets/home_widgets.dart';
 import 'widgets/motion.dart';
 
-/// Screen 2 - home.
-class HomeView extends StatelessWidget {
+/// Screen 2 - home: two tabs under one header.
+///
+/// TODAY (the default) is what your AI made of your day; NOTES is where the
+/// transcripts stand. The header answers "are my notes being saved?" on both,
+/// and holds the battery, manual recording and the menu. See
+/// `doc/today-and-summaries.md`.
+class HomeView extends StatefulWidget {
   const HomeView({
     required this.controller,
-    required this.recents,
+    required this.summaries,
     required this.onOpenLibrary,
     required this.onOpenRecording,
     this.onOpenDiagnostics,
-    this.now,
+    this.onConnect,
     super.key,
   });
 
   final AppController controller;
-
-  /// The three most recent recordings. Real once a library service exists;
-  /// [PlaceholderData.library] until then.
-  final List<RecordingEntry> recents;
+  final SummaryController summaries;
 
   final VoidCallback onOpenLibrary;
   final ValueChanged<RecordingEntry> onOpenRecording;
 
-  /// Opens Device Diagnostics. Non-null in RELEASE builds too: everything on
-  /// that screen is something the user can only watch, so there is nothing to
-  /// hide behind a debug gate. The mutating controls live one more tap in, on
-  /// Developer options, which is where the debug gate is - see
-  /// `developer_view.dart`.
+  /// Opens Device Diagnostics - the header menu, for now. Non-null in RELEASE
+  /// builds too: everything on that screen is something the user can only
+  /// watch. The mutating controls live one more tap in, on Developer options.
   final VoidCallback? onOpenDiagnostics;
 
-  /// See [LibraryView.now]: the day labels are relative to this.
-  final DateTime? now;
+  /// Goes to the pairing screen. Offered in the recorder sheet while nothing
+  /// is connected and always-listening is off; null hides it.
+  final VoidCallback? onConnect;
 
-  /// The line under the record button.
-  String _recordCaption(bool connected) {
-    if (controller.continuousActive) return 'Notes save on their own';
-    if (connected) return 'Tap to record';
-    if (controller.continuousEnabled) return 'Waiting for the recorder';
-    return 'Connect a recorder to start';
+  static const int todayTab = 0;
+  static const int notesTab = 1;
+
+  @override
+  State<HomeView> createState() => _HomeViewState();
+}
+
+class _HomeViewState extends State<HomeView> {
+  int _tab = HomeView.todayTab;
+
+  AppController get _controller => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.summaries.isLoaded) unawaited(widget.summaries.load());
   }
+
+  void _openRecording(RecordingInfo info) {
+    widget.onOpenRecording(
+      RecordingEntry.fromInfo(
+        info,
+        isWriting: info.path == _controller.writingNotePath,
+        transcript: _controller.transcriptionAvailable
+            ? _controller.listTranscriptStatusFor(info)
+            : null,
+      ),
+    );
+  }
+
+  Future<void> _paste() async {
+    final result = await widget.summaries.pasteFromClipboard();
+    if (!mounted) return;
+    switch (result) {
+      case PasteResult.saved:
+        setState(() => _tab = HomeView.todayTab);
+      case PasteResult.emptyClipboard:
+        showHomeMessage(context, SummaryController.emptyClipboardMessage);
+      case PasteResult.unreadable:
+        showHomeMessage(context, SummaryController.unreadableMessage);
+    }
+  }
+
+  void _summarize() => unawaited(
+        showSummarizeSheet(
+          context,
+          summaries: widget.summaries,
+          recordings: _controller.recordings,
+        ),
+      );
+
+  void _record() {
+    final connected = _controller.isConnected && _controller.connectedDevice != null;
+    if (_controller.continuousActive) {
+      showHomeMessage(context, 'Notes already save on their own while always listening is on.');
+    } else if (!connected) {
+      showHomeMessage(context, 'Connect your recorder to record.');
+    } else {
+      unawaited(_controller.startRecording());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    final viewPadding = MediaQuery.viewPaddingOf(context);
+    final now = widget.summaries.now;
+    return Scaffold(
+      backgroundColor: AppColors.screen,
+      body: SafeArea(
+        top: false,
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Padding(
+              padding: EdgeInsets.fromLTRB(AppShape.gutter, viewPadding.top + 15, AppShape.gutter, 0),
+              child: _HomeHeader(
+                controller: controller,
+                onStatus: () => unawaited(
+                  showRecorderSheet(context, controller: controller, onConnect: widget.onConnect),
+                ),
+                onRecord: _record,
+                onMenu: widget.onOpenDiagnostics,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Expanded(
+              child: IndexedStack(
+                index: _tab,
+                children: <Widget>[
+                  TodayTab(
+                    summaries: widget.summaries,
+                    recordings: controller.recordings,
+                    onOpenRecording: _openRecording,
+                    onSummarize: _summarize,
+                    onPaste: () => unawaited(_paste()),
+                  ),
+                  NotesTab(
+                    overview: NotesOverview.derive(
+                      recordings: controller.recordings,
+                      now: now,
+                      statusOf: controller.listTranscriptStatusFor,
+                      writingPath: controller.writingNotePath,
+                      transcribingPath: controller.transcribingPath,
+                      transcriptionDone: controller.transcriptionDone,
+                      transcriptionTotal: controller.transcriptionTotal,
+                      autoDeleteAudio: controller.autoDeleteAudio,
+                    ),
+                    now: now,
+                    onOpenRecording: _openRecording,
+                    onOpenLibrary: widget.onOpenLibrary,
+                  ),
+                ],
+              ),
+            ),
+            HomeTabBar(index: _tab, onSelect: (index) => setState(() => _tab = index)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The header both tabs share: name, saving status, battery, record, menu.
+class _HomeHeader extends StatelessWidget {
+  const _HomeHeader({
+    required this.controller,
+    required this.onStatus,
+    required this.onRecord,
+    required this.onMenu,
+  });
+
+  final AppController controller;
+  final VoidCallback onStatus;
+  final VoidCallback onRecord;
+  final VoidCallback? onMenu;
 
   @override
   Widget build(BuildContext context) {
     final device = controller.connectedDevice;
     final connected = controller.isConnected && device != null;
-    final shown = recents.take(3).toList();
-
-    // Scrollable ONLY when it has to be. At a normal portrait height the
-    // minHeight equals the viewport, IntrinsicHeight resolves to exactly
-    // that, and the Expanded below takes up the slack -- identical to a
-    // plain Column. Turn the phone to landscape and the fixed rows (header,
-    // "Recent", three entries) leave far less room than the record block
-    // needs, so the intrinsic height exceeds the viewport and the page
-    // scrolls instead of overflowing.
-    //
-    // The bug this fixes rendered as a black-and-yellow "BOTTOM OVERFLOWED
-    // BY 201 PIXELS" banner across the record button in debug, and would
-    // have silently CLIPPED the Disconnect button in release -- which is
-    // worse, because nothing would have said so.
-    return ScreenScaffold(
-      child: LayoutBuilder(
-        builder: (BuildContext context, BoxConstraints constraints) {
-          return SingleChildScrollView(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: constraints.maxHeight),
-              child: IntrinsicHeight(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+    final status = HomeStatus.resolve(
+      continuous: controller.continuousStatus,
+      connected: connected,
+      charging: controller.batteryCharging,
+    );
+    final canRecord = connected && !controller.continuousActive;
+    final Color dot = switch (status.tone) {
+      HomeStatusTone.good => AppColors.connected,
+      HomeStatusTone.warning => AppColors.warning,
+      HomeStatusTone.idle => AppColors.disconnected,
+    };
+    return Row(
+      children: <Widget>[
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              // The 38x46 logo slot. It is present in BOTH states - dimmed
-              // when disconnected rather than removed - so the header does
-              // not jump as the link comes and goes. It is also the landing
-              // pad for the board flying in from the scan screen.
-              Hero(
-                tag: ScanView.deviceMarkHeroTag,
-                child: DeviceMark(
-                  dimmed: !connected,
-                  semanticLabel: 'voiceNotetaker recorder',
-                ),
+              Text(
+                device?.name ?? DeviceProfile.advertisedName,
+                style: AppText.title21,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      device?.name ?? DeviceProfile.advertisedName,
-                      style: AppText.title21,
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
+              const SizedBox(height: 2),
+              // The status line is the door to the recorder's settings - for
+              // now the always-listening switch - so the whole line is the
+              // target, chevron included.
+              Semantics(
+                button: true,
+                label: status.label,
+                hint: 'Recorder settings',
+                container: true,
+                excludeSemantics: true,
+                onTap: onStatus,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onStatus,
+                  child: SizedBox(
+                    height: AppShape.minTapTarget,
+                    child: Row(
                       children: <Widget>[
-                        // Breathes only while the link is up: a live
-                        // condition, not decoration.
-                        BreathingDot(
-                          breathing: connected,
-                          color: connected
-                              ? AppColors.connected
-                              : AppColors.disconnected,
-                        ),
+                        BreathingDot(breathing: status.tone == HomeStatusTone.good, color: dot),
                         const SizedBox(width: 7),
-                        // Charging is stated in WORDS here, so the battery
-                        // readout's green tint is a reinforcement rather than
-                        // the only way to tell 40% charging from 40% draining.
-                        //
-                        // It REPLACES "Connected" rather than being appended
-                        // to it: "Connected · Charging" does not fit beside
-                        // the name, the battery and the diagnostics entry point
-                        // at 390px, and the breathing green dot immediately to
-                        // its left already says the link is up.
-                        //
-                        // Flexible, because a narrower phone or a longer
-                        // device name must ellipsise rather than overflow.
                         Flexible(
                           child: Text(
-                            connected
-                                ? (controller.batteryCharging
-                                    ? 'Charging'
-                                    : 'Connected')
-                                : 'Disconnected',
-                            style: AppText.body13,
+                            status.label,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
+                            style: AppText.body13.copyWith(
+                              color: status.tone == HomeStatusTone.warning
+                                  ? AppColors.warning
+                                  : AppColors.textSecondary,
+                            ),
                           ),
                         ),
+                        const SizedBox(width: 4),
+                        const AppIcon(AppGlyph.chevronRight, size: 13, color: AppColors.textTertiary, strokeWidth: 1.7),
                       ],
                     ),
-                  ],
-                ),
-              ),
-              if (onOpenDiagnostics != null)
-                TapTarget(
-                  onTap: onOpenDiagnostics,
-                  semanticLabel: 'Diagnostics',
-                  child: const AppIcon(
-                    AppGlyph.more,
-                    size: 19,
-                    color: AppColors.textSecondary,
-                    strokeWidth: 1.7,
                   ),
                 ),
-              _BatteryReadout(controller: controller),
+              ),
             ],
           ),
-          const SizedBox(height: 22),
-          AlwaysListeningCard(controller: controller),
-          Expanded(
-            // Center, not just a centred Column: the surrounding Column aligns
-            // to the start, so without this the record button hugs the left
-            // gutter instead of sitting on the screen's axis.
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  // Off while always-listening makes the notes: the two
-                  // would need the same single audio subscription.
-                  _RecordButton(
-                    onTap: connected && !controller.continuousActive
-                        ? controller.startRecording
-                        : null,
-                  ),
-                  const SizedBox(height: 24),
-                  Text(
-                    _recordCaption(connected),
-                    style: AppText.meta14,
-                  ),
-                  // The toggle is how always-listening ends; a Disconnect
-                  // beside it would be a second, conflicting way.
-                  if (connected && !controller.continuousEnabled) ...<Widget>[
-                    const SizedBox(height: 24),
-                    _DisconnectChip(
-                      onTap: () => unawaited(controller.disconnect()),
-                    ),
-                  ],
-                ],
-              ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(right: 6),
+          child: _BatteryReadout(controller: controller),
+        ),
+        Semantics(
+          enabled: canRecord,
+          child: TapTarget(
+            onTap: onRecord,
+            semanticLabel: 'Record',
+            child: Opacity(
+              opacity: canRecord ? 1 : 0.45,
+              child: const AppIcon(AppGlyph.mic, size: 19, color: AppColors.textSecondary, strokeWidth: 1.7),
             ),
           ),
-          Row(
+        ),
+        if (onMenu != null)
+          Transform.translate(
+            offset: const Offset(12, 0),
+            child: TapTarget(
+              onTap: onMenu,
+              semanticLabel: 'Diagnostics',
+              child: const AppIcon(AppGlyph.more, size: 19, color: AppColors.textSecondary, strokeWidth: 1.7),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// The sheet the status line opens: always listening, and connect or
+/// disconnect. The full recorder settings screen replaces it later.
+Future<void> showRecorderSheet(
+  BuildContext context, {
+  required AppController controller,
+  VoidCallback? onConnect,
+}) =>
+    showHomeSheet<void>(
+      context,
+      builder: (sheetContext) => ListenableBuilder(
+        listenable: controller,
+        builder: (sheetContext, _) {
+          final connected = controller.isConnected && controller.connectedDevice != null;
+          final status = HomeStatus.resolve(
+            continuous: controller.continuousStatus,
+            connected: connected,
+            charging: controller.batteryCharging,
+          );
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              const SectionCaption('Recent'),
-              const Spacer(),
-              TapTarget(
-                onTap: onOpenLibrary,
-                semanticLabel: 'All recordings',
-                minSize: AppShape.minTapTarget,
-                child: Text(
-                  'All',
-                  style: AppText.label13.copyWith(color: AppColors.purpleText),
+              const Text('Recorder', style: AppText.title21),
+              const SizedBox(height: 6),
+              Text(status.label, style: AppText.body13),
+              const SizedBox(height: 16),
+              AlwaysListeningCard(controller: controller),
+              if (connected && !controller.continuousEnabled) ...<Widget>[
+                const SizedBox(height: 16),
+                Center(
+                  child: _DisconnectChip(
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      unawaited(controller.disconnect());
+                    },
+                  ),
                 ),
-              ),
+              ],
+              if (!connected && !controller.continuousEnabled && onConnect != null) ...<Widget>[
+                const SizedBox(height: 16),
+                PrimaryButton(
+                  label: 'Connect a recorder',
+                  onPressed: () {
+                    Navigator.of(sheetContext).pop();
+                    onConnect();
+                  },
+                ),
+              ],
             ],
-          ),
-          const SizedBox(height: 12),
-          for (var i = 0; i < shown.length; i++)
-            _RecentRow(
-              entry: shown[i],
-              lastInList: i == shown.length - 1,
-              onTap: () => onOpenRecording(shown[i]),
-              now: now,
-            ),
-                  ],
-                ),
-              ),
-            ),
           );
         },
       ),
     );
-  }
-}
 
 /// The always-listening switch and, while it is on, what it is doing.
 ///
@@ -361,56 +476,6 @@ class AlwaysListeningCard extends StatelessWidget {
       if (allow == true) await controller.requestBackgroundPermissions();
     }
     await controller.setContinuousEnabled(true);
-  }
-}
-
-/// 110px ring, 86px purple disc, a LIGHT mic glyph on the fill.
-///
-/// A press scales it to 0.93 and back - 120 ms down, 180 ms up.
-class _RecordButton extends StatelessWidget {
-  const _RecordButton({required this.onTap});
-
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      enabled: onTap != null,
-      label: 'Record',
-      container: true,
-      excludeSemantics: true,
-      child: PressScale(
-        onTap: onTap,
-        child: Opacity(
-          opacity: onTap == null ? 0.45 : 1,
-          child: Container(
-            width: 110,
-            height: 110,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: AppColors.border),
-            ),
-            alignment: Alignment.center,
-            child: Container(
-              width: 86,
-              height: 86,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.primaryFill,
-              ),
-              alignment: Alignment.center,
-              child: const AppIcon(
-                AppGlyph.mic,
-                size: 31,
-                color: AppColors.onPrimaryFill,
-                strokeWidth: 1.7,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
   }
 }
 
@@ -558,59 +623,3 @@ class _DisconnectChip extends StatelessWidget {
   }
 }
 
-/// `.row` - a 1px top rule, 14px of padding, a play glyph and two lines.
-class _RecentRow extends StatelessWidget {
-  const _RecentRow({
-    required this.entry,
-    required this.lastInList,
-    required this.onTap,
-    this.now,
-  });
-
-  final RecordingEntry entry;
-  final bool lastInList;
-  final VoidCallback onTap;
-
-  /// See [HomeView.now]: threaded down so the day label is pinnable.
-  final DateTime? now;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Container(
-        constraints: const BoxConstraints(minHeight: AppShape.minTapTarget),
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: BoxDecoration(
-          border: Border(
-            top: const BorderSide(color: AppColors.raised),
-            bottom: lastInList
-                ? const BorderSide(color: AppColors.raised)
-                : BorderSide.none,
-          ),
-        ),
-        child: Row(
-          children: <Widget>[
-            const AppIcon(
-              AppGlyph.play,
-              size: 17,
-              color: AppColors.purpleText,
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(entry.title, style: AppText.rowTitle),
-                  const SizedBox(height: 3),
-                  Text(entry.recentLabel(now: now), style: AppText.rowMeta),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

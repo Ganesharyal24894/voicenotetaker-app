@@ -1,4 +1,3 @@
-import 'dart:ui' show Tristate;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,24 +10,24 @@ import 'package:voicenotetaker_app/view/app_root.dart';
 import 'package:voicenotetaker_app/view/connection_lost_view.dart';
 import 'package:voicenotetaker_app/view/home_view.dart';
 import 'package:voicenotetaker_app/view/scan_view.dart';
-import 'package:voicenotetaker_app/view/placeholder_data.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
 
 import 'harness.dart';
+import 'home_harness.dart';
 
 /// The always-listening card on Home, and what it changes around it.
 void main() {
   setUpAll(registerViewFallbacks);
 
-  Widget home(ViewHarness harness) => ListenableBuilder(
-        listenable: harness.controller,
-        builder: (context, _) => HomeView(
-          controller: harness.controller,
-          recents: PlaceholderData.library(),
-          onOpenLibrary: () {},
-          onOpenRecording: (_) {},
-        ),
-      );
+  Widget home(ViewHarness harness) => homeFor(harness);
+
+  /// The always-listening card lives in the recorder sheet the status line
+  /// opens.
+  Future<void> openSheet(WidgetTester tester) async {
+    await tester.tap(recorderStatusLine());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+  }
 
   /// Turns always-listening off at the end of a test, which is what cancels
   /// its keep-alive and reconnect timers. The tester's own "a Timer is still
@@ -52,10 +51,11 @@ void main() {
       (tester) async {
     final harness = await connected(tester);
     await pumpScreen(tester, home(harness));
+    expect(find.text('Connected'), findsOneWidget);
+    await openSheet(tester);
 
     expect(find.text(AlwaysListeningCard.title), findsOneWidget);
     expect(find.text('Notes save when you speak'), findsOneWidget);
-    expect(find.text('Tap to record'), findsOneWidget);
     expect(find.text('Disconnect'), findsOneWidget);
     expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
   });
@@ -64,16 +64,21 @@ void main() {
       (tester) async {
     final harness = await connected(tester);
     await pumpScreen(tester, home(harness));
+    await openSheet(tester);
 
     await tester.tap(find.byType(Switch));
     await flush(tester);
 
     expect(harness.controller.continuousActive, isTrue);
     expect(find.text('Always listening'), findsNWidgets(2));
-    expect(find.text('Notes save on their own'), findsOneWidget);
+    expect(find.text('Saving notes'), findsWidgets);
     expect(find.text('Disconnect'), findsNothing);
-    final record = tester.getSemantics(find.bySemanticsLabel('Record'));
-    expect(record.flagsCollection.isEnabled, Tristate.isFalse);
+    Navigator.of(tester.element(find.byType(AlwaysListeningCard))).pop();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.bySemanticsLabel('Record'));
+    await tester.pump();
+    expect(harness.controller.isRecording, isFalse);
+    expect(find.text('Notes already save on their own while always listening is on.'), findsOneWidget);
     await stopListening(tester, harness);
   });
 
@@ -82,11 +87,13 @@ void main() {
     await harness.controller.setContinuousEnabled(true);
     await pumpScreen(tester, home(harness));
 
+    await openSheet(tester);
     harness.capture.add(
       const CaptureFlags(muted: true, speechOpen: false, gateEnabled: true),
     );
     await flush(tester);
     expect(find.text('Muted on device'), findsOneWidget);
+    expect(find.text('Muted on the recorder'), findsWidgets);
 
     harness.capture.add(
       const CaptureFlags(muted: false, speechOpen: true, gateEnabled: true),
@@ -102,8 +109,9 @@ void main() {
     await harness.controller.setContinuousEnabled(true);
     await pumpScreen(tester, home(harness));
 
+    expect(find.text('Not saving — recorder needs an update'), findsOneWidget);
+    await openSheet(tester);
     expect(find.text('Needs firmware update'), findsOneWidget);
-    expect(find.text('Tap to record'), findsOneWidget);
     await stopListening(tester, harness);
   });
 
@@ -116,6 +124,7 @@ void main() {
     await harness.begin(tester);
     await harness.connect(tester);
     await pumpScreen(tester, home(harness));
+    await openSheet(tester);
 
     await tester.tap(find.byType(Switch));
     await flush(tester);
@@ -161,8 +170,7 @@ void main() {
     expect(find.byType(HomeView), findsOneWidget);
     expect(find.byType(ConnectionLostView), findsNothing);
     expect(find.byType(ScanView), findsNothing);
-    expect(find.text('Device not connected'), findsOneWidget);
-    expect(find.text('Waiting for the recorder'), findsOneWidget);
+    expect(find.text('Not saving — recorder disconnected'), findsOneWidget);
     await stopListening(tester, harness);
   });
 }

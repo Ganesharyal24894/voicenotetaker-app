@@ -4,6 +4,7 @@ import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/view/app_root.dart';
 import 'package:voicenotetaker_app/view/developer_view.dart';
+import 'package:voicenotetaker_app/view/home/summary_scope.dart';
 import 'package:voicenotetaker_app/view/diagnostics_view.dart';
 import 'package:voicenotetaker_app/view/home_view.dart';
 import 'package:voicenotetaker_app/view/library_view.dart';
@@ -13,6 +14,7 @@ import 'package:voicenotetaker_app/view/scan_view.dart';
 import 'package:voicenotetaker_app/view/widgets/app_icons.dart';
 
 import 'harness.dart';
+import 'home_harness.dart';
 
 void main() {
   setUpAll(registerViewFallbacks);
@@ -113,7 +115,7 @@ void main() {
     verify(() => harness.transport.unsubscribeFrames(knownDevice.id)).called(1);
   });
 
-  testWidgets('Home opens the library, and the library opens playback',
+  testWidgets('Home\'s Notes tab opens the library, and the library opens playback',
       (tester) async {
     final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
     addTearDown(harness.dispose);
@@ -127,7 +129,9 @@ void main() {
     await harness.seedRecording(at: DateTime(2026, 9, 10, 9, 14));
     await tester.pump();
 
-    await tester.tap(find.text('All'));
+    await tester.tap(find.bySemanticsLabel('Notes tab'));
+    await tester.pump();
+    await tester.tap(find.bySemanticsLabel('All notes'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.byType(LibraryView), findsOneWidget);
@@ -148,7 +152,9 @@ void main() {
     await harness.connect(tester);
     await settleDock(tester);
 
-    await tester.tap(find.text('All'));
+    await tester.tap(find.bySemanticsLabel('Notes tab'));
+    await tester.pump();
+    await tester.tap(find.bySemanticsLabel('All notes'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
@@ -173,7 +179,9 @@ void main() {
     await harness.seedRecording(at: DateTime(2026, 9, 10, 11, 30));
     await tester.pump();
 
-    await tester.tap(find.text('All'));
+    await tester.tap(find.bySemanticsLabel('Notes tab'));
+    await tester.pump();
+    await tester.tap(find.bySemanticsLabel('All notes'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('2 items'), findsOneWidget);
@@ -210,7 +218,9 @@ void main() {
     await harness.seedRecording(at: DateTime(2026, 9, 10, 9, 14));
     await tester.pump();
 
-    await tester.tap(find.text('All'));
+    await tester.tap(find.bySemanticsLabel('Notes tab'));
+    await tester.pump();
+    await tester.tap(find.bySemanticsLabel('All notes'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
@@ -251,11 +261,14 @@ void main() {
     expect(tester.widget<BatteryIcon>(find.byType(BatteryIcon)).bars, 3);
     expect(find.text('64%'), findsNothing);
 
+    await tester.tap(recorderStatusLine());
+    await settleDock(tester);
     await tester.tap(find.bySemanticsLabel('Disconnect'));
     await flush(tester);
     await settleDock(tester);
 
-    // No stuck "connected" UI: the app is back where it pairs from.
+    // No stuck "connected" UI: with no notes to read, the app is back where
+    // it pairs from.
     expect(find.byType(ScanView), findsOneWidget);
     expect(find.byType(HomeView), findsNothing);
     expect(harness.controller.connectedDevice, isNull);
@@ -286,5 +299,81 @@ void main() {
     expect(icon.bars, 4);
     expect(icon.charging, isTrue);
     expect(find.text('Charging'), findsOneWidget);
+  });
+
+  group('Home without a recorder', () {
+    testWidgets('someone with notes lands on Home, not the scan screen',
+        (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      await harness.seedRecording(at: DateTime(2026, 9, 10, 9, 14));
+
+      await pumpScreen(tester, AppRoot(controller: harness.controller));
+      await settleDock(tester);
+
+      expect(find.byType(HomeView), findsOneWidget);
+      expect(find.byType(ScanView), findsNothing);
+      expect(find.text('Not connected'), findsOneWidget);
+    });
+
+    testWidgets('a link that dropped by itself still gets its own screen',
+        (tester) async {
+      final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
+      addTearDown(harness.dispose);
+      await harness.seedRecording(at: DateTime(2026, 9, 10, 9, 14));
+      await pumpScreen(tester, AppRoot(controller: harness.controller));
+      await harness.discover(tester);
+      await harness.connect(tester);
+      await settleDock(tester);
+
+      await harness.dropLink(tester);
+      await settleDock(tester);
+
+      expect(find.byType(HomeView), findsNothing);
+      expect(find.text('Recorder disconnected'), findsOneWidget);
+    });
+
+    testWidgets('Connect a recorder opens pairing over Home, and Back returns',
+        (tester) async {
+      final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
+      addTearDown(harness.dispose);
+      await harness.seedRecording(at: DateTime(2026, 9, 10, 9, 14));
+      await pumpScreen(tester, AppRoot(controller: harness.controller));
+      await settleDock(tester);
+
+      await tester.tap(recorderStatusLine());
+      await settleDock(tester);
+      await tester.tap(find.bySemanticsLabel('Connect a recorder'));
+      await settleDock(tester);
+      expect(find.byType(ScanView), findsOneWidget);
+
+      await tester.tap(find.bySemanticsLabel('Back'));
+      await settleDock(tester);
+      expect(find.byType(ScanView), findsNothing);
+      expect(find.byType(HomeView), findsOneWidget);
+
+      // Pairing again and connecting lands on Home, connected.
+      await tester.tap(recorderStatusLine());
+      await settleDock(tester);
+      await tester.tap(find.bySemanticsLabel('Connect a recorder'));
+      await settleDock(tester);
+      await harness.discover(tester);
+      await harness.connect(tester);
+      await settleDock(tester);
+      expect(find.byType(ScanView), findsNothing);
+      expect(find.text('Connected'), findsOneWidget);
+    });
+  });
+
+  testWidgets('screens under AppRoot reach the summaries through the scope',
+      (tester) async {
+    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
+    addTearDown(harness.dispose);
+    await pumpScreen(tester, AppRoot(controller: harness.controller));
+    await harness.discover(tester);
+    await harness.connect(tester);
+    await settleDock(tester);
+
+    expect(SummaryScope.maybeOf(tester.element(find.byType(HomeView))), isNotNull);
   });
 }

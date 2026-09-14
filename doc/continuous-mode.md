@@ -6,7 +6,9 @@ phone turns that stream into ordinary recordings and transcribes them as soon
 as they are closed - off screen too, on Android, when the battery allows (see
 *Background transcription*) - or otherwise the next time the app is opened.
 
-Home shows one switch, **Always listening**, and one status line:
+The switch, **Always listening**, lives in the recorder sheet that Home's
+header status line opens (see `today-and-summaries.md`); the sheet shows one
+status line:
 *Always listening*, *Hearing speech*, *Muted on device*, *Device not
 connected*, *Needs firmware update*. The Android notification shows the same
 line, from the same resolver (`ContinuousStatus.resolve`).
@@ -14,7 +16,7 @@ line, from the same resolver (`ContinuousStatus.resolve`).
 ## Architecture
 
 ```
-view/home_view.dart         AlwaysListeningCard: switch, status, permission dialog
+view/home_view.dart         AlwaysListeningCard (in the recorder sheet): switch, status, permission dialog
 view/app_root.dart          Home stays up without a link while it is on;
                             lifecycle -> appForegrounded / appBackgrounded
 controller/app_controller   ALWAYS LISTENING section: settings, reconnect with

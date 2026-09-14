@@ -14,6 +14,7 @@ import 'package:voicenotetaker_app/view/widgets/edge_state.dart';
 import 'package:voicenotetaker_app/view/widgets/scan_control.dart';
 
 import 'harness.dart';
+import 'home_harness.dart';
 
 /// The tint of the one glyph inside the edge state on screen.
 ///
@@ -414,6 +415,9 @@ void main() {
       await harness.connect(tester);
       await settleDock(tester);
 
+      // Disconnect lives in the recorder sheet the Home status line opens.
+      await tester.tap(recorderStatusLine());
+      await settleDock(tester);
       await tester.tap(find.bySemanticsLabel('Disconnect'));
       await flush(tester);
       await settleDock(tester);

@@ -4,11 +4,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../controller/summary_controller.dart';
 import '../model/device_state.dart';
 import '../model/recording_info.dart';
 import 'connection_lost_view.dart';
 import 'developer_view.dart';
 import 'diagnostics_view.dart';
+import 'home/summary_scope.dart';
 import 'home_view.dart';
 import 'library_view.dart';
 import 'playback_view.dart';
@@ -32,9 +34,14 @@ import 'theme.dart';
 /// Library, playback, diagnostics and the developer screen are pushed on top,
 /// because they are places the user chose to go.
 class AppRoot extends StatefulWidget {
-  const AppRoot({required this.controller, super.key});
+  const AppRoot({required this.controller, this.summaries, super.key});
 
   final AppController controller;
+
+  /// The Today tab's controller. Null builds one that reads transcripts
+  /// through [controller] and keeps nothing between launches - what a test
+  /// that is not about summaries wants. `main.dart` passes a persisted one.
+  final SummaryController? summaries;
 
   @override
   State<AppRoot> createState() => _AppRootState();
@@ -48,6 +55,19 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         MaterialRectArcTween(begin: begin, end: end),
   );
 
+  /// The summaries this tree uses: [AppRoot.summaries], or one made here.
+  late final SummaryController _summaries = widget.summaries ??
+      SummaryController(
+        loadTranscript: (recording) async {
+          await widget.controller.loadTranscript(recording);
+          return widget.controller.transcriptFor(recording);
+        },
+      );
+
+  /// The user asked to pair a recorder from Home. Home is otherwise kept up
+  /// while there are notes to read - see [_buildPages].
+  bool _pairing = false;
+
   @override
   void initState() {
     super.initState();
@@ -60,6 +80,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_onControllerChanged);
     _heroController.dispose();
+    if (widget.summaries == null) _summaries.dispose();
     super.dispose();
   }
 
@@ -98,6 +119,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         break;
     }
   }
+
+  static const ValueKey<String> _pairingKey = ValueKey<String>('scan-from-home');
 
   void _onControllerChanged() {
     if (mounted) setState(() {});
@@ -239,15 +262,34 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     );
   }
 
+  /// Everything under here can reach the summaries - the note screen's
+  /// Summarize sheet included - through [SummaryScope].
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      SummaryScope(summaries: _summaries, child: _buildPages(context));
+
+  Widget _buildPages(BuildContext context) {
     final controller = widget.controller;
     final recording =
         controller.isRecording || controller.phase == AppPhase.stopping;
     final connected = controller.connectedDevice != null;
     // Always-listening keeps Home up without a link: the app is reaching for
     // the device on its own, Home says so, and the toggle to stop it is there.
-    final home = connected || controller.continuousEnabled;
+    //
+    // HOME WITH NOTES AND NO LINK. Someone who has notes can read and
+    // summarize them without a recorder in range, so Home stays up for them
+    // too - unless they asked to pair (the recorder sheet's "Connect a
+    // recorder"), or a link dropped by itself, which keeps its own screen.
+    // With no notes, pairing is the only useful thing, and the scan screen is
+    // still where the app starts.
+    if (connected) _pairing = false;
+    final hasNotes = controller.recordings.isNotEmpty;
+    // Pairing asked for from Home: the scan screen goes ON TOP of Home, so
+    // Back - the system gesture or the screen's own - returns to it.
+    final pairingFromHome = _pairing && hasNotes;
+    final home = connected ||
+        controller.continuousEnabled ||
+        (hasNotes && controller.linkOutcome != LinkOutcome.connectionLost);
     // A link that dropped by itself gets Home's slot, not the scan screen's:
     // see `ConnectionLostView`. A disconnect the user asked for leaves
     // `linkOutcome` at `none` and so lands back on the scan screen as before.
@@ -259,9 +301,12 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     return HeroControllerScope(
       controller: _heroController,
       child: Navigator(
-        // The page list is a pure function of controller state, so there is
-        // nothing for the navigator to remove on its own account.
-        onDidRemovePage: (_) {},
+        // The page list is a pure function of controller state; the one page
+        // the navigator removes on its own is the scan screen opened from
+        // Home, when the user goes Back.
+        onDidRemovePage: (page) {
+          if (page.key == _pairingKey) setState(() => _pairing = false);
+        },
         pages: <Page<void>>[
           if (!home && !recording && !lost)
             _DockPage(
@@ -288,14 +333,24 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
               child: Builder(
                 builder: (context) => HomeView(
                   controller: controller,
-                  recents: _entries,
+                  summaries: _summaries,
                   onOpenLibrary: () => _openLibrary(context),
                   onOpenRecording: (entry) => _openPlayback(context, entry),
                   // Always offered: Diagnostics is an observer's screen and
                   // ships in release builds. The debug gate is one tap further
                   // in, on Developer options.
                   onOpenDiagnostics: () => _openDiagnostics(context),
+                  onConnect: () => setState(() => _pairing = true),
                 ),
+              ),
+            ),
+          if (home && pairingFromHome && !connected && !recording)
+            _DockPage(
+              key: _pairingKey,
+              instant: instant,
+              child: ScanView(
+                controller: controller,
+                onBack: () => setState(() => _pairing = false),
               ),
             ),
           if (recording)
