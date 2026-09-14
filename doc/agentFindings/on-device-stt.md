@@ -494,3 +494,163 @@ Findings:
   install; no uninstall, no data loss), and delete
   `app_flutter/recordings/voicenote-20260910-042331.transcript.json` if the
   untranscribed state is wanted back.
+
+---
+
+## English, and notes with nothing in them (2026-09-15)
+
+### The problem — [V] on the laptop
+
+IndicConformer-hi writes English speech as Devanagari transliteration. The
+owner's English note `voicenote-20260915-022908.wav` came out as
+`थेश शुड बे गुड तो थे चट` ("The case should be good to touch ...").
+
+### Evaluation — [V] laptop, sherpa-onnx 1.13.8 (Python), 2 threads
+
+Scripts, per-window outputs and numbers:
+`/tmp/claude-1000/-home-ganesh-personalProjects-nrf52840-sense/fa512cd6-0d57-4e9e-8bee-96c6a922220e/scratchpad/lang/`
+(`ev.py` runs a model over 8 s windows into `out/asr.jsonl`; `route.py` is the
+router; `lid.py` / `out/lid_*.jsonl` is the Whisper language-ID attempt).
+Scratch space: it will not survive a reboot.
+
+- Candidates run on the owner's 20 recordings plus the Hinglish TTS clip:
+  Whisper tiny/base/small/turbo (+ `.en`), Moonshine tiny/base, Parakeet TDT
+  0.6B v2/v3 and 110M, Zipformer GigaSpeech, Omnilingual 300M, Dolphin small,
+  Qwen3-ASR 0.6B.
+- **Whisper language ID per 8 s window was unreliable** on this audio
+  (`lid_small_r.jsonl`: Hindi windows labelled `nn`, `ur`, `fr`, `pt`, `ta`),
+  and it costs another model load.
+- **Parakeet TDT 110M en int8** was chosen for English: good on the English
+  windows ("is play some video and you know get into the details of Linux
+  device driver."), 0.77 s load, +189 MB after load and ~+300 MB peak over
+  base (IndicConformer: +256 / ~+345 MB), mean RTF 0.020 vs IndicConformer
+  0.031 on the laptop. The 0.6B Parakeets need ~+870 MB: too big.
+- **Router: Hindi function-word density** in IndicConformer's own output.
+  Every Hinglish note scored 0.24–0.60; the English note 0.00. The
+  English-heavy Hinglish TTS clip scored 0.16 (window 1: 0.09) and stays
+  Hindi, which is what the owner wants for Hinglish.
+
+### The design — [V] unit tests; [V] real engine on the laptop through Dart
+
+| Setting | What runs |
+|---|---|
+| **Auto** (default) | IndicConformer on every window. `LanguageRouter.route` labels each window. If any is English: IndicConformer is **freed** (`releaseModel`, M_PURGE kept), then Parakeet decodes **only** the English windows (the same sample ranges, VAD-planned or grid). |
+| Hindi | IndicConformer only - the behaviour before this change. |
+| English | Parakeet on every window; IndicConformer is neither checked nor loaded. |
+
+Router (`lib/model/language_router.dart`, ported from `route.py`):
+
+- Words: split on whitespace (as `route.py`), punctuation trimmed from each
+  end, punctuation-only tokens dropped (a deviation `route.py` never needed:
+  IndicConformer emits no punctuation). Numbers count as words.
+- The 59-word list is `route.py`'s exactly; थे and तो are deliberately absent
+  (English "the"/"to").
+- A window with **≥ 5 words** is English when density **< 0.08**.
+- A window with 1–4 words follows the note: English when the whole note has
+  ≥ 5 words and density < 0.08.
+- A window with **no words stays Hindi** and is not re-decoded (deviation from
+  "< 5 words follow the note": decoding silence again costs battery and gave
+  empty text on the laptop too).
+
+Missing English model in Auto: the Hindi text is kept and the transcript
+records `englishModelMissing: true` (nothing on screen says so yet; the copy
+will be "Add the English model to transcribe English"). English setting with
+the model missing fails as `modelMissing`, like a missing Hindi model. A
+failure of the English pass fails the whole job (saved as `failed`).
+
+Transcript (still format v1, older builds read it): segment `lang` (`hi`/`en`)
+and `model` (model id), both optional; transcript `language` is `hi` or `en`
+when every spoken segment is that language, `auto` when they mix; `model` is
+the id, or both joined with `+`. Progress in Auto counts on past the first
+pass: `N/(N+k)` to `(N+k)/(N+k)`.
+
+Engine: `RecognizerConfig`/`RecognitionJob` carry the architecture and the
+decoder/joiner paths; the sherpa driver loads a transducer with
+`OfflineTransducerModelConfig(encoder, decoder, joiner)` +
+`modelType: 'nemo_transducer'`. `KeepWarmSpeechRecognizer` already frees the
+old worker before spawning one for a different config, so a queue that
+alternates models never holds two.
+
+Laptop run through the app's Dart service and real engine
+(`test/speech_recognizer_sherpa_test.dart` with `STT_LANGUAGE`):
+
+- `voicenote-20260915-022908.wav`, Auto: window 1 → `en`, "The case should be
+  good to touch at no sharp comments for you."; silent window 2 stays `hi`.
+- `20260906-180032_s11.wav`, Auto: `hi, en, hi, en` - "हेलो सो ई एम ... पहला जो
+  मेरे को काम करना है दैट / is play some video and you know get into the details
+  of Linux device driver. / नेक्स्ट मेरे को ये करना है ... / And yeah, that should
+  be it". Wall 2.3 s for 28 s of audio (two loads).
+- Same file, English: all four windows Parakeet; Hindi: all four
+  IndicConformer - both as expected.
+
+**[?] Not measured on the phone:** Parakeet's load time, RTF and RSS; the
+extra load per mixed note (~0.8–1.2 s [I]); whether the M_PURGE release
+between passes keeps the peak at one model's size on Android.
+
+### Model delivery (English)
+
+Not bundled. Unpack the sherpa-onnx release
+`sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8.tar.bz2`
+(GitHub `k2-fsa/sherpa-onnx`, tag `asr-models`) and push these four files.
+The app checks exact sizes (`SpeechModels.parakeetTdtEnglishInt8`):
+
+| File | Bytes | sha256 (laptop copy) |
+|---|---|---|
+| `encoder.int8.onnx` | 131,113,202 | `0f35509d…1d657` |
+| `decoder.int8.onnx` | 3,955,863 | `f7c331c5…1da19` |
+| `joiner.int8.onnx` | 1,411,403 | `bf7dff69…2f6` |
+| `tokens.txt` | 9,953 | `450e56bd…cd10` |
+
+```sh
+cd sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8
+P=com.ganeshsharma.voicenotetaker_app
+D=files/models/parakeet-tdt-110m-en-int8
+adb shell run-as $P mkdir -p $D
+adb exec-in run-as $P sh -c "cat > $D/encoder.int8.onnx" < encoder.int8.onnx
+adb exec-in run-as $P sh -c "cat > $D/decoder.int8.onnx" < decoder.int8.onnx
+adb exec-in run-as $P sh -c "cat > $D/joiner.int8.onnx"  < joiner.int8.onnx
+adb exec-in run-as $P sh -c "cat > $D/tokens.txt"        < tokens.txt
+adb shell run-as $P sh -c "'chmod 700 files/models $D && chmod 600 $D/*'"
+adb shell run-as $P ls -l $D   # sizes must match the table
+```
+
+### Notes with nothing in them
+
+- **Rule** (`lib/model/empty_note_policy.dart`, pure): a note whose
+  transcription **succeeded** and found nothing in any window (every segment
+  empty after trimming) is deleted - WAV, transcript and every sidecar -
+  unless marked Keep. Never on a saved failure or no transcript. Deferred
+  while it is written, while a manual recording runs (any capture: the
+  recorder does not expose its path), while it is open in the note screen or
+  playing, or while it is transcribed.
+- **Crash-safe** (`lib/services/empty_note_service.dart`): the marker
+  `voicenote-X.empty-note.json` is written when the transcript is saved empty
+  (and before any file goes), removed last by `LibraryService.deleteFiles`.
+  Every start sweeps marked notes; a marker beside a note that now has words,
+  a Keep or a failure is dropped. A delete killed half way finishes next start
+  (audio and transcript both gone ⇒ only sidecars left).
+- **One-time sweep:** the first start with this build also reads every saved
+  transcript and applies the same rules, then writes
+  `empty-notes-sweep.json` in the settings directory.
+- **Controller:** `noteOpened`/`noteClosed` (called by `NoteView`
+  `initState`/`dispose`) defer; the sweep re-runs on note close, recording
+  stop, transcription end and return to the app, only while something is
+  pending. Deleted notes leave the queue, the caches and the library (one
+  refresh).
+
+### Tests
+
+- Before: 1189 passed, 1 skipped.
+- New: `language_router_test.dart` (laptop windows: Hinglish, English,
+  mixed, short-follows-note, boundaries, punctuation/numbers),
+  `transcript_language_test.dart` (v1 back-compat both ways, catalogue sizes,
+  config equality, setting store), `transcription_language_service_test.dart`
+  (swap order hi → release → en, subset windows, VAD windows, missing/partial
+  English model, English and Hindi modes, English-pass failure and cancel,
+  keep-warm frees before loading), `empty_note_policy_test.dart`,
+  `empty_note_service_test.dart` (marker, one-time sweep, keep/failure/words,
+  defer and re-check, kill recovery, failed delete),
+  `empty_notes_controller_test.dart` (after transcription, open until closed,
+  restart, start sweeps, language persistence and English mode), and the note
+  screen's "no speech found" now checks the note goes only after the screen
+  closes. Three older tests were adjusted because empty notes are now deleted.

@@ -159,6 +159,9 @@ void main() {
     final path = await seed(harness, old, transcribed: false);
     await harness.controller.initialise();
     await harness.controller.setAutoDeleteAudio(true);
+    // Open, so the empty note itself is not deleted meanwhile (see
+    // empty_notes_controller_test.dart) and retention alone is judged.
+    harness.controller.noteOpened(path);
 
     await harness.controller.transcribe(info(harness, path));
     await settle();
@@ -216,8 +219,11 @@ void main() {
     expect(
         harness.fileStore.files.keys
             .where((p) => p.startsWith(ViewHarness.recordingsDirectory)),
-        <String>[
-          '${ViewHarness.recordingsDirectory}/audio-retention-settings.json'
-        ]);
+        unorderedEquals(<String>[
+          '${ViewHarness.recordingsDirectory}/audio-retention-settings.json',
+          // The one-time empty-note sweep's record; settings live beside the
+          // recordings in this harness.
+          '${ViewHarness.recordingsDirectory}/empty-notes-sweep.json',
+        ]));
   });
 }

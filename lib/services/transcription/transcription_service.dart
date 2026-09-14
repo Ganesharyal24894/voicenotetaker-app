@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../../drivers/file_store.dart';
 import '../../drivers/speech_recognizer.dart';
+import '../../model/language_router.dart';
 import '../../model/transcription.dart';
 import '../wav_reader.dart';
 import 'speech_model_store.dart';
@@ -61,12 +62,16 @@ class TranscriptionException implements Exception {
 /// [useVoiceActivitySegmentation] on AND the VAD model installed, the job also
 /// asks the recognizer to cut windows in the pauses; if the VAD model is
 /// absent, or cannot run, the fixed grid is used unchanged.
+///
+/// LANGUAGES. See [transcribe]: in Auto, Hindi first, then English windows
+/// again with the English model - loaded only after the Hindi one is freed.
 class TranscriptionService {
   TranscriptionService({
     required this._fileStore,
     required this._models,
     required this._recognizer,
     this._model = SpeechModels.indicConformerHindiInt8,
+    this._englishModel = SpeechModels.parakeetTdtEnglishInt8,
     this._vadModel = SpeechModels.sileroVad,
     this.useVoiceActivitySegmentation = false,
     Stopwatch Function()? clock,
@@ -76,6 +81,7 @@ class TranscriptionService {
   final SpeechModelStore _models;
   final SpeechRecognizer _recognizer;
   final SpeechModel _model;
+  final SpeechModel _englishModel;
   final VadModel _vadModel;
   final Stopwatch Function() _clock;
 
@@ -94,21 +100,39 @@ class TranscriptionService {
   /// Completes when the running engine stream has finished, one way or another.
   Completer<void>? _engineDone;
 
+  /// The Hindi model: every window's first decode, unless the language is
+  /// English.
   SpeechModel get model => _model;
+
+  /// The English model, for windows routed English.
+  SpeechModel get englishModel => _englishModel;
 
   bool get isBusy => _busy;
 
   /// Whether the model this service uses is installed.
   Future<SpeechModelStatus> modelStatus() => _models.status(_model);
 
+  /// Whether the English model is installed.
+  Future<SpeechModelStatus> englishModelStatus() =>
+      _models.status(_englishModel);
+
   /// Transcribes the WAV file at [path] with [numThreads] CPU threads.
   ///
   /// [onProgress] is called after each window with how many of how many are
   /// done. Throws [TranscriptionException]; never anything else.
+  ///
+  /// [language] - see [TranscriptionLanguage]. In [TranscriptionLanguage.auto]
+  /// every window is decoded by the Hindi model first; windows
+  /// [LanguageRouter] calls English are then decoded again by the English
+  /// model, after the Hindi one is freed. Progress then counts on past the
+  /// first pass: `N/(N+k)` up to `(N+k)/(N+k)` for `k` English windows.
+  /// A missing English model is not a failure: those windows stay Hindi and
+  /// the result says [TranscriptionResult.englishModelMissing].
   Future<TranscriptionResult> transcribe(
     String path, {
     int numThreads = 2,
     void Function(int done, int total)? onProgress,
+    TranscriptionLanguage language = TranscriptionLanguage.auto,
   }) async {
     if (numThreads <= 0) {
       throw ArgumentError.value(numThreads, 'numThreads', 'must be > 0');
@@ -122,7 +146,7 @@ class TranscriptionService {
     _busy = true;
     _cancelRequested = false;
     try {
-      return await _run(path, numThreads, onProgress);
+      return await _run(path, numThreads, onProgress, language);
     } finally {
       _busy = false;
       _cancelRequested = false;
@@ -178,8 +202,13 @@ class TranscriptionService {
     String path,
     int numThreads,
     void Function(int done, int total)? onProgress,
+    TranscriptionLanguage language,
   ) async {
     final wall = _clock()..start();
+    // The model every window is decoded with first: IndicConformer, except
+    // when the setting is English.
+    final primary =
+        language == TranscriptionLanguage.english ? _englishModel : _model;
 
     // The audio is checked BEFORE the model: a bad file must never cost a
     // 188 MB load to discover.
@@ -219,46 +248,36 @@ class TranscriptionService {
     if (header.audioFormat != 1 ||
         header.channels != 1 ||
         header.bitsPerSample != 16 ||
-        header.sampleRateHz != _model.sampleRateHz) {
+        header.sampleRateHz != primary.sampleRateHz) {
       throw TranscriptionException(
         TranscriptionFailure.unsupportedAudio,
-        'expected 16-bit mono PCM at ${_model.sampleRateHz} Hz, got $header',
+        'expected 16-bit mono PCM at ${primary.sampleRateHz} Hz, got $header',
       );
     }
 
     final totalSamples = payloadBytes <= 0 ? 0 : payloadBytes ~/ 2;
     final audioDuration = Duration(
-      microseconds: totalSamples * 1000000 ~/ _model.sampleRateHz,
+      microseconds: totalSamples * 1000000 ~/ primary.sampleRateHz,
     );
-    var windows = WindowPlanner.forModel(_model, totalSamples);
+    final grid = WindowPlanner.forModel(primary, totalSamples);
 
     // Nothing to hear, nothing to load.
-    if (windows.isEmpty) {
+    if (grid.isEmpty) {
       wall.stop();
       return TranscriptionResult(
         audioPath: path,
-        modelId: _model.id,
+        modelId: primary.id,
         numThreads: numThreads,
         audioDuration: Duration.zero,
         segments: const <TranscriptSegment>[],
         loadTime: Duration.zero,
         decodeTime: Duration.zero,
         wallTime: wall.elapsed,
+        languageCode: primary.languageCode,
       );
     }
 
-    _throwIfCancelled();
-    final status = await _models.status(_model);
-    _throwIfCancelled();
-    if (!status.isReady) {
-      throw TranscriptionException(
-        status.availability == SpeechModelAvailability.missing
-            ? TranscriptionFailure.modelMissing
-            : TranscriptionFailure.modelIncomplete,
-        '${_model.displayName} is not installed in ${status.directory}'
-        '${status.problems.isEmpty ? '' : ': ${status.problems.join('; ')}'}',
-      );
-    }
+    await _requireModel(primary);
 
     VadSegmentation? vad;
     if (useVoiceActivitySegmentation && await _models.isVadReady(_vadModel)) {
@@ -266,23 +285,157 @@ class TranscriptionService {
         modelPath: _models.vadPathOf(_vadModel),
         model: _vadModel,
         maxWindowSamples:
-            _model.maxWindow.inMicroseconds * _model.sampleRateHz ~/ 1000000,
+            primary.maxWindow.inMicroseconds * primary.sampleRateHz ~/ 1000000,
       );
     }
     _throwIfCancelled();
 
-    final job = RecognitionJob(
-      modelPath: _models.pathOf(_model, _model.modelFile),
-      tokensPath: _models.pathOf(_model, _model.tokensFile),
-      featureDim: _model.featureDim,
+    final first = await _runPass(
+      _jobFor(primary, path, header, numThreads, grid, vad),
+      onProgress,
+    );
+    final windows = first.windows;
+    final texts = List<String>.of(first.texts);
+    final languages = List<String>.filled(windows.length, primary.languageCode);
+    final models = List<String>.filled(windows.length, primary.id);
+    final passes = <_Pass>[first];
+    var englishModelMissing = false;
+
+    if (language == TranscriptionLanguage.auto) {
+      final routes = LanguageRouter.route(texts);
+      final english = <int>[
+        for (var i = 0; i < routes.length; i++)
+          if (routes[i] == WindowLanguage.english) i,
+      ];
+      if (english.isNotEmpty) {
+        _throwIfCancelled();
+        final status = await _models.status(_englishModel);
+        _throwIfCancelled();
+        if (!status.isReady) {
+          // Hindi transliteration is still better than nothing; the note can
+          // say why once there is a screen for it.
+          englishModelMissing = true;
+        } else {
+          // ONE MODEL IN MEMORY AT A TIME: IndicConformer is freed before
+          // Parakeet loads, not left for the recognizer's idle timeout.
+          await _recognizer.releaseModel();
+          _throwIfCancelled();
+          final total = windows.length + english.length;
+          final second = await _runPass(
+            _jobFor(
+              _englishModel,
+              path,
+              header,
+              numThreads,
+              <SampleRange>[for (final i in english) windows[i]],
+              null,
+            ),
+            (done, _) => onProgress?.call(windows.length + done, total),
+            // Its windows are the first pass's, never re-planned.
+            allowPlanning: false,
+          );
+          passes.add(second);
+          for (var j = 0; j < english.length; j++) {
+            texts[english[j]] = second.texts[j];
+            languages[english[j]] = _englishModel.languageCode;
+            models[english[j]] = _englishModel.id;
+          }
+        }
+      }
+    }
+
+    wall.stop();
+    Duration samplesToTime(int samples) =>
+        Duration(microseconds: samples * 1000000 ~/ primary.sampleRateHz);
+    final spoken = <String>{
+      for (var i = 0; i < texts.length; i++)
+        if (texts[i].trim().isNotEmpty) languages[i],
+    };
+    int? peak;
+    for (final pass in passes) {
+      final value = pass.released.peakRssKb;
+      if (value != null && (peak == null || value > peak)) peak = value;
+    }
+    return TranscriptionResult(
+      audioPath: path,
+      modelId: models.toSet().join('+'),
+      numThreads: numThreads,
+      audioDuration: audioDuration,
+      segments: <TranscriptSegment>[
+        for (var i = 0; i < windows.length; i++)
+          TranscriptSegment(
+            start: samplesToTime(windows[i].start),
+            end: samplesToTime(windows[i].end),
+            text: texts[i],
+            languageCode: languages[i],
+            modelId: models[i],
+          ),
+      ],
+      loadTime: passes.fold(Duration.zero, (sum, pass) => sum + pass.loadTime),
+      decodeTime:
+          passes.fold(Duration.zero, (sum, pass) => sum + pass.decodeTime),
+      wallTime: wall.elapsed,
+      rssBeforeLoadKb: first.released.rssBeforeLoadKb,
+      peakRssKb: peak,
+      rssAfterReleaseKb: passes.last.released.rssAfterReleaseKb,
+      languageCode: spoken.length == 1
+          ? spoken.single
+          : spoken.isEmpty
+              ? primary.languageCode
+              : 'auto',
+      englishModelMissing: englishModelMissing,
+    );
+  }
+
+  /// Throws unless every file of [model] is installed at its exact size.
+  Future<void> _requireModel(SpeechModel model) async {
+    _throwIfCancelled();
+    final status = await _models.status(model);
+    _throwIfCancelled();
+    if (!status.isReady) {
+      throw TranscriptionException(
+        status.availability == SpeechModelAvailability.missing
+            ? TranscriptionFailure.modelMissing
+            : TranscriptionFailure.modelIncomplete,
+        '${model.displayName} is not installed in ${status.directory}'
+        '${status.problems.isEmpty ? '' : ': ${status.problems.join('; ')}'}',
+      );
+    }
+  }
+
+  RecognitionJob _jobFor(
+    SpeechModel model,
+    String path,
+    WavHeader header,
+    int numThreads,
+    List<SampleRange> windows,
+    VadSegmentation? vad,
+  ) {
+    final decoder = model.decoderFile;
+    final joiner = model.joinerFile;
+    return RecognitionJob(
+      modelPath: _models.pathOf(model, model.modelFile),
+      tokensPath: _models.pathOf(model, model.tokensFile),
+      featureDim: model.featureDim,
       numThreads: numThreads,
       audioPath: path,
       dataOffset: header.dataOffset,
       sampleRateHz: header.sampleRateHz,
       windows: windows,
       vad: vad,
+      architecture: model.architecture,
+      decoderPath: decoder == null ? '' : _models.pathOf(model, decoder),
+      joinerPath: joiner == null ? '' : _models.pathOf(model, joiner),
     );
+  }
 
+  /// Runs one job on the engine to the end, and collects every window's text.
+  Future<_Pass> _runPass(
+    RecognitionJob job,
+    void Function(int done, int total)? onProgress, {
+    bool allowPlanning = true,
+  }) async {
+    var windows = job.windows;
     Duration? loadTime;
     var decodeTime = Duration.zero;
     var texts = List<String?>.filled(windows.length, null);
@@ -297,12 +450,14 @@ class TranscriptionService {
             case RecognitionModelLoaded():
               loadTime = event.loadTime;
             case RecognitionWindowsPlanned():
+              if (!allowPlanning) break;
               // Voice-activity segmentation replaced the grid; indices from
               // here on refer to these windows.
               windows = event.windows;
               texts = List<String?>.filled(windows.length, null);
               onProgress?.call(0, windows.length);
             case RecognitionWindowDecoded():
+              if (event.index < 0 || event.index >= texts.length) break;
               texts[event.index] = event.text;
               decodeTime += event.decodeTime;
               onProgress?.call(event.index + 1, windows.length);
@@ -345,29 +500,29 @@ class TranscriptionService {
         '${missing.isEmpty ? '' : ' - windows $missing were never decoded'}',
       );
     }
-
-    wall.stop();
-    Duration samplesToTime(int samples) =>
-        Duration(microseconds: samples * 1000000 ~/ _model.sampleRateHz);
-    return TranscriptionResult(
-      audioPath: path,
-      modelId: _model.id,
-      numThreads: numThreads,
-      audioDuration: audioDuration,
-      segments: <TranscriptSegment>[
-        for (var i = 0; i < windows.length; i++)
-          TranscriptSegment(
-            start: samplesToTime(windows[i].start),
-            end: samplesToTime(windows[i].end),
-            text: texts[i]!,
-          ),
-      ],
+    return _Pass(
+      windows: windows,
+      texts: <String>[for (final text in texts) text!],
       loadTime: loaded,
       decodeTime: decodeTime,
-      wallTime: wall.elapsed,
-      rssBeforeLoadKb: release.rssBeforeLoadKb,
-      peakRssKb: release.peakRssKb,
-      rssAfterReleaseKb: release.rssAfterReleaseKb,
+      released: release,
     );
   }
+}
+
+/// What one run of the engine produced.
+class _Pass {
+  const _Pass({
+    required this.windows,
+    required this.texts,
+    required this.loadTime,
+    required this.decodeTime,
+    required this.released,
+  });
+
+  final List<SampleRange> windows;
+  final List<String> texts;
+  final Duration loadTime;
+  final Duration decodeTime;
+  final RecognitionReleased released;
 }

@@ -26,9 +26,11 @@ import '../model/reconnect_backoff.dart';
 import '../model/recording_metadata.dart';
 import '../model/speaker_names.dart';
 import '../model/stream_info.dart';
+import '../model/language_router.dart';
 import '../model/transcript.dart';
 import '../model/transcription.dart';
 import '../services/audio_retention_service.dart';
+import '../services/empty_note_service.dart';
 import '../services/continuous/continuous_session.dart';
 import '../services/continuous/continuous_settings_store.dart';
 import '../services/continuous/note_writer.dart';
@@ -41,6 +43,7 @@ import '../services/transcription/speaker_names_store.dart';
 import '../services/transcription/transcript_store.dart';
 import '../services/transcription/transcription_queue.dart';
 import '../services/transcription/transcription_service.dart';
+import '../services/transcription/transcription_settings_store.dart';
 import '../services/wav_repair.dart';
 
 /// What the app is doing right now, as one flat enum the placeholder view can
@@ -116,6 +119,7 @@ class AppController extends ChangeNotifier {
           fileStore: fileStore,
           directory: settingsDirectory ?? _recordingsDirectory,
         ),
+        _settingsDirectory = settingsDirectory ?? _recordingsDirectory,
         _settingsStore = ContinuousSettingsStore(
           fileStore: fileStore,
           // Beside the recordings when no other place is given, as the mic
@@ -138,6 +142,10 @@ class AppController extends ChangeNotifier {
   final String _recordingsDirectory;
   final RecordingService _recorder;
   final LibraryService _library;
+
+  /// Where app settings live: the support directory from `main.dart`, beside
+  /// the recordings otherwise.
+  final String _settingsDirectory;
 
   /// Supplied by tests that need shorter measurement windows than ten seconds.
   final DeviceTestService? _injectedTests;
@@ -304,6 +312,7 @@ class AppController extends ChangeNotifier {
       final result = await service.transcribe(
         path,
         numThreads: transcriptionThreads,
+        language: _transcriptionLanguage,
         onProgress: (done, total) {
           _transcriptionDone = done;
           _transcriptionTotal = total;
@@ -316,7 +325,6 @@ class AppController extends ChangeNotifier {
       debugPrint('STT $result');
       final transcript = Transcript.fromResult(
         result,
-        languageCode: service.model.languageCode,
         createdAt: DateTime.now(),
       );
       _transcriptCache[path] = transcript;
@@ -324,6 +332,8 @@ class AppController extends ChangeNotifier {
         await _transcripts.save(path, transcript);
         succeeded = true;
         await _transcripts.clearFailure(path);
+        // Nothing said in any window: the note goes, once nothing uses it.
+        if (!transcript.hasSpeech) await _markEmptyNote(path);
       } on Object catch (error) {
         // The words are still on screen for this session; they are simply
         // worked out again next time.
@@ -362,7 +372,33 @@ class AppController extends ChangeNotifier {
     // A transcript just landed, which is what can make an old recording's
     // audio removable.
     if (succeeded) unawaited(_sweepAudio());
+    unawaited(_sweepEmptyNotesIfPending());
     if (!_pumping) unawaited(_pumpTranscriptions());
+  }
+
+  // Which language transcription listens for. Auto unless changed; nothing
+  // on screen changes it yet (the picker waits for a design).
+  late final TranscriptionSettingsStore _transcriptionSettings =
+      TranscriptionSettingsStore(
+    fileStore: _fileStore,
+    directory: _settingsDirectory,
+  );
+  TranscriptionLanguage _transcriptionLanguage = TranscriptionLanguage.auto;
+
+  /// The transcription language. Persisted; applies to the next job, and
+  /// does not transcribe existing notes again.
+  TranscriptionLanguage get transcriptionLanguage => _transcriptionLanguage;
+
+  Future<void> setTranscriptionLanguage(TranscriptionLanguage language) async {
+    if (language == _transcriptionLanguage) return;
+    _transcriptionLanguage = language;
+    try {
+      await _transcriptionSettings.saveLanguage(language);
+    } on Object catch (error) {
+      // Applies for this run; it is only forgotten across a restart.
+      debugPrint('Could not save the transcription language: $error');
+    }
+    notifyListeners();
   }
 
   // -------------------------------------------------------------------------
@@ -437,6 +473,7 @@ class AppController extends ChangeNotifier {
     await refreshAvailability();
     _ensureContinuousLink();
     await _sweepAudio();
+    await _sweepEmptyNotesIfPending();
     await _planTranscriptions();
   }
 
@@ -962,6 +999,7 @@ class AppController extends ChangeNotifier {
   Future<void> initialise() async {
     _continuous = await _settingsStore.load();
     _autoDeleteAudio = await _retentionSettings.loadAutoDeleteAudio();
+    _transcriptionLanguage = await _transcriptionSettings.loadLanguage();
     // BEFORE the library is read: a note or a capture the app was killed in
     // the middle of must be listed, played and transcribed at its real length.
     // Nothing is writing yet, so no header here can be one still in use.
@@ -1007,6 +1045,7 @@ class AppController extends ChangeNotifier {
     _ensureContinuousLink();
     notifyListeners();
     await _sweepAudio();
+    await _sweepEmptyNotes(allNotes: !await _emptyNotes.isFullSweepDone());
     // Off screen too where the platform keeps the process alive - a process
     // Android restarted headless for always-listening picks its queue back
     // up, as the policy allows.
@@ -2117,6 +2156,117 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // EMPTY NOTES
+  //
+  // A note whose transcription SUCCEEDED and found nothing in any window is
+  // deleted - WAV, transcript and sidecars - unless the user marked it Keep.
+  // Never while it is written, while a manual recording runs, while it is open
+  // in the note screen (or playing), or while it is transcribed: deferred,
+  // and tried again when that ends. The rules are [EmptyNotePolicy]'s; the
+  // marker-first deletion is [EmptyNoteService]'s. At start, marked notes are
+  // swept, and on the first start with this build every saved transcript is.
+  // -------------------------------------------------------------------------
+
+  late final EmptyNoteService _emptyNotes = EmptyNoteService(
+    fileStore: _fileStore,
+    directory: _recordingsDirectory,
+    transcripts: _transcripts,
+    settingsDirectory: _settingsDirectory,
+  );
+
+  /// How many note screens show each recording, by path.
+  final Map<String, int> _openNotes = <String, int>{};
+
+  bool _emptySweeping = false;
+  bool _emptySweepAgain = false;
+
+  /// A note was marked empty, or the last sweep deferred or failed one.
+  bool _emptyNotesPending = false;
+
+  EmptyNoteSweepReport? _lastEmptyNoteSweep;
+
+  /// What the last empty-note sweep did; null before one ran.
+  EmptyNoteSweepReport? get lastEmptyNoteSweep => _lastEmptyNoteSweep;
+
+  /// The note screen is showing [path]: it is not deleted meanwhile.
+  void noteOpened(String path) {
+    _openNotes[path] = (_openNotes[path] ?? 0) + 1;
+  }
+
+  /// A note screen showing [path] closed. A deferred deletion runs now.
+  void noteClosed(String path) {
+    final count = (_openNotes[path] ?? 0) - 1;
+    if (count > 0) {
+      _openNotes[path] = count;
+      return;
+    }
+    _openNotes.remove(path);
+    unawaited(_sweepEmptyNotesIfPending());
+  }
+
+  Future<void> _markEmptyNote(String path) async {
+    try {
+      await _emptyNotes.markEmpty(path, now: _now());
+      _emptyNotesPending = true;
+    } on Object catch (error) {
+      debugPrint('Could not mark an empty note: $error');
+    }
+  }
+
+  Future<void> _sweepEmptyNotesIfPending() async {
+    if (_emptyNotesPending) await _sweepEmptyNotes();
+  }
+
+  Future<void> _sweepEmptyNotes({bool allNotes = false}) async {
+    if (_emptySweeping) {
+      _emptySweepAgain = true;
+      return;
+    }
+    _emptySweeping = true;
+    try {
+      do {
+        _emptySweepAgain = false;
+        final report = await _emptyNotes.sweep(
+          now: _now(),
+          allNotes: allNotes,
+          useOf: (path) => (
+            writing: path == writingNotePath,
+            // The capture's own path is not known here, so every note waits
+            // for it; stopping the recording sweeps again.
+            capturing: _recorder.isRecording,
+            open: _openNotes.containsKey(path) ||
+                (path == _nowPlaying?.path && _playback.isPlaying),
+            transcribing: path == _transcribingPath,
+          ),
+        );
+        allNotes = false;
+        _lastEmptyNoteSweep = report;
+        _emptyNotesPending =
+            report.deferred.isNotEmpty || report.failed.isNotEmpty;
+        if (report.deleted.isEmpty) continue;
+        debugPrint('Empty notes: $report');
+        for (final path in report.deleted) {
+          _queue.remove(path);
+          _transcriptCache.remove(path);
+          _transcriptFailures.remove(path);
+          _speakerNames.remove(path);
+          if (_lastRecording?.path == path) _lastRecording = null;
+          // Stopped when its screen closed; the player lets go of it.
+          if (_nowPlaying?.path == path) {
+            _nowPlaying = null;
+            _playback = PlaybackState.idle;
+          }
+        }
+        await refreshLibrary();
+      } while (_emptySweepAgain);
+    } on Object catch (error) {
+      debugPrint('Empty note sweep failed: $error');
+    } finally {
+      _emptySweeping = false;
+    }
+  }
+
   Future<void> startRecording() async {
     final device = _connectedDevice;
     // Not while always-listening: notes are already being made, from the same
@@ -2172,6 +2322,7 @@ class AppController extends ChangeNotifier {
     await refreshLibrary();
     _setPhase(_connectedDevice == null ? AppPhase.idle : AppPhase.connected);
     unawaited(_enqueueFinished(_lastRecording!.path));
+    unawaited(_sweepEmptyNotesIfPending());
   }
 
   /// Re-reads the recordings directory.

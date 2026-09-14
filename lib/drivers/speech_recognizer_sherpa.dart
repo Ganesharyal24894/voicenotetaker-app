@@ -15,7 +15,8 @@ import 'speech_recognizer.dart';
 /// This is the ONLY file in the app that may name `sherpa_onnx`. Everything it
 /// accepts and emits is a `lib/model/` type.
 ///
-/// THE CONFIGURATION. An OFFLINE recognizer with a NeMo CTC model, 80 mel
+/// THE CONFIGURATION (see [_load] for the English transducer). An OFFLINE
+/// recognizer with a NeMo CTC model, 80 mel
 /// bins, greedy search, 16 kHz - the Dart spelling of the Python
 /// `OfflineRecognizer.from_nemo_ctc(model, tokens, num_threads, sample_rate=
 /// 16000, feature_dim=80, decoding_method="greedy_search")` that was verified
@@ -27,6 +28,11 @@ import 'speech_recognizer.dart';
 /// there and freed there, so the UI isolate never blocks on inference.
 /// `sherpa_onnx` keeps its FFI bindings per isolate, which is why
 /// [sherpa.initBindings] is called inside the worker.
+///
+/// TWO MODELS, NEVER TOGETHER. A worker holds one [RecognizerConfig]; a job for
+/// the other model (Hindi then English in one note) makes
+/// [KeepWarmSpeechRecognizer] shut this worker down - native free, allocator
+/// purge, isolate exit - before a new one loads.
 ///
 /// LIFETIME. One worker serves consecutive jobs with one load, and frees the
 /// model and exits after [idleTimeout] without work, on [releaseModel], or
@@ -438,6 +444,13 @@ Future<void> _workerMain(_WorkerStart start) async {
   }
 }
 
+/// Loads the one model [config] names.
+///
+/// CTC: `OfflineNemoEncDecCtcModelConfig(model)`, as verified for
+/// IndicConformer. TRANSDUCER: `OfflineTransducerModelConfig(encoder, decoder,
+/// joiner)` with `modelType: 'nemo_transducer'` - the Dart spelling of the
+/// Python `OfflineRecognizer.from_transducer(..., model_type=
+/// "nemo_transducer")` the laptop evaluation ran Parakeet TDT 110M with.
 sherpa.OfflineRecognizer _load(RecognizerConfig config) =>
     sherpa.OfflineRecognizer(
       sherpa.OfflineRecognizerConfig(
@@ -445,15 +458,29 @@ sherpa.OfflineRecognizer _load(RecognizerConfig config) =>
           sampleRate: config.sampleRateHz,
           featureDim: config.featureDim,
         ),
-        model: sherpa.OfflineModelConfig(
-          nemoCtc: sherpa.OfflineNemoEncDecCtcModelConfig(
-            model: config.modelPath,
-          ),
-          tokens: config.tokensPath,
-          numThreads: config.numThreads,
-          provider: 'cpu',
-          debug: false,
-        ),
+        model: switch (config.architecture) {
+          SpeechModelArchitecture.nemoCtc => sherpa.OfflineModelConfig(
+              nemoCtc: sherpa.OfflineNemoEncDecCtcModelConfig(
+                model: config.modelPath,
+              ),
+              tokens: config.tokensPath,
+              numThreads: config.numThreads,
+              provider: 'cpu',
+              debug: false,
+            ),
+          SpeechModelArchitecture.nemoTransducer => sherpa.OfflineModelConfig(
+              transducer: sherpa.OfflineTransducerModelConfig(
+                encoder: config.modelPath,
+                decoder: config.decoderPath,
+                joiner: config.joinerPath,
+              ),
+              tokens: config.tokensPath,
+              numThreads: config.numThreads,
+              provider: 'cpu',
+              modelType: 'nemo_transducer',
+              debug: false,
+            ),
+        },
         decodingMethod: 'greedy_search',
       ),
     );

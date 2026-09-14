@@ -84,6 +84,18 @@ abstract final class RecordingNaming {
   static String speakerNamesPathOf(String audioPath) =>
       _sidecarOf(audioPath, speakerNamesSuffix);
 
+  /// Suffix of the marker saying "nothing was said in this note; delete it
+  /// once nothing is using it".
+  ///
+  /// Written when a transcription finds no speech, and BEFORE any file of the
+  /// note is deleted, so a deletion that was deferred (the note was open) or
+  /// killed half way is picked up again at the next start. Removed last. See
+  /// `EmptyNotePolicy`.
+  static const String emptyNoteSuffix = '.empty-note.json';
+
+  static String emptyNotePathOf(String audioPath) =>
+      _sidecarOf(audioPath, emptyNoteSuffix);
+
   /// The recording a sidecar at [sidecarPath] with [suffix] belongs to.
   static String audioPathOfSidecar(String sidecarPath, String suffix) =>
       '${sidecarPath.substring(0, sidecarPath.length - suffix.length)}'
@@ -271,16 +283,25 @@ class LibraryService {
   /// that, what is left is a stray sidecar nobody can see, never a recording
   /// that has lost its transcript but is still listed.
   Future<void> delete(String path) async {
-    await _fileStore.delete(path);
-    await _fileStore.delete(RecordingNaming.transcriptPathOf(path));
-    await _fileStore.delete(RecordingNaming.transcriptFailurePathOf(path));
-    await _fileStore.delete(RecordingNaming.keepAudioPathOf(path));
-    await _fileStore.delete(RecordingNaming.speakerNamesPathOf(path));
+    await deleteFiles(_fileStore, path);
+    await refresh();
+  }
+
+  /// Deletes the recording at [path] and every file kept beside it, without
+  /// re-listing. The order is load-bearing - see [delete].
+  static Future<void> deleteFiles(FileStore fileStore, String path) async {
+    await fileStore.delete(path);
+    await fileStore.delete(RecordingNaming.transcriptPathOf(path));
+    await fileStore.delete(RecordingNaming.transcriptFailurePathOf(path));
+    await fileStore.delete(RecordingNaming.keepAudioPathOf(path));
+    await fileStore.delete(RecordingNaming.speakerNamesPathOf(path));
     // Last: for a note whose audio was already removed, this marker is what
     // lists it, so a delete interrupted before here leaves it visible and
     // deletable rather than a hidden stray.
-    await _fileStore.delete(RecordingNaming.audioRemovedPathOf(path));
-    await refresh();
+    await fileStore.delete(RecordingNaming.audioRemovedPathOf(path));
+    // After everything: while it is there, an interrupted empty-note deletion
+    // is finished at the next start.
+    await fileStore.delete(RecordingNaming.emptyNotePathOf(path));
   }
 
   Future<void> dispose() async {

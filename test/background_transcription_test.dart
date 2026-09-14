@@ -52,7 +52,10 @@ void main() {
 
   test('on screen, every recording without a transcript is done, newest '
       'first, one at a time', () async {
-    final harness = await seeded();
+    // Words, so the notes are kept: an empty one would be deleted.
+    final harness = await seeded(
+      recognizer: ScriptedRecognizer()..texts = <int, String>{0: 'हाँ'},
+    );
     // One already has a transcript beside it.
     harness.fileStore.files[RecordingNaming.transcriptPathOf(pathAt(ten))] =
         <int>[];
@@ -63,7 +66,7 @@ void main() {
     expect(harness.recognizer!.audioPaths, <String>[pathAt(eleven), pathAt(nine)]);
     expect(harness.controller.transcriptionQueue, isEmpty);
     expect(harness.controller.listTranscriptStatusFor(info(harness, eleven)),
-        TranscriptStatus.noSpeech);
+        TranscriptStatus.done);
   });
 
   test('with no model on the phone nothing is queued', () async {

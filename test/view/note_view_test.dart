@@ -304,6 +304,14 @@ void main() {
 
       expect(find.text('No speech found.'), findsOneWidget);
       expect(tester.takeException(), isNull);
+
+      // The empty note is deleted - but not while it is on screen.
+      await flush(tester);
+      expect(note.harness.fileStore.files, contains(note.info.path));
+      await tester.pumpWidget(const SizedBox());
+      await flush(tester, rounds: 6);
+      expect(note.harness.fileStore.files, isNot(contains(note.info.path)));
+      expect(note.harness.controller.recordings, isEmpty);
     });
 
     testWidgets('failed: a plain message, Try again, and Transcribe again in '
