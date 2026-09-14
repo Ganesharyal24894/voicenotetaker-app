@@ -138,8 +138,13 @@ class ScrubWaveform extends StatelessWidget {
     required this.progress,
     this.onSeek,
     this.levels,
+    this.height = bandHeight,
     super.key,
   });
+
+  /// The band's height. [bandHeight] on a full screen; the note's audio panel
+  /// uses a compact one. Bars scale with it.
+  final double height;
 
   /// Playhead position in `0.0 .. 1.0`.
   final double progress;
@@ -225,7 +230,7 @@ class ScrubWaveform extends StatelessWidget {
             onHorizontalDragUpdate:
                 onSeek == null ? null : (d) => seek(d.localPosition),
             child: SizedBox(
-              height: bandHeight,
+              height: height,
               width: double.infinity,
               child: CustomPaint(
                 painter: ScrubWaveformPainter(

@@ -73,6 +73,17 @@ abstract final class RecordingNaming {
   static String audioRemovedPathOf(String audioPath) =>
       _sidecarOf(audioPath, audioRemovedSuffix);
 
+  /// Suffix of the names the user gave a note's speakers.
+  ///
+  /// A SIDECAR, NOT A FIELD IN THE TRANSCRIPT: transcribing again replaces
+  /// the transcript file whole, and the names must outlive that. Keyed by
+  /// speaker label, so a new transcript keeps the names of the labels it
+  /// still uses. Deleted with the recording; the retention sweep leaves it.
+  static const String speakerNamesSuffix = '.speakers.json';
+
+  static String speakerNamesPathOf(String audioPath) =>
+      _sidecarOf(audioPath, speakerNamesSuffix);
+
   /// The recording a sidecar at [sidecarPath] with [suffix] belongs to.
   static String audioPathOfSidecar(String sidecarPath, String suffix) =>
       '${sidecarPath.substring(0, sidecarPath.length - suffix.length)}'
@@ -264,6 +275,7 @@ class LibraryService {
     await _fileStore.delete(RecordingNaming.transcriptPathOf(path));
     await _fileStore.delete(RecordingNaming.transcriptFailurePathOf(path));
     await _fileStore.delete(RecordingNaming.keepAudioPathOf(path));
+    await _fileStore.delete(RecordingNaming.speakerNamesPathOf(path));
     // Last: for a note whose audio was already removed, this marker is what
     // lists it, so a delete interrupted before here leaves it visible and
     // deletable rather than a hidden stray.

@@ -10,10 +10,11 @@ import '../model/recording_info.dart';
 import 'connection_lost_view.dart';
 import 'developer_view.dart';
 import 'diagnostics_view.dart';
+import 'home/summarize_sheet.dart';
 import 'home/summary_scope.dart';
 import 'home_view.dart';
-import 'library_view.dart';
-import 'playback_view.dart';
+import 'all_notes_view.dart';
+import 'note_view.dart';
 import 'recording_entry.dart';
 import 'recording_view.dart';
 import 'scan_view.dart';
@@ -31,7 +32,7 @@ import 'theme.dart';
 /// transition. A rebuild that swapped one screen widget for another gives it
 /// nothing to fly between.
 ///
-/// Library, playback, diagnostics and the developer screen are pushed on top,
+/// All notes, a note, diagnostics and the developer screen are pushed on top,
 /// because they are places the user chose to go.
 class AppRoot extends StatefulWidget {
   const AppRoot({required this.controller, this.summaries, super.key});
@@ -126,25 +127,6 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
-  /// The saved recordings, newest first, as the library service found them.
-  ///
-  /// Each row carries whether it is still being written and where its
-  /// transcript stands, from the controller.
-  List<RecordingEntry> get _entries {
-    final controller = widget.controller;
-    final writing = controller.writingNotePath;
-    return <RecordingEntry>[
-      for (final info in controller.recordings)
-        RecordingEntry.fromInfo(
-          info,
-          isWriting: info.path == writing,
-          transcript: controller.transcriptionAvailable
-              ? controller.listTranscriptStatusFor(info)
-              : null,
-        ),
-    ];
-  }
-
   /// Pushes one of the screens the user chose to go to.
   ///
   /// REDUCE MOTION: the push itself is one of the app's one-shot animations,
@@ -159,38 +141,22 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     );
   }
 
-  void _openLibrary(BuildContext context) {
+  void _openAllNotes(BuildContext context) {
     _push(
       context,
       // A PUSHED route is not rebuilt by this state's `setState`, so the
-      // library listens to the controller itself. Without this, deleting a
+      // list listens to the controller itself. Without this, deleting a
       // recording would leave the row it deleted on screen until the user
       // navigated away and back.
       (context) => ListenableBuilder(
         listenable: widget.controller,
-        builder: (context, _) => LibraryView(
-          entries: _entries,
+        builder: (context, _) => AllNotesView(
+          controller: widget.controller,
           onBack: () => Navigator.of(context).pop(),
-          onOpen: (entry) => _openPlayback(context, entry),
-          onDelete: (entry) => _delete(entry),
-          onNewRecording: () {
-            Navigator.of(context).pop();
-            widget.controller.startRecording();
-          },
+          onOpen: (recording) => _openNote(context, recording),
         ),
       ),
     );
-  }
-
-  /// Deletes the file behind [entry] through the controller.
-  ///
-  /// The view asked for confirmation before calling this; the deletion itself
-  /// belongs to `LibraryService`, which the controller owns. Nothing in
-  /// `view/` goes near the filesystem.
-  void _delete(RecordingEntry entry) {
-    final recording = _recordingFor(entry);
-    if (recording == null) return;
-    unawaited(widget.controller.deleteRecording(recording));
   }
 
   /// The saved file behind [entry], or null if the library does not list it.
@@ -208,21 +174,34 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     return null;
   }
 
-  void _openPlayback(BuildContext context, RecordingEntry entry) {
-    // Resolved as the screen is pushed, so playback is loaded from the file
-    // the user actually tapped rather than from whatever the list holds later.
+  void _openEntry(BuildContext context, RecordingEntry entry) {
+    // Resolved as the screen is pushed, so the note is the file the user
+    // actually tapped rather than whatever the list holds later. A row with
+    // no file behind it has no note to open.
     final recording = _recordingFor(entry);
+    if (recording != null) _openNote(context, recording);
+  }
+
+  /// Opens one note on its transcript.
+  void _openNote(BuildContext context, RecordingInfo recording) {
     _push(
       context,
-      (context) => PlaybackView(
+      (context) => NoteView(
         controller: widget.controller,
-        entry: entry,
         recording: recording,
-        // The screen is showing a file that no longer exists, so it leaves.
+        // The screen is showing a note that no longer exists, so it leaves.
         onDeleted: () => Navigator.of(context).pop(),
         onBack: () => Navigator.of(context).pop(),
+        onSummarize: () => _summarizeNote(context, recording),
       ),
     );
+  }
+
+  /// "Summarize with your AI" on a note: the single-note Summarize sheet,
+  /// which reaches the summaries through the [SummaryScope] above the
+  /// navigator.
+  void _summarizeNote(BuildContext context, RecordingInfo recording) {
+    unawaited(showNoteSummarizeSheet(context, recording));
   }
 
   /// Pushes Device Diagnostics, and hands it the door to Developer options.
@@ -316,7 +295,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                 builder: (context) => ScanView(
                   controller: controller,
                   // The unsupported-phone screen's only action.
-                  onOpenLibrary: () => _openLibrary(context),
+                  onOpenLibrary: () => _openAllNotes(context),
                 ),
               ),
             ),
@@ -334,8 +313,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                 builder: (context) => HomeView(
                   controller: controller,
                   summaries: _summaries,
-                  onOpenLibrary: () => _openLibrary(context),
-                  onOpenRecording: (entry) => _openPlayback(context, entry),
+                  onOpenLibrary: () => _openAllNotes(context),
+                  onOpenRecording: (entry) => _openEntry(context, entry),
                   // Always offered: Diagnostics is an observer's screen and
                   // ships in release builds. The debug gate is one tap further
                   // in, on Developer options.
@@ -431,7 +410,7 @@ class _DockRoute extends PageRoute<void> {
       FadeTransition(opacity: animation, child: child);
 }
 
-/// A pushed screen - the library, playback, the developer view.
+/// A pushed screen - all notes, a note, the developer view.
 ///
 /// A plain [MaterialPageRoute], except that reduce motion collapses the
 /// transition to nothing rather than sliding a screen in.

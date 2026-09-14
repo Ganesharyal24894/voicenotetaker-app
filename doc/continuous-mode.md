@@ -98,7 +98,7 @@ Same folder (`<documents>/recordings`), same name
 | Startup repair (`WavRepair`) | every launch, before the library is read | ...and this fixes the rest: a header claiming less than the file holds (placeholder `0` included) is patched to the whole samples on disk. |
 | Muting on the device | ends the note at once | A double tap is the wearer drawing a line. |
 
-The note being written is marked *Writing...* in the library, cannot be
+The note being written is marked *Writing...* in the notes list, cannot be
 deleted, and is never transcribed.
 
 ## Connection
@@ -148,8 +148,8 @@ deleted, and is never transcribed.
 - **iOS:** background execution is not guaranteed, so nothing changes there -
   leaving the app cancels the job, frees the model, and the queue runs again
   on open (`TranscriptionPermit.noKeepAlive`).
-- Opening a recording that is waiting moves it to the front; the playback card
-  shows *Waiting to transcribe...*, then the live progress, then the text.
+- Opening a note that is waiting moves it to the front; the note screen shows
+  *Waiting to transcribe...*, then *Transcribing NN%*, then the text.
 - Failures that would repeat (`unsupported`, engine `failed`) are saved as
   `<name>.transcript-failed.json` beside the recording and skipped by the
   queue; the Transcribe button still works and clears the marker on success.
@@ -172,6 +172,9 @@ removes **only the WAV** when ALL hold (`AudioRetention`, pure, unit tested):
 | Keep | no `<name>.keep-audio.json` marker. |
 | In use | not the note being written, not being transcribed, not loaded in the player, no manual capture running (asked again right before the delete). |
 
+- On screen: the note shows *Audio deletes in 18 h* with **Keep** only while
+  the setting is on, *Audio kept* once kept, and *Audio deleted - transcript
+  kept* after the sweep; see `doc/notes.md`.
 - The keep flag is a **presence-only sidecar**, not a transcript field: it can
   be set before a transcript exists, older files read as "not kept", and no
   transcript format bump is needed.
@@ -180,8 +183,8 @@ removes **only the WAV** when ALL hold (`AudioRetention`, pure, unit tested):
   `RecordingInfo.hasAudio == false` (duration from the transcript). A stray
   transcript without the marker stays hidden, as before. Killed between marker
   and delete: the WAV is still listed normally and the next sweep removes it.
-- Deleting a note removes the WAV, transcript, failure, keep and removed
-  markers (removed marker last).
+- Deleting a note removes the WAV, transcript, failure, keep, speaker-name and
+  removed markers (removed marker last).
 - Controller: `setAutoDeleteAudio(bool)`, `setKeepAudio(path, bool)`,
   `keepAudioFor(path)`, `lastAudioSweep`. A note without audio is never played
   (a `playbackError` is set) or queued/transcribed.

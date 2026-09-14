@@ -372,14 +372,24 @@ class TranscriptSegment {
     required this.start,
     required this.end,
     required this.text,
+    this.speaker,
   });
 
   final Duration start;
   final Duration end;
   final String text;
 
+  /// Who is talking, as a stable label from speaker separation (`S1`, `S2`),
+  /// or null when nobody has worked that out. Always null today: speaker
+  /// separation is a later step, and the note screen shows plain paragraphs
+  /// until it lands. Display names live beside the recording - see
+  /// `SpeakerNames` - so they survive a transcript being made again.
+  final String? speaker;
+
   @override
-  String toString() => 'TranscriptSegment($start-$end: $text)';
+  String toString() => speaker == null
+      ? 'TranscriptSegment($start-$end: $text)'
+      : 'TranscriptSegment($start-$end $speaker: $text)';
 }
 
 /// The result of transcribing one recording, with the numbers that describe

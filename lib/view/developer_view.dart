@@ -680,7 +680,7 @@ List<String> _testHistoryLines(List<DeviceTestResult> history) {
 
 /// The last transcription's cost - a small readout, not a control.
 ///
-/// Transcribing is done from a recording's playback screen now. What is left
+/// Transcribing is done from a note's screen now. What is left
 /// here is the part only a developer wants: how long the model took to load
 /// and decode, and what it did to the app's memory. Nothing runs from this
 /// card.

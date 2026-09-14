@@ -38,7 +38,7 @@ class MockBleTransport extends Mock implements BleTransport {}
 class MockPlatformSettings extends Mock implements PlatformSettings {}
 
 /// Fake player. The view tests never touch `just_audio`, and never need audio
-/// hardware: everything the playback screen renders arrives on [FakePlayback].
+/// hardware: everything the note screen renders arrives on [FakePlayback].
 class MockAudioPlayer extends Mock implements AudioPlayer {}
 
 /// mocktail needs a fallback for any non-primitive type used with `any()`.

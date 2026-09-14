@@ -3,9 +3,9 @@ import '../model/recording_metadata.dart';
 import '../model/transcript.dart';
 import 'format.dart';
 
-/// One row in the recordings lists, and the subject of the playback screen.
+/// One row in the recordings lists, as Home hands it to the note screen.
 ///
-/// A view-layer projection: the library and playback screens need a title, a
+/// A view-layer projection: the lists need a title, a
 /// timestamp, a length and a size in one object, and no service produces that
 /// shape yet. [RecordingEntry.fromMetadata] maps the one real thing the app
 /// can produce today - the recording the controller just finished - into it.

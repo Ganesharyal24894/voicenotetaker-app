@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// The glyphs the two Home tabs and the Summarize sheets add, transcribed from
+/// The glyphs the two Home tabs, the Summarize sheets and the note screen add, transcribed from
 /// the SVGs in the approved canvas in the same 24x24 view box as `AppIcon`.
 ///
 /// A SEPARATE ENUM rather than more `AppGlyph` cases so the home redesign and

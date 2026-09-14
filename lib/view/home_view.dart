@@ -590,7 +590,7 @@ class _BatteryReadout extends StatelessWidget {
 /// the record button - "Tap to record" / "Connect a recorder to start" - is
 /// where this screen already talks about whether a recorder is attached.
 ///
-/// The same quiet pill as the playback screen's speed and Transcribe chips, so
+/// The same quiet pill as the note screen's speed and Transcribe chips, so
 /// this introduces no new control idiom. It is shown ONLY while connected; it
 /// is not confirmed, because disconnecting destroys nothing and reconnecting
 /// is one tap on the screen it returns to.
