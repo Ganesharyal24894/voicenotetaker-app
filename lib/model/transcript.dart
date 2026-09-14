@@ -34,6 +34,12 @@ class Transcript {
 
   /// Bumped when the saved shape changes incompatibly. A file with another
   /// version is treated as absent, so the recording can be transcribed again.
+  ///
+  /// Still 1 after segments gained an optional `speaker`: the key is written
+  /// only when there is one, an older file without it reads as "no speakers",
+  /// and an older build reading a newer file ignores the key it does not know.
+  /// Nothing that could be read before became unreadable, so nothing is
+  /// transcribed twice.
   static const int formatVersion = 1;
 
   /// BCP-47 code of the language the model was run for, `hi` today.
@@ -70,6 +76,7 @@ class Transcript {
               'startMs': segment.start.inMilliseconds,
               'endMs': segment.end.inMilliseconds,
               'text': segment.text,
+              if (segment.speaker != null) 'speaker': segment.speaker,
             },
         ],
       };
@@ -100,11 +107,15 @@ class Transcript {
       final end = raw['endMs'];
       final text = raw['text'];
       if (start is! int || end is! int || text is! String) return null;
+      // Optional, and lenient: a label of the wrong type costs the speaker,
+      // never the whole transcript.
+      final speaker = raw['speaker'];
       segments.add(
         TranscriptSegment(
           start: Duration(milliseconds: start),
           end: Duration(milliseconds: end),
           text: text,
+          speaker: speaker is String && speaker.isNotEmpty ? speaker : null,
         ),
       );
     }

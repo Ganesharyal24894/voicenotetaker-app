@@ -5,7 +5,7 @@ import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/view/app_root.dart';
 import 'package:voicenotetaker_app/view/connection_lost_view.dart';
-import 'package:voicenotetaker_app/view/library_view.dart';
+import 'package:voicenotetaker_app/view/all_notes_view.dart';
 import 'package:voicenotetaker_app/view/scan_view.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
 import 'package:voicenotetaker_app/view/widgets/app_icons.dart';
@@ -425,45 +425,24 @@ void main() {
     });
   });
 
-  group('an empty library is an invitation, not an apology', () {
-    testWidgets('it is purple, it invites, and it does not apologise',
-        (tester) async {
+  group('an empty notes list is an invitation, not an apology', () {
+    testWidgets('it is purple, and it does not apologise', (tester) async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
       await pumpScreen(
         tester,
-        LibraryView(
-          entries: const [],
-          onOpen: (_) {},
-          onNewRecording: () {},
-        ),
+        AllNotesView(controller: harness.controller, onOpen: (_) {}),
       );
 
-      expect(find.text('No recordings yet'), findsOneWidget);
+      expect(find.text('No notes yet'), findsOneWidget);
       expect(_glyph(tester), AppGlyph.levels);
       expect(_tint(tester), AppColors.purpleText);
       expect(_tint(tester), isNot(AppColors.error));
       expect(_tint(tester), isNot(AppColors.warning));
-      // No apology, and no full stop making a sentence of the headline.
       expect(find.textContaining('Sorry'), findsNothing);
-      expect(find.textContaining('No recordings yet.'), findsNothing);
-      // An action, not just a statement.
-      expect(find.text('New recording'), findsOneWidget);
-    });
-
-    testWidgets('the invitation is the one that starts a capture',
-        (tester) async {
-      var started = 0;
-      await pumpScreen(
-        tester,
-        LibraryView(
-          entries: const [],
-          onOpen: (_) {},
-          onNewRecording: () => started++,
-        ),
-      );
-
-      await tester.tap(find.text('New recording'));
-      await tester.pump();
-      expect(started, 1);
+      expect(find.textContaining('No notes yet.'), findsNothing);
+      // Nothing to search yet, so no search field.
+      expect(find.byType(TextField), findsNothing);
     });
   });
 

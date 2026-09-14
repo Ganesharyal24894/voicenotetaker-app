@@ -122,8 +122,8 @@ lib/
                  scan_view.dart        1. scan / pair
                  home_view.dart        2. home
                  recording_view.dart   3. capture in progress
-                 library_view.dart     4. recordings
-                 playback_view.dart    5. playback
+                 all_notes_view.dart   4. all notes (see doc/notes.md)
+                 note_view.dart        5. a note: transcript, audio panel
                  developer_view.dart   6. diagnostics, DEBUG BUILDS ONLY
                  widgets/              icons (CustomPainter, no icon font),
                                        waveforms, shared chrome
@@ -263,11 +263,8 @@ to fill the gap.
 The recordings library and the peak level are no longer among them: the library
 list comes from `LibraryService` through `AppController.recordings`, and the
 peak readout on the recording screen comes from `LevelMeter` through
-`AppController.peakDbfs`. `PlaybackView`'s transport is still local state - the
-playback driver, the controller API (`playRecording`, `pausePlayback`,
-`seekPlayback`, `stopPlayback`, `playbackState`) and its tests exist, but
-binding the screen to them is more than a data-source swap and was left to
-whoever owns that screen.
+`AppController.peakDbfs`. The note screen's audio panel is bound to the real
+player through `AppController.playbackState`.
 
 ## Package choices
 

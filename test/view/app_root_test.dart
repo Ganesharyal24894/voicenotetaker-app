@@ -6,8 +6,8 @@ import 'package:voicenotetaker_app/view/app_root.dart';
 import 'package:voicenotetaker_app/view/developer_view.dart';
 import 'package:voicenotetaker_app/view/diagnostics_view.dart';
 import 'package:voicenotetaker_app/view/home_view.dart';
-import 'package:voicenotetaker_app/view/library_view.dart';
-import 'package:voicenotetaker_app/view/playback_view.dart';
+import 'package:voicenotetaker_app/view/all_notes_view.dart';
+import 'package:voicenotetaker_app/view/note_view.dart';
 import 'package:voicenotetaker_app/view/recording_view.dart';
 import 'package:voicenotetaker_app/view/scan_view.dart';
 import 'package:voicenotetaker_app/view/widgets/app_icons.dart';
@@ -113,54 +113,7 @@ void main() {
     verify(() => harness.transport.unsubscribeFrames(knownDevice.id)).called(1);
   });
 
-  testWidgets('Home opens the library, and the library opens playback',
-      (tester) async {
-    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
-    addTearDown(harness.dispose);
-
-    await pumpScreen(tester, AppRoot(controller: harness.controller));
-    await harness.discover(tester);
-    await harness.connect(tester);
-    await settleDock(tester);
-    // A real saved recording, listed by the library service - the screens are
-    // no longer fed placeholder rows.
-    await harness.seedRecording(at: DateTime(2026, 9, 10, 9, 14));
-    await tester.pump();
-
-    await tester.tap(find.text('All'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 500));
-    expect(find.byType(LibraryView), findsOneWidget);
-
-    await tester.tap(find.text('Voice note 09:14'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 500));
-    expect(find.byType(PlaybackView), findsOneWidget);
-  });
-
-  testWidgets('the library\'s New recording button starts a capture',
-      (tester) async {
-    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
-    addTearDown(harness.dispose);
-
-    await pumpScreen(tester, AppRoot(controller: harness.controller));
-    await harness.discover(tester);
-    await harness.connect(tester);
-    await settleDock(tester);
-
-    await tester.tap(find.text('All'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 500));
-
-    await tester.tap(find.text('New recording'));
-    await flush(tester);
-    await tester.pump(const Duration(milliseconds: 500));
-
-    expect(harness.controller.isRecording, isTrue);
-    expect(find.byType(RecordingView), findsOneWidget);
-  });
-
-  testWidgets('deleting from the library updates the list immediately',
+  testWidgets('Home opens all notes, and a note opens on its transcript',
       (tester) async {
     final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
     addTearDown(harness.dispose);
@@ -170,67 +123,68 @@ void main() {
     await harness.connect(tester);
     await settleDock(tester);
     await harness.seedRecording(at: DateTime(2026, 9, 10, 9, 14));
-    await harness.seedRecording(at: DateTime(2026, 9, 10, 11, 30));
     await tester.pump();
 
     await tester.tap(find.text('All'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
-    expect(find.text('2 items'), findsOneWidget);
-    expect(find.text('Voice note 09:14'), findsOneWidget);
+    expect(find.byType(AllNotesView), findsOneWidget);
+    expect(find.text('1 note'), findsOneWidget);
 
-    await tester.tap(find.bySemanticsLabel('Delete Voice note 09:14'));
-    await tester.pumpAndSettle();
+    await tester.tap(find.text('09:14 · 4 min'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.byType(NoteView), findsOneWidget);
+    expect(find.text('Summarize with your AI'), findsOneWidget);
+  });
+
+  testWidgets('deleting a note from its menu updates the list immediately',
+      (tester) async {
+    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
+    addTearDown(harness.dispose);
+
+    await pumpScreen(tester, AppRoot(controller: harness.controller));
+    await harness.discover(tester);
+    await harness.connect(tester);
+    await settleDock(tester);
+    await harness.seedRecording(at: DateTime(2026, 9, 10, 9, 14));
+    await harness.seedRecording(
+      at: DateTime(2026, 9, 10, 11, 30),
+      length: const Duration(minutes: 2),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('All'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('2 notes'), findsOneWidget);
+    // No delete control on a row: deleting lives on the note.
+    expect(find.bySemanticsLabel(RegExp('Delete')), findsNothing);
+
+    await tester.tap(find.text('09:14 · 4 min'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.bySemanticsLabel('More'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.text('Delete note'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
     await tester.tap(find.text('Delete'));
     await flush(tester);
-    await tester.pumpAndSettle();
+    await settleRoute(tester);
 
-    // The pushed library route is NOT rebuilt by AppRoot's setState, so this
-    // is the assertion that the route listens to the controller itself. The
-    // row must be gone without navigating away and back.
-    expect(find.byType(LibraryView), findsOneWidget);
-    expect(find.text('Voice note 09:14'), findsNothing);
-    expect(find.text('Voice note 11:30'), findsOneWidget);
-    expect(find.text('1 item'), findsOneWidget);
+    // Back on the list, which listens to the controller itself: the row is
+    // gone without navigating away and back.
+    expect(find.byType(NoteView), findsNothing);
+    expect(find.byType(AllNotesView), findsOneWidget);
+    expect(find.text('09:14 · 4 min'), findsNothing);
+    expect(find.text('11:30 · 2 min'), findsOneWidget);
+    expect(find.text('1 note'), findsOneWidget);
 
-    // The file and the library entry both went: no orphan behind the list.
     expect(harness.controller.recordings, hasLength(1));
     expect(harness.fileStore.files.keys, hasLength(1));
-  });
-
-  testWidgets('deleting the only recording empties the library',
-      (tester) async {
-    final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
-    addTearDown(harness.dispose);
-
-    await pumpScreen(tester, AppRoot(controller: harness.controller));
-    await harness.discover(tester);
-    await harness.connect(tester);
-    await settleDock(tester);
-    await harness.seedRecording(at: DateTime(2026, 9, 10, 9, 14));
-    await tester.pump();
-
-    await tester.tap(find.text('All'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 500));
-
-    await tester.tap(find.bySemanticsLabel('Delete Voice note 09:14'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Delete'));
-    await flush(tester);
-    await tester.pumpAndSettle();
-
-    // The empty library is an INVITATION, not an apology: the headline has no
-    // full stop, no "sorry", and the call to action is right there.
-    expect(find.text('No recordings yet'), findsOneWidget);
-    expect(
-      find.text(
-        'Notes you capture on the recorder show up here once they sync.',
-      ),
-      findsOneWidget,
-    );
-    expect(find.text('New recording'), findsOneWidget);
-    expect(find.text('0 items'), findsOneWidget);
   });
 
   testWidgets('disconnecting from Home returns to the scan screen',

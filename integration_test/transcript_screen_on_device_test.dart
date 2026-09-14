@@ -11,11 +11,10 @@ import 'package:voicenotetaker_app/drivers/speech_recognizer_sherpa.dart';
 import 'package:voicenotetaker_app/model/transcript.dart';
 import 'package:voicenotetaker_app/services/transcription/speech_model_store.dart';
 import 'package:voicenotetaker_app/services/transcription/transcription_service.dart';
-import 'package:voicenotetaker_app/view/playback_view.dart';
-import 'package:voicenotetaker_app/view/recording_entry.dart';
+import 'package:voicenotetaker_app/view/note_view.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
 
-/// The transcript feature on the phone, through the REAL playback screen, the
+/// The transcript feature on the phone, through the REAL note screen, the
 /// real controller, the real engine and the owner's real recordings. PHONE
 /// ONLY.
 ///
@@ -40,7 +39,7 @@ import 'package:voicenotetaker_app/view/theme.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('transcribe a recording from its playback screen',
+  testWidgets('transcribe a recording from its note screen',
       (tester) async {
     const fileStore = IoFileStore();
     const directories = PathProviderAppDirectories();
@@ -94,18 +93,10 @@ void main() {
       MaterialApp(
         theme: AppTheme.build(),
         debugShowCheckedModeBanner: false,
-        home: PlaybackView(
-          controller: controller,
-          entry: RecordingEntry.fromInfo(recording),
-          recording: recording,
-        ),
+        home: NoteView(controller: controller, recording: recording),
       ),
     );
     await live(const Duration(seconds: 2));
-    // The screen starts the recording playing; silence it, the owner is not
-    // here to listen.
-    await tester.runAsync(controller.stopPlayback);
-    await live(const Duration(seconds: 1));
 
     debugPrint('STT ui state ${controller.transcriptStatusFor(recording)}');
     if (controller.transcriptStatusFor(recording) != TranscriptStatus.none) {

@@ -24,6 +24,7 @@ import '../model/phone_power.dart';
 import '../model/recording_info.dart';
 import '../model/reconnect_backoff.dart';
 import '../model/recording_metadata.dart';
+import '../model/speaker_names.dart';
 import '../model/stream_info.dart';
 import '../model/transcript.dart';
 import '../model/transcription.dart';
@@ -36,6 +37,7 @@ import '../services/device_test_store.dart';
 import '../services/link_monitor.dart';
 import '../services/library_service.dart';
 import '../services/recording_service.dart';
+import '../services/transcription/speaker_names_store.dart';
 import '../services/transcription/transcript_store.dart';
 import '../services/transcription/transcription_queue.dart';
 import '../services/transcription/transcription_service.dart';
@@ -631,6 +633,68 @@ class AppController extends ChangeNotifier {
   /// Stops the running transcription. Completes once the model is released.
   Future<void> cancelTranscription() async {
     await _transcription?.cancel();
+  }
+
+  // -------------------------------------------------------------------------
+  // NOTES: transcripts for the list, and speaker names
+  //
+  // The notes list shows a line of each transcript and searches all of them,
+  // so it asks for every saved transcript once; the rest of the time they
+  // are read one at a time as a note is opened. Speaker names are the user's,
+  // kept beside the recording so transcribing again does not lose them.
+  // -------------------------------------------------------------------------
+
+  late final SpeakerNamesStore _speakerNamesStore =
+      SpeakerNamesStore(fileStore: _fileStore);
+  final Map<String, SpeakerNames> _speakerNames = <String, SpeakerNames>{};
+  bool _loadingTranscripts = false;
+
+  /// Reads the saved transcript of every recording in [recordings] that has
+  /// one and has not been read yet. Notifies once, and only when something
+  /// was read - so a listener may call this on every change.
+  Future<void> loadTranscripts(Iterable<RecordingInfo> recordings) async {
+    if (_loadingTranscripts) return;
+    final missing = <RecordingInfo>[
+      for (final recording in recordings)
+        if (recording.hasTranscript &&
+            !_transcriptCache.containsKey(recording.path))
+          recording,
+    ];
+    if (missing.isEmpty) return;
+    _loadingTranscripts = true;
+    try {
+      for (final recording in missing) {
+        _transcriptCache[recording.path] =
+            await _transcripts.load(recording.path);
+      }
+    } finally {
+      _loadingTranscripts = false;
+    }
+    notifyListeners();
+  }
+
+  /// The names given to the speakers of the note at [path]; empty until
+  /// [loadSpeakerNames] has run or when none were given.
+  SpeakerNames speakerNamesFor(String path) =>
+      _speakerNames[path] ?? SpeakerNames.empty;
+
+  Future<void> loadSpeakerNames(String path) async {
+    _speakerNames[path] = await _speakerNamesStore.load(path);
+    notifyListeners();
+  }
+
+  /// Renames speakers of the note at [path] - label to name, blank to clear -
+  /// and saves the result. Shown at once; a failed save is said, not thrown.
+  Future<void> renameSpeakers(String path, Map<String, String> names) async {
+    final next = speakerNamesFor(path).withChanges(names);
+    _speakerNames[path] = next;
+    notifyListeners();
+    try {
+      await _speakerNamesStore.save(path, next);
+    } on Object catch (error) {
+      _errorMessage = 'Could not save the speaker names: $error';
+      notifyListeners();
+    }
   }
 
   /// Null when the app was built without a playback driver; every playback
