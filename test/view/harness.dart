@@ -9,6 +9,7 @@ import 'package:voicenotetaker_app/drivers/audio_player.dart';
 import 'package:voicenotetaker_app/drivers/background_mode.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/drivers/file_store.dart';
+import 'package:voicenotetaker_app/drivers/phone_power.dart';
 import 'package:voicenotetaker_app/drivers/platform_settings.dart';
 import 'package:voicenotetaker_app/drivers/speech_recognizer.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
@@ -16,6 +17,7 @@ import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/capture_flags.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/model/die_temperature.dart';
+import 'package:voicenotetaker_app/model/phone_power.dart';
 import 'package:voicenotetaker_app/model/stream_info.dart';
 import 'package:voicenotetaker_app/model/transcription.dart';
 import 'package:voicenotetaker_app/services/device_test_service.dart';
@@ -115,6 +117,10 @@ class ViewHarness {
     bool speechModelInstalled = true,
     BackgroundMode? backgroundMode,
     Duration continuousKeepalive = const Duration(seconds: 60),
+    PhonePower? phonePower,
+    bool backgroundTranscription = false,
+    Duration powerRecheckInterval = const Duration(seconds: 60),
+    DateTime Function()? clock,
   }) : transport = MockBleTransport() {
     if (recognizer != null && speechModelInstalled) installSpeechModel();
     when(() => transport.currentAvailability())
@@ -198,6 +204,10 @@ class ViewHarness {
       recordingsDirectory: recordingsDirectory,
       backgroundMode: backgroundMode,
       continuousKeepalive: continuousKeepalive,
+      phonePower: phonePower,
+      backgroundTranscription: backgroundTranscription,
+      powerRecheckInterval: powerRecheckInterval,
+      clock: clock,
       transcriptionService: recognizer == null
           ? null
           : TranscriptionService(
@@ -653,6 +663,12 @@ class ScriptedRecognizer implements SpeechRecognizer {
   /// True once a job has released its model - finished, failed or cancelled.
   bool released = false;
 
+  /// How many times the controller asked for the model to be freed.
+  int releaseRequests = 0;
+
+  @override
+  Future<void> releaseModel() async => releaseRequests++;
+
   @override
   Stream<RecognitionEvent> transcribe(RecognitionJob job) {
     calls++;
@@ -749,4 +765,47 @@ class FakeBackgroundMode implements BackgroundMode {
 
   @override
   Future<bool> openAutostartSettings() async => false;
+}
+
+
+/// A [PhonePower] the tests set by hand. [changes] fires only when a test
+/// calls [plug] or [emit].
+class FakePhonePower implements PhonePower {
+  FakePhonePower([this.state = const PhonePowerState(
+    batteryPercent: 80,
+    onExternalPower: false,
+    batterySaver: false,
+    thermal: ThermalState.none,
+  )]);
+
+  PhonePowerState state;
+  int reads = 0;
+  final StreamController<void> _changes = StreamController<void>.broadcast();
+
+  /// Whether anything is listening for charger events right now.
+  bool get listening => _changes.hasListener;
+
+  @override
+  Future<PhonePowerState> read() async {
+    reads++;
+    return state;
+  }
+
+  @override
+  Stream<void> get changes => _changes.stream;
+
+  void emit() => _changes.add(null);
+
+  /// Plugs a charger in, and says so.
+  void plug() {
+    state = const PhonePowerState(
+      batteryPercent: 20,
+      onExternalPower: true,
+      batterySaver: false,
+      thermal: ThermalState.none,
+    );
+    emit();
+  }
+
+  Future<void> close() => _changes.close();
 }

@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:voicenotetaker_app/drivers/file_store.dart';
 import 'package:voicenotetaker_app/model/recording_info.dart';
+import 'package:voicenotetaker_app/model/transcript.dart';
+import 'package:voicenotetaker_app/model/transcription.dart';
 import 'package:voicenotetaker_app/services/library_service.dart';
 import 'package:voicenotetaker_app/services/wav_writer.dart';
 
@@ -421,6 +424,113 @@ void main() {
       await library.delete(path);
 
       expect(store.files, isEmpty);
+    });
+  });
+
+  group('kept audio and removed audio', () {
+    List<int> transcriptJson({int audioMs = 30000}) => utf8.encode(jsonEncode(
+          Transcript(
+            languageCode: 'hi',
+            modelId: 'm',
+            createdAt: DateTime.utc(2026, 9, 11),
+            audioDuration: Duration(milliseconds: audioMs),
+            segments: const <TranscriptSegment>[
+              TranscriptSegment(
+                  start: Duration.zero, end: Duration(seconds: 8), text: 'हाँ'),
+            ],
+          ).toJson(),
+        ));
+
+    test('the sidecars are named beside the recording', () {
+      expect(RecordingNaming.keepAudioPathOf('$dir/voicenote-1.wav'),
+          '$dir/voicenote-1.keep-audio.json');
+      expect(RecordingNaming.audioRemovedPathOf('$dir/voicenote-1.wav'),
+          '$dir/voicenote-1.audio-removed.json');
+      expect(
+        RecordingNaming.audioPathOfSidecar('$dir/voicenote-1.audio-removed.json',
+            RecordingNaming.audioRemovedSuffix),
+        '$dir/voicenote-1.wav',
+      );
+    });
+
+    test('keepAudio comes from the marker; older recordings read as not kept',
+        () async {
+      final kept = seed(DateTime(2026, 9, 10, 9, 14));
+      final old = seed(DateTime(2026, 9, 10, 10, 14));
+      store.put(RecordingNaming.keepAudioPathOf(kept), <int>[]);
+
+      final list = await library.refresh();
+      expect(list.singleWhere((r) => r.path == kept).keepAudio, isTrue);
+      expect(list.singleWhere((r) => r.path == old).keepAudio, isFalse);
+      expect(list.every((r) => r.hasAudio), isTrue);
+    });
+
+    test('a note whose audio was removed is still listed, from its transcript',
+        () async {
+      final at = DateTime(2026, 9, 10, 9, 14);
+      final path = '$dir/${RecordingNaming.fileName(at)}';
+      store
+        ..put(RecordingNaming.transcriptPathOf(path), transcriptJson(),
+            at: DateTime(2026, 9, 12))
+        ..put(RecordingNaming.audioRemovedPathOf(path), <int>[]);
+      final live = seed(DateTime(2026, 9, 10, 10, 14));
+
+      final list = await library.refresh();
+
+      expect(list.map((r) => r.path), <String>[live, path]);
+      final removed = list.last;
+      expect(removed.hasAudio, isFalse);
+      expect(removed.hasTranscript, isTrue);
+      expect(removed.recordedAt, at);
+      expect(removed.duration, const Duration(seconds: 30));
+      expect(removed.sizeBytes, 0);
+    });
+
+    test('a stray transcript with no removal marker stays hidden', () async {
+      store.put(
+          RecordingNaming.transcriptPathOf('$dir/voicenote-20260910-091400.wav'),
+          transcriptJson());
+      expect(await library.refresh(), isEmpty);
+    });
+
+    test('a removal marker with no transcript, or an unreadable one, lists '
+        'nothing', () async {
+      final path = '$dir/voicenote-20260910-091400.wav';
+      store.put(RecordingNaming.audioRemovedPathOf(path), <int>[]);
+      expect(await library.refresh(), isEmpty);
+      store.put(RecordingNaming.transcriptPathOf(path), <int>[1, 2, 3]);
+      expect(await library.refresh(), isEmpty);
+    });
+
+    test('a marker beside a WAV still there (a sweep killed mid-way) lists '
+        'the recording once, with its audio', () async {
+      final path = seed(DateTime(2026, 9, 10, 9, 14));
+      store
+        ..put(RecordingNaming.transcriptPathOf(path), transcriptJson())
+        ..put(RecordingNaming.audioRemovedPathOf(path), <int>[]);
+
+      final list = await library.refresh();
+      expect(list, hasLength(1));
+      expect(list.single.hasAudio, isTrue);
+    });
+
+    test('delete removes every sidecar, for a note with or without audio',
+        () async {
+      final withAudio = seed(DateTime(2026, 9, 10, 9, 14));
+      store
+        ..put(RecordingNaming.transcriptPathOf(withAudio), transcriptJson())
+        ..put(RecordingNaming.keepAudioPathOf(withAudio), <int>[]);
+      final noAudio = '$dir/voicenote-20260910-101400.wav';
+      store
+        ..put(RecordingNaming.transcriptPathOf(noAudio), transcriptJson())
+        ..put(RecordingNaming.audioRemovedPathOf(noAudio), <int>[]);
+      expect(await library.refresh(), hasLength(2));
+
+      await library.delete(withAudio);
+      await library.delete(noAudio);
+
+      expect(store.files, isEmpty);
+      expect(library.current, isEmpty);
     });
   });
 

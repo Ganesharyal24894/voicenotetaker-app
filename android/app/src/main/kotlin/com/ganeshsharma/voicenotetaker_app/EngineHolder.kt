@@ -90,6 +90,7 @@ object EngineHolder {
                         requestIgnoreBatteryOptimizations(app)
                         result.success(null)
                     }
+                    "thermalStatus" -> result.success(thermalStatus(app))
                     "hasAutostartSettings" -> result.success(isXiaomi())
                     "openAutostartSettings" -> result.success(openAutostartSettings(app))
                     else -> result.notImplemented()
@@ -129,6 +130,17 @@ object EngineHolder {
         if (!launch(app, direct)) {
             launch(app, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
+    }
+
+    /**
+     * `PowerManager.THERMAL_STATUS_*` (0 none .. 6 shutdown), or null below
+     * Android 10 where there is no such API. Background transcription pauses
+     * from MODERATE up; see `background_transcription_policy.dart`.
+     */
+    private fun thermalStatus(app: Context): Int? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val power = app.getSystemService(Context.POWER_SERVICE) as PowerManager
+        return power.currentThermalStatus
     }
 
     private fun isXiaomi(): Boolean {

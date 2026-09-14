@@ -58,7 +58,10 @@ void main() {
           fileStore: fileStore,
           modelsDirectory: fileStore.join(support, 'models'),
         ),
-        recognizer: const SherpaOnnxSpeechRecognizer(returnFreedMemory: purge),
+        recognizer: SherpaOnnxSpeechRecognizer(
+          returnFreedMemory: purge,
+          idleTimeout: Duration.zero,
+        ),
       ),
       recordingsDirectory: fileStore.join(documents, 'recordings'),
     );

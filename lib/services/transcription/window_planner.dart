@@ -6,14 +6,12 @@ import '../../model/transcription.dart';
 /// a long clip decoded in one call, so audio is never handed to it in pieces
 /// longer than [SpeechModel.maxWindow].
 ///
-/// WHY FIXED WINDOWS, FOR NOW. They are what the prior research measured, and
+/// WHY FIXED WINDOWS BY DEFAULT. They are what the prior research measured, and
 /// they need nothing but arithmetic. Their known cost is that a boundary can
 /// fall in the middle of a word, which then comes out garbled on both sides.
-/// The better answer is voice-activity segmentation - `sherpa_onnx` ships
-/// Silero and TEN VAD - but that needs a second model file on the device and
-/// is a deliberate follow-up, not part of the feasibility spike. It slots in
-/// here as another planner; nothing downstream cares how the ranges were
-/// chosen.
+/// Voice-activity segmentation (`model/speech_windows.dart`, run inside the
+/// recognizer) cuts in the pauses instead; it is behind a flag until measured,
+/// and this grid is always the fallback when its model is not installed.
 abstract final class WindowPlanner {
   /// Consecutive, non-overlapping windows of [windowSamples] covering
   /// `[0, totalSamples)`. The last window is shorter when the audio does not

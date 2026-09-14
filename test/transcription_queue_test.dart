@@ -9,6 +9,7 @@ void main() {
     int hour, {
     bool transcribed = false,
     bool failed = false,
+    bool hasAudio = true,
   }) =>
       RecordingInfo(
         path: '/r/$name.wav',
@@ -17,6 +18,7 @@ void main() {
         sizeBytes: 100,
         hasTranscript: transcribed,
         transcriptFailed: failed,
+        hasAudio: hasAudio,
       );
 
   group('plan', () {
@@ -31,6 +33,13 @@ void main() {
         ],
       );
       expect(plan, <String>['/r/e.wav', '/r/c.wav', '/r/a.wav']);
+    });
+
+    test('a note whose audio was removed is never queued', () {
+      final plan = TranscriptionQueue.plan(
+        recordings: <RecordingInfo>[rec('a', 8), rec('b', 9, hasAudio: false)],
+      );
+      expect(plan, <String>['/r/a.wav']);
     });
 
     test('the note being written and the job running are left out', () {

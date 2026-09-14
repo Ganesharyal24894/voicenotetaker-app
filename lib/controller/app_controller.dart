@@ -6,8 +6,10 @@ import '../drivers/audio_player.dart';
 import '../drivers/background_mode.dart';
 import '../drivers/ble_transport.dart';
 import '../drivers/file_store.dart';
+import '../drivers/phone_power.dart';
 import '../drivers/platform_settings.dart';
 import '../model/audio_codec.dart';
+import '../model/background_transcription_policy.dart';
 import '../model/battery_bars.dart';
 import '../model/battery_status.dart';
 import '../model/capture_flags.dart';
@@ -18,12 +20,14 @@ import '../model/device_test_result.dart';
 import '../model/die_temperature.dart';
 import '../model/level_reading.dart';
 import '../model/link_health.dart';
+import '../model/phone_power.dart';
 import '../model/recording_info.dart';
 import '../model/reconnect_backoff.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
 import '../model/transcript.dart';
 import '../model/transcription.dart';
+import '../services/audio_retention_service.dart';
 import '../services/continuous/continuous_session.dart';
 import '../services/continuous/continuous_settings_store.dart';
 import '../services/continuous/note_writer.dart';
@@ -84,6 +88,10 @@ class AppController extends ChangeNotifier {
     TranscriptionService? transcriptionService,
     TranscriptStore? transcriptStore,
     BackgroundMode? backgroundMode,
+    PhonePower? phonePower,
+    this._backgroundTranscription = false,
+    this._powerRecheckInterval = BackgroundTranscriptionPolicy.recheckInterval,
+    DateTime Function()? clock,
     String? settingsDirectory,
     this._continuousKeepalive = ContinuousSession.defaultKeepaliveInterval,
     AudioCodec preferredCodec = AudioCodec.imaAdpcm,
@@ -100,6 +108,12 @@ class AppController extends ChangeNotifier {
         _settings = platformSettings,
         _transcription = transcriptionService,
         _background = backgroundMode,
+        _power = phonePower,
+        _now = clock ?? DateTime.now,
+        _retentionSettings = AudioRetentionSettingsStore(
+          fileStore: fileStore,
+          directory: settingsDirectory ?? _recordingsDirectory,
+        ),
         _settingsStore = ContinuousSettingsStore(
           fileStore: fileStore,
           // Beside the recordings when no other place is given, as the mic
@@ -166,9 +180,9 @@ class AppController extends ChangeNotifier {
   /// Offline speech-to-text. Null when the app was built without an engine;
   /// every transcription member then reports it as unavailable.
   ///
-  /// NOTHING RUNS UNLESS ASKED. The service loads the model for one job and
-  /// releases it at the end, so holding this reference costs nothing between
-  /// jobs, and a job only starts from [transcribe] - a tap on a recording.
+  /// NOTHING RUNS UNLESS THERE IS WORK. The model is loaded for a run of jobs
+  /// and freed after it - see BACKGROUND TRANSCRIPTION - so holding this
+  /// reference costs nothing between runs.
   final TranscriptionService? _transcription;
 
   /// The saved transcripts, beside the recordings.
@@ -275,12 +289,15 @@ class AppController extends ChangeNotifier {
     final path = recording.path;
     // A note still being written would be transcribed with its end missing.
     if (path == writingNotePath) return;
+    // Its audio was removed after 24 h; the transcript is all there is.
+    if (!recording.hasAudio) return;
     _queue.remove(path);
     _transcribingPath = path;
     _transcriptionDone = 0;
     _transcriptionTotal = 0;
     _transcriptFailures.remove(path);
     notifyListeners();
+    var succeeded = false;
     try {
       final result = await service.transcribe(
         path,
@@ -303,6 +320,7 @@ class AppController extends ChangeNotifier {
       _transcriptCache[path] = transcript;
       try {
         await _transcripts.save(path, transcript);
+        succeeded = true;
         await _transcripts.clearFailure(path);
       } on Object catch (error) {
         // The words are still on screen for this session; they are simply
@@ -339,6 +357,9 @@ class AppController extends ChangeNotifier {
       _transcribingPath = null;
       notifyListeners();
     }
+    // A transcript just landed, which is what can make an old recording's
+    // audio removable.
+    if (succeeded) unawaited(_sweepAudio());
     if (!_pumping) unawaited(_pumpTranscriptions());
   }
 
@@ -346,14 +367,29 @@ class AppController extends ChangeNotifier {
   // BACKGROUND TRANSCRIPTION
   //
   // Recordings without a transcript are transcribed one at a time, newest
-  // first, WHILE THE APP IS IN THE FOREGROUND ONLY. A job loads a 188 MB model
-  // and holds two cores for minutes; doing that behind the user's back, with
-  // the screen off, is the battery drain the power rule forbids. Going to the
-  // background cancels the running job and puts it back at the front; coming
-  // back plans the queue again.
+  // first, as soon as they are finished - on screen always, and OFF SCREEN
+  // ONLY WHERE THE PROCESS IS KEPT ALIVE AND THE PHONE CAN AFFORD IT:
   //
-  // Nothing runs until [appForegrounded] is first called, which is what keeps
-  // tests that never call it exactly as they were.
+  //   * `backgroundTranscription` (Android, from `main.dart`) AND
+  //     always-listening on - its foreground service is what keeps the
+  //     process, and this isolate, running with the screen off;
+  //   * and [BackgroundTranscriptionPolicy] says yes: on a charger, or at 30%
+  //     battery or more with battery saver off - never when the phone is hot.
+  //
+  // It is asked before every job and every [_powerRecheckInterval] while one
+  // runs off screen. A "no" puts the running job back at the front, frees the
+  // model, and waits for a charger event, the next finished note or the app
+  // being opened. iOS gives no background guarantee, so there going to the
+  // background pauses as it always did.
+  //
+  // The model is loaded once for a run of jobs. On screen the recognizer frees
+  // it 30 s after the last one; off screen it is freed as soon as the queue
+  // drains or pauses, because a timer is not to be trusted while the CPU
+  // sleeps.
+  //
+  // Nothing runs until [appForegrounded] is first called, unless background
+  // transcription is enabled - which is what keeps tests that never call it
+  // exactly as they were.
   // -------------------------------------------------------------------------
 
   final TranscriptionQueue _queue = TranscriptionQueue();
@@ -361,39 +397,107 @@ class AppController extends ChangeNotifier {
   bool _pumping = false;
   bool _initialised = false;
 
+  /// Null in builds and tests without a battery reader; background
+  /// transcription is then never allowed (power unknown).
+  final PhonePower? _power;
+
+  /// Whether this platform keeps the process alive off screen while
+  /// always-listening runs. True on Android only.
+  final bool _backgroundTranscription;
+
+  final Duration _powerRecheckInterval;
+
+  /// The last answer to "may transcription run now?".
+  TranscriptionPermit? _permit;
+
+  Timer? _powerRecheck;
+  StreamSubscription<void>? _powerChanges;
+
   /// Recordings waiting for the background queue, front first.
   List<String> get transcriptionQueue => _queue.pending;
 
+  /// Why the queue is running or paused, as last decided; null before the
+  /// first decision. For a future status line ("Waiting for charger").
+  TranscriptionPermit? get transcriptionPermit => _permit;
+
+  /// Whether a paused queue off screen could run at all here - that is,
+  /// whether a charger could change anything.
+  bool get _keepAlive => _backgroundTranscription && _continuous.enabled;
+
   /// The app is on screen: re-read the adapter, reach for the device if
-  /// always-listening wants it, and start the transcription queue.
+  /// always-listening wants it, run the audio sweep and start the
+  /// transcription queue.
   Future<void> appForegrounded() async {
     _inForeground = true;
+    _stopPowerRecheck();
+    _stopWaitingForPower();
     if (!_initialised) return;
     await refreshAvailability();
     _ensureContinuousLink();
+    await _sweepAudio();
     await _planTranscriptions();
   }
 
-  /// The app left the screen: stop transcribing. Always-listening carries on.
+  /// The app left the screen. Always-listening carries on; transcription
+  /// carries on only where [BackgroundTranscriptionPolicy] allows it.
   Future<void> appBackgrounded() async {
     if (!_inForeground) return;
     _inForeground = false;
+    final allowed = await _mayTranscribe();
+    if (_inForeground) return;
     final running = _transcribingPath;
-    if (running != null) {
-      _queue.addFront(running);
-      await cancelTranscription();
+    if (allowed) {
+      if (running != null) {
+        _startPowerRecheck();
+      } else if (_queue.isEmpty) {
+        await _releaseIdleEngine();
+      }
+      return;
     }
+    if (running != null) _queue.addFront(running);
+    // Cancels the job and frees the model: nothing will use it off screen.
+    await _transcription?.releaseEngine();
+    _waitForPower();
+  }
+
+  /// Whether a job may start or continue now, recording the answer.
+  Future<bool> _mayTranscribe() async {
+    TranscriptionPermit permit;
+    if (_inForeground) {
+      permit = TranscriptionPermit.foreground;
+    } else {
+      PhonePowerState? power;
+      if (_keepAlive) {
+        try {
+          power = await _power?.read();
+        } on Object {
+          power = null;
+        }
+      }
+      permit = BackgroundTranscriptionPolicy.decide(
+        foreground: _inForeground,
+        keepAlive: _keepAlive,
+        power: power,
+      );
+    }
+    if (permit != _permit) {
+      _permit = permit;
+      debugPrint('STT queue: ${permit.name}');
+      notifyListeners();
+    }
+    return permit.allowed;
   }
 
   Future<void> _planTranscriptions() async {
     final service = _transcription;
-    if (service == null || !_inForeground) return;
+    if (service == null) return;
+    // Off screen where nothing keeps the process: do not even look.
+    if (!_inForeground && !_backgroundTranscription) return;
     try {
       if (!(await service.modelStatus()).isReady) return;
     } on Object {
       return;
     }
-    if (!_inForeground) return;
     await refreshLibrary();
     _queue.replace(
       TranscriptionQueue.plan(
@@ -412,39 +516,116 @@ class AppController extends ChangeNotifier {
     unawaited(_pumpTranscriptions());
   }
 
-  /// Runs queued jobs one after another until the queue is empty, the app
-  /// leaves the foreground, or something else is already transcribing.
+  /// Runs queued jobs one after another until the queue is empty, the policy
+  /// says stop, or something else is already transcribing.
   Future<void> _pumpTranscriptions() async {
-    if (_pumping || _transcription == null) return;
+    final service = _transcription;
+    if (_pumping || service == null) return;
     _pumping = true;
     try {
-      while (_inForeground && _transcribingPath == null) {
+      while (_transcribingPath == null && !_queue.isEmpty) {
+        if (!await _mayTranscribe()) {
+          _waitForPower();
+          break;
+        }
+        if (_transcribingPath != null) break;
         final path = _queue.takeNext(skip: writingNotePath);
         if (path == null) break;
         RecordingInfo? recording;
         for (final info in _recordings) {
           if (info.path == path) recording = info;
         }
-        if (recording == null || _transcriptCache[path] != null) continue;
+        if (recording == null ||
+            !recording.hasAudio ||
+            _transcriptCache[path] != null) {
+          continue;
+        }
+        _stopWaitingForPower();
+        if (!_inForeground) _startPowerRecheck();
         await transcribe(recording);
       }
     } finally {
       _pumping = false;
+      _stopPowerRecheck();
+    }
+    if (!_inForeground && _transcribingPath == null) {
+      await _releaseIdleEngine();
     }
   }
 
-  /// A recording has just been finished: if the queue is running, it goes
-  /// first.
+  /// Frees the model when no job holds it. Off screen only: on screen the
+  /// recognizer's own idle timeout carries a queue from job to job.
+  Future<void> _releaseIdleEngine() async {
+    final service = _transcription;
+    if (service == null || service.isBusy || _transcribingPath != null) return;
+    await service.releaseEngine();
+  }
+
+  /// A recording has just been finished: it goes first, and the queue runs if
+  /// it may.
   Future<void> _enqueueFinished(String path) async {
-    if (!_inForeground || _transcription == null) return;
+    final service = _transcription;
+    if (service == null) return;
+    if (!_inForeground && !_backgroundTranscription) return;
     try {
-      if (!(await _transcription.modelStatus()).isReady) return;
+      if (!(await service.modelStatus()).isReady) return;
     } on Object {
       return;
     }
     _queue.addFront(path);
     notifyListeners();
     unawaited(_pumpTranscriptions());
+  }
+
+  /// Re-reads the phone every [_powerRecheckInterval] while a job runs off
+  /// screen, and pauses it when the policy stops allowing it.
+  void _startPowerRecheck() {
+    if (_powerRecheck != null) return;
+    _powerRecheck = Timer.periodic(_powerRecheckInterval, (_) {
+      unawaited(_recheckPower());
+    });
+  }
+
+  void _stopPowerRecheck() {
+    _powerRecheck?.cancel();
+    _powerRecheck = null;
+  }
+
+  Future<void> _recheckPower() async {
+    if (_inForeground || _transcribingPath == null) {
+      _stopPowerRecheck();
+      return;
+    }
+    if (await _mayTranscribe()) return;
+    final running = _transcribingPath;
+    if (_inForeground || running == null) return;
+    _stopPowerRecheck();
+    _queue.addFront(running);
+    await _transcription?.releaseEngine();
+    _waitForPower();
+  }
+
+  /// Listens for the charger while work waits off screen for power. Only
+  /// then, and only where a charger could change the answer.
+  void _waitForPower() {
+    final power = _power;
+    if (power == null ||
+        _inForeground ||
+        !_keepAlive ||
+        _queue.isEmpty ||
+        _powerChanges != null) {
+      return;
+    }
+    _powerChanges = power.changes.listen(
+      (_) => unawaited(_pumpTranscriptions()),
+      onError: (Object _) {},
+    );
+  }
+
+  void _stopWaitingForPower() {
+    final changes = _powerChanges;
+    _powerChanges = null;
+    if (changes != null) unawaited(changes.cancel());
   }
 
   /// Stops the running transcription. Completes once the model is released.
@@ -716,6 +897,7 @@ class AppController extends ChangeNotifier {
   /// Reads the adapter state and starts following it.
   Future<void> initialise() async {
     _continuous = await _settingsStore.load();
+    _autoDeleteAudio = await _retentionSettings.loadAutoDeleteAudio();
     // BEFORE the library is read: a note or a capture the app was killed in
     // the middle of must be listed, played and transcribed at its real length.
     // Nothing is writing yet, so no header here can be one still in use.
@@ -760,7 +942,11 @@ class AppController extends ChangeNotifier {
     _syncBackground();
     _ensureContinuousLink();
     notifyListeners();
-    if (_inForeground) await _planTranscriptions();
+    await _sweepAudio();
+    // Off screen too where the platform keeps the process alive - a process
+    // Android restarted headless for always-listening picks its queue back
+    // up, as the policy allows.
+    if (_inForeground || _backgroundTranscription) await _planTranscriptions();
   }
 
   /// The adapter changed state. THE STALE-CONNECTED BUG LIVES HERE.
@@ -1770,6 +1956,103 @@ class AppController extends ChangeNotifier {
     unawaited(background.start(title: 'voiceNotetaker', text: text));
   }
 
+  // -------------------------------------------------------------------------
+  // AUDIO RETENTION
+  //
+  // With `autoDeleteAudio` on, a recording's WAV is removed 24 h after it was
+  // made - only once it has a transcript with words in it, never while it is
+  // written, played or transcribed, and never when the user marked it kept.
+  // The transcript stays and the library still lists the note, with
+  // `hasAudio` false. The rules are [AudioRetention]'s.
+  //
+  // OFF BY DEFAULT, and nothing on screen turns it on yet: the Keep control
+  // needs a design first. Off, no sweep runs and nothing here touches a file.
+  // On, a sweep runs at start, on every return to the app, and after every
+  // transcript is saved.
+  // -------------------------------------------------------------------------
+
+  final AudioRetentionSettingsStore _retentionSettings;
+  late final AudioRetentionService _retention = AudioRetentionService(
+    fileStore: _fileStore,
+    directory: _recordingsDirectory,
+    transcripts: _transcripts,
+  );
+  final DateTime Function() _now;
+  bool _autoDeleteAudio = false;
+  bool _sweeping = false;
+  RetentionSweepReport? _lastAudioSweep;
+
+  /// Whether audio is removed 24 h after recording. Persisted; false unless
+  /// turned on.
+  bool get autoDeleteAudio => _autoDeleteAudio;
+
+  /// What the last sweep did, for Developer options; null before one ran.
+  RetentionSweepReport? get lastAudioSweep => _lastAudioSweep;
+
+  /// Whether the user marked the recording at [path] to keep its audio.
+  bool keepAudioFor(String path) {
+    for (final recording in _recordings) {
+      if (recording.path == path) return recording.keepAudio;
+    }
+    return false;
+  }
+
+  /// Turns automatic audio removal on or off, and remembers the choice.
+  /// Turning it on sweeps at once.
+  Future<void> setAutoDeleteAudio(bool enabled) async {
+    if (enabled == _autoDeleteAudio) return;
+    _autoDeleteAudio = enabled;
+    try {
+      await _retentionSettings.saveAutoDeleteAudio(enabled);
+    } on Object catch (error) {
+      // Applies for this run; it is only forgotten across a restart.
+      debugPrint('Could not save the audio retention setting: $error');
+    }
+    notifyListeners();
+    if (enabled) await _sweepAudio();
+  }
+
+  /// Marks the recording at [path] to keep its audio past 24 h, or not.
+  /// Survives restarts. Does not bring back audio already removed.
+  Future<void> setKeepAudio(String path, bool keep) async {
+    try {
+      await _retention.setKeep(path, keep: keep);
+    } on Object catch (error) {
+      _errorMessage = 'Could not change whether this audio is kept: $error';
+      notifyListeners();
+      return;
+    }
+    await refreshLibrary();
+  }
+
+  /// Runs one retention sweep if the setting is on and none is running.
+  Future<void> _sweepAudio() async {
+    if (!_autoDeleteAudio || _sweeping) return;
+    // A manual capture has an open file; it is young, but nothing is removed
+    // while one is being written.
+    if (_recorder.isRecording) return;
+    _sweeping = true;
+    try {
+      final report = await _retention.sweep(
+        now: _now(),
+        isInUse: (path) =>
+            _recorder.isRecording ||
+            path == writingNotePath ||
+            path == _transcribingPath ||
+            path == _nowPlaying?.path,
+      );
+      _lastAudioSweep = report;
+      if (report.removed.isNotEmpty || report.failed.isNotEmpty) {
+        debugPrint('Audio retention: $report');
+      }
+      if (report.removed.isNotEmpty) await refreshLibrary();
+    } on Object catch (error) {
+      debugPrint('Audio retention sweep failed: $error');
+    } finally {
+      _sweeping = false;
+    }
+  }
+
   Future<void> startRecording() async {
     final device = _connectedDevice;
     // Not while always-listening: notes are already being made, from the same
@@ -1888,6 +2171,12 @@ class AppController extends ChangeNotifier {
   Future<void> playRecording(RecordingInfo recording) async {
     final player = _player;
     if (player == null) return;
+    if (!recording.hasAudio) {
+      _playbackError = 'The audio of this recording was removed; '
+          'its transcript is kept.';
+      notifyListeners();
+      return;
+    }
     _playbackError = null;
     try {
       if (_nowPlaying?.path != recording.path) {
@@ -2009,7 +2298,9 @@ class AppController extends ChangeNotifier {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     await _stopContinuousSession(linkUp: false);
-    await _transcription?.cancel();
+    _stopPowerRecheck();
+    _stopWaitingForPower();
+    await _transcription?.releaseEngine();
     await _scanSubscription?.cancel();
     _scanSubscription = null;
     await _connectionSubscription?.cancel();

@@ -48,11 +48,14 @@ void main() {
         fileStore: fileStore,
         modelsDirectory: fileStore.join(support, 'models'),
       ),
-      recognizer: const SherpaOnnxSpeechRecognizer(
-        returnFreedMemory: bool.fromEnvironment(
+      // Freed after every job, as when these numbers were first taken, so the
+      // per-job load and after-release memory stay comparable.
+      recognizer: SherpaOnnxSpeechRecognizer(
+        returnFreedMemory: const bool.fromEnvironment(
           'STT_PURGE',
           defaultValue: true,
         ),
+        idleTimeout: Duration.zero,
       ),
     );
     debugPrint(

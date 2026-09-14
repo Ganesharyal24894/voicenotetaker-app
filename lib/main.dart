@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'controller/app_controller.dart';
@@ -8,6 +9,7 @@ import 'drivers/audio_player_just_audio.dart';
 import 'drivers/background_mode_channel.dart';
 import 'drivers/ble_transport_universal.dart';
 import 'drivers/file_store.dart';
+import 'drivers/phone_power_battery_plus.dart';
 import 'drivers/platform_settings_channel.dart';
 import 'drivers/speech_recognizer_sherpa.dart';
 import 'services/transcription/speech_model_store.dart';
@@ -42,6 +44,11 @@ Future<void> main() async {
     audioPlayer: JustAudioPlayer(),
     platformSettings: const MethodChannelPlatformSettings(),
     backgroundMode: const MethodChannelBackgroundMode(),
+    phonePower: BatteryPlusPhonePower(),
+    // Android only: its foreground service keeps this isolate alive with the
+    // screen off. iOS makes no such promise, so there transcription waits for
+    // the app to be opened.
+    backgroundTranscription: defaultTargetPlatform == TargetPlatform.android,
     // App data, not the user's documents: which device to reach, and whether
     // to keep listening.
     settingsDirectory: support,
@@ -51,7 +58,12 @@ Future<void> main() async {
         fileStore: fileStore,
         modelsDirectory: fileStore.join(support, 'models'),
       ),
-      recognizer: const SherpaOnnxSpeechRecognizer(),
+      recognizer: SherpaOnnxSpeechRecognizer(),
+      // Cut windows in the pauses when `models/silero-vad/silero_vad.onnx` is
+      // installed. Off unless built with --dart-define=STT_VAD=true, until
+      // its CER and cost are measured; with the file absent it changes
+      // nothing either way.
+      useVoiceActivitySegmentation: const bool.fromEnvironment('STT_VAD'),
     ),
     recordingsDirectory: fileStore.join(documents, 'recordings'),
   );

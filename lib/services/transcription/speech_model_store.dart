@@ -58,6 +58,24 @@ class SpeechModelStore {
   String pathOf(SpeechModel model, SpeechModelFile file) =>
       _fileStore.join(directoryFor(model), file.name);
 
+  String vadDirectoryFor(VadModel model) =>
+      _fileStore.join(_modelsDirectory, model.directoryName);
+
+  String vadPathOf(VadModel model) =>
+      _fileStore.join(vadDirectoryFor(model), model.file.name);
+
+  /// Whether the voice-activity model's one file is present at its exact size.
+  /// Never throws: anything unreadable is "not ready", and transcription then
+  /// uses the fixed grid.
+  Future<bool> isVadReady(VadModel model) async {
+    try {
+      final info = await _fileStore.stat(vadPathOf(model));
+      return info != null && info.sizeBytes == model.file.sizeBytes;
+    } on Object {
+      return false;
+    }
+  }
+
   /// Checks every file of [model] for presence and exact size.
   ///
   /// Size, not a checksum: hashing 188 MB on a phone before every job would

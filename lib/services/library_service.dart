@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 
 import '../drivers/file_store.dart';
 import '../model/recording_info.dart';
+import '../model/transcript.dart';
 import 'wav_reader.dart';
 
 /// The recording file-name convention, in one place.
@@ -42,12 +44,46 @@ abstract final class RecordingNaming {
   static const String transcriptFailureSuffix = '.transcript-failed.json';
 
   /// Where the failure marker of the recording at [audioPath] is kept.
-  static String transcriptFailurePathOf(String audioPath) {
+  static String transcriptFailurePathOf(String audioPath) =>
+      _sidecarOf(audioPath, transcriptFailureSuffix);
+
+  /// Suffix of the marker saying "keep this recording's audio".
+  ///
+  /// A SIDECAR, NOT A FIELD IN THE TRANSCRIPT: a recording can be kept before
+  /// it has a transcript, and adding a field to the transcript would mean a
+  /// format-version bump that makes every older transcript unreadable. Its
+  /// PRESENCE is the flag, so the library learns it from the directory
+  /// listing it already makes, a recording from before this existed simply
+  /// reads as not kept, and setting or clearing it is one create or one
+  /// delete - nothing half-written to parse after a kill.
+  static const String keepAudioSuffix = '.keep-audio.json';
+
+  static String keepAudioPathOf(String audioPath) =>
+      _sidecarOf(audioPath, keepAudioSuffix);
+
+  /// Suffix of the marker the retention sweep writes BEFORE it removes a WAV.
+  ///
+  /// It is what tells "audio removed on purpose, transcript kept" apart from a
+  /// stray transcript left behind by a failed delete, which must stay hidden.
+  /// Written first, so a sweep killed between the two steps leaves a marker
+  /// beside a WAV that is still there - listed normally, and removed by the
+  /// next sweep.
+  static const String audioRemovedSuffix = '.audio-removed.json';
+
+  static String audioRemovedPathOf(String audioPath) =>
+      _sidecarOf(audioPath, audioRemovedSuffix);
+
+  /// The recording a sidecar at [sidecarPath] with [suffix] belongs to.
+  static String audioPathOfSidecar(String sidecarPath, String suffix) =>
+      '${sidecarPath.substring(0, sidecarPath.length - suffix.length)}'
+      '$extension';
+
+  static String _sidecarOf(String audioPath, String suffix) {
     final lower = audioPath.toLowerCase();
     final stem = lower.endsWith(extension)
         ? audioPath.substring(0, audioPath.length - extension.length)
         : audioPath;
-    return '$stem$transcriptFailureSuffix';
+    return '$stem$suffix';
   }
 
   /// The capture time encoded in [name], or `null` when it is not one of ours.
@@ -121,6 +157,20 @@ class LibraryService {
     final present = paths.toSet();
     final found = <RecordingInfo>[];
     for (final path in paths) {
+      if (path.endsWith(RecordingNaming.audioRemovedSuffix)) {
+        // A note whose audio the retention sweep removed: listed from its
+        // transcript, as long as it still has one and the WAV is really gone.
+        final audio = RecordingNaming.audioPathOfSidecar(
+          path,
+          RecordingNaming.audioRemovedSuffix,
+        );
+        if (present.contains(audio)) continue;
+        final transcript = RecordingNaming.transcriptPathOf(audio);
+        if (!present.contains(transcript)) continue;
+        final info = await _describeWithoutAudio(audio, transcript);
+        if (info != null) found.add(info);
+        continue;
+      }
       if (!path.toLowerCase().endsWith(RecordingNaming.extension)) continue;
       final info = await describe(
         path,
@@ -128,6 +178,7 @@ class LibraryService {
             present.contains(RecordingNaming.transcriptPathOf(path)),
         transcriptFailed:
             present.contains(RecordingNaming.transcriptFailurePathOf(path)),
+        keepAudio: present.contains(RecordingNaming.keepAudioPathOf(path)),
       );
       if (info != null) found.add(info);
     }
@@ -148,6 +199,7 @@ class LibraryService {
     String path, {
     bool hasTranscript = false,
     bool transcriptFailed = false,
+    bool keepAudio = false,
   }) async {
     final stat = await _fileStore.stat(path);
     if (stat == null) return null;
@@ -167,7 +219,38 @@ class LibraryService {
       channels: header?.channels,
       hasTranscript: hasTranscript,
       transcriptFailed: transcriptFailed,
+      keepAudio: keepAudio,
     );
+  }
+
+  /// A recording whose WAV was removed, described from its transcript: the
+  /// time from the name (or the transcript's modification time), the length
+  /// the transcript recorded. Null when the transcript is gone or unreadable -
+  /// there is then nothing to show.
+  Future<RecordingInfo?> _describeWithoutAudio(
+    String audioPath,
+    String transcriptPath,
+  ) async {
+    try {
+      final stat = await _fileStore.stat(transcriptPath);
+      if (stat == null) return null;
+      final transcript = Transcript.fromJson(
+        jsonDecode(utf8.decode(await _fileStore.read(transcriptPath))),
+      );
+      if (transcript == null) return null;
+      final name = _nameOf(audioPath);
+      return RecordingInfo(
+        path: audioPath,
+        name: name,
+        recordedAt: RecordingNaming.timestampOf(name) ?? stat.modifiedAt,
+        sizeBytes: 0,
+        duration: transcript.audioDuration,
+        hasTranscript: true,
+        hasAudio: false,
+      );
+    } on Object {
+      return null;
+    }
   }
 
   /// Deletes the recording at [path], its saved transcript with it, and
@@ -180,6 +263,11 @@ class LibraryService {
     await _fileStore.delete(path);
     await _fileStore.delete(RecordingNaming.transcriptPathOf(path));
     await _fileStore.delete(RecordingNaming.transcriptFailurePathOf(path));
+    await _fileStore.delete(RecordingNaming.keepAudioPathOf(path));
+    // Last: for a note whose audio was already removed, this marker is what
+    // lists it, so a delete interrupted before here leaves it visible and
+    // deletable rather than a hidden stray.
+    await _fileStore.delete(RecordingNaming.audioRemovedPathOf(path));
     await refresh();
   }
 

@@ -1,6 +1,10 @@
 import 'dart:async';
 
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:voicenotetaker_app/model/background_transcription_policy.dart';
+import 'package:voicenotetaker_app/model/phone_power.dart';
 import 'package:voicenotetaker_app/model/recording_info.dart';
 import 'package:voicenotetaker_app/model/transcript.dart';
 import 'package:voicenotetaker_app/services/library_service.dart';
@@ -117,6 +121,10 @@ void main() {
     expect(harness.controller.isTranscribing, isFalse);
     expect(harness.controller.transcriptionQueue.first, pathAt(eleven));
     expect(recognizer.calls, 1);
+    // Nothing will use the model off screen, so it is freed, not kept warm.
+    expect(recognizer.releaseRequests, greaterThan(0));
+    expect(harness.controller.transcriptionPermit,
+        TranscriptionPermit.noKeepAlive);
 
     recognizer.gate = null;
     await harness.controller.appForegrounded();
@@ -180,5 +188,220 @@ void main() {
 
     expect(harness.fileStore.files.keys.where((p) => p.contains('100000')),
         isEmpty);
+  });
+
+  group('off screen on Android, with always-listening keeping the process',
+      () {
+    const low = PhonePowerState(
+      batteryPercent: 20,
+      onExternalPower: false,
+      batterySaver: false,
+      thermal: ThermalState.none,
+    );
+
+    /// Seeded like [seeded], built as the Android app is: background
+    /// transcription on, always-listening saved as on, a battery reader.
+    Future<ViewHarness> android({
+      ScriptedRecognizer? recognizer,
+      FakePhonePower? power,
+      bool listening = true,
+      Duration recheck = const Duration(seconds: 60),
+      bool initialise = true,
+    }) async {
+      final phone = power ?? FakePhonePower();
+      final harness = ViewHarness(
+        recognizer: recognizer ?? ScriptedRecognizer(),
+        phonePower: phone,
+        backgroundTranscription: true,
+        powerRecheckInterval: recheck,
+      );
+      addTearDown(() async {
+        await harness.dispose();
+        await phone.close();
+      });
+      harness.fileStore.files[
+              '${ViewHarness.recordingsDirectory}/continuous-settings.json'] =
+          utf8.encode(jsonEncode(<String, Object?>{
+        'version': 1,
+        'enabled': listening,
+      }));
+      for (final at in <DateTime>[nine, eleven, ten]) {
+        await harness.seedRecording(at: at, length: const Duration(seconds: 20));
+      }
+      if (initialise) await harness.controller.initialise();
+      return harness;
+    }
+
+    test('a healthy battery: the queue runs without the app being opened',
+        () async {
+      final harness = await android();
+      await settle();
+
+      expect(harness.recognizer!.audioPaths,
+          <String>[pathAt(eleven), pathAt(ten), pathAt(nine)]);
+      expect(harness.controller.transcriptionPermit,
+          TranscriptionPermit.batteryOk);
+      // Drained off screen: the model is freed at once, not left to a timer.
+      expect(harness.recognizer!.releaseRequests, greaterThan(0));
+    });
+
+    test('low battery: nothing runs; plugging in starts it', () async {
+      final power = FakePhonePower(low);
+      final harness = await android(power: power);
+      await settle();
+
+      expect(harness.recognizer!.calls, 0);
+      expect(harness.controller.transcriptionPermit,
+          TranscriptionPermit.batteryLow);
+      expect(harness.controller.transcriptionQueue, hasLength(3));
+      expect(power.listening, isTrue, reason: 'waiting for a charger');
+
+      power.plug();
+      await settle();
+
+      expect(harness.recognizer!.calls, 3);
+      expect(harness.controller.transcriptionPermit,
+          TranscriptionPermit.charging);
+      expect(power.listening, isFalse, reason: 'nothing left to wait for');
+    });
+
+    test('battery saver or heat pause it too', () async {
+      final saver = FakePhonePower(const PhonePowerState(
+        batteryPercent: 90,
+        onExternalPower: false,
+        batterySaver: true,
+      ));
+      final a = await android(power: saver);
+      await settle();
+      expect(a.recognizer!.calls, 0);
+      expect(a.controller.transcriptionPermit, TranscriptionPermit.batterySaver);
+
+      final hot = FakePhonePower(const PhonePowerState(
+        onExternalPower: true,
+        thermal: ThermalState.severe,
+      ));
+      final b = await android(power: hot);
+      await settle();
+      expect(b.recognizer!.calls, 0);
+      expect(b.controller.transcriptionPermit, TranscriptionPermit.tooHot);
+    });
+
+    test('always-listening off: nothing keeps the process, so it waits for '
+        'the app, and the battery is not even read', () async {
+      final power = FakePhonePower();
+      final harness = await android(power: power, listening: false);
+      await settle();
+
+      expect(harness.recognizer!.calls, 0);
+      expect(harness.controller.transcriptionPermit,
+          TranscriptionPermit.noKeepAlive);
+      expect(power.reads, 0);
+      expect(power.listening, isFalse);
+
+      await harness.controller.appForegrounded();
+      await settle();
+      expect(harness.recognizer!.calls, 3);
+    });
+
+    test('on screen it runs whatever the battery says', () async {
+      final harness = await android(power: FakePhonePower(low), initialise: false);
+      await harness.controller.appForegrounded();
+      await harness.controller.initialise();
+      await settle();
+      expect(harness.recognizer!.calls, 3);
+      expect(harness.controller.transcriptionPermit,
+          TranscriptionPermit.foreground);
+    });
+
+    test('leaving the app mid-job does not stop it when the policy allows',
+        () async {
+      final recognizer = ScriptedRecognizer()..gate = Completer<void>();
+      final harness = await android(recognizer: recognizer, initialise: false);
+      await harness.controller.appForegrounded();
+      await harness.controller.initialise();
+      await settle();
+      expect(harness.controller.transcribingPath, pathAt(eleven));
+
+      await harness.controller.appBackgrounded();
+      await settle();
+
+      expect(recognizer.cancelled, isFalse);
+      expect(harness.controller.transcribingPath, pathAt(eleven));
+
+      recognizer.gate!.complete();
+      await settle();
+      expect(recognizer.audioPaths,
+          <String>[pathAt(eleven), pathAt(ten), pathAt(nine)]);
+    });
+
+    test('leaving the app mid-job on a low battery pauses it and frees the '
+        'model', () async {
+      final recognizer = ScriptedRecognizer()..gate = Completer<void>();
+      final harness = await android(
+        recognizer: recognizer,
+        power: FakePhonePower(low),
+        initialise: false,
+      );
+      await harness.controller.appForegrounded();
+      await harness.controller.initialise();
+      await settle();
+
+      await harness.controller.appBackgrounded();
+      await settle();
+
+      expect(recognizer.cancelled, isTrue);
+      expect(recognizer.releaseRequests, greaterThan(0));
+      expect(harness.controller.isTranscribing, isFalse);
+      expect(harness.controller.transcriptionQueue.first, pathAt(eleven));
+    });
+
+    test('a running job re-reads the phone and pauses when it is unplugged, '
+        'then resumes on the charger', () async {
+      final power = FakePhonePower(const PhonePowerState(onExternalPower: true));
+      final recognizer = ScriptedRecognizer()..gate = Completer<void>();
+      final harness = await android(
+        recognizer: recognizer,
+        power: power,
+        recheck: const Duration(milliseconds: 20),
+      );
+      await settle();
+      expect(harness.controller.transcribingPath, pathAt(eleven));
+
+      power.state = low;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(recognizer.cancelled, isTrue);
+      expect(harness.controller.isTranscribing, isFalse);
+      expect(harness.controller.transcriptionQueue.first, pathAt(eleven));
+      expect(harness.controller.transcriptionPermit,
+          TranscriptionPermit.batteryLow);
+      expect(recognizer.releaseRequests, greaterThan(0));
+
+      recognizer.gate = null;
+      power.plug();
+      await settle();
+      expect(recognizer.audioPaths.sublist(1),
+          <String>[pathAt(eleven), pathAt(ten), pathAt(nine)]);
+    });
+
+    test('opening the app stops waiting for the charger', () async {
+      final power = FakePhonePower(low);
+      final harness = await android(power: power);
+      await settle();
+      expect(power.listening, isTrue);
+
+      await harness.controller.appForegrounded();
+      await settle();
+      expect(power.listening, isFalse);
+      expect(harness.recognizer!.calls, 3);
+    });
+
+    test('teardown frees the model', () async {
+      final harness = await android();
+      await settle();
+      final before = harness.recognizer!.releaseRequests;
+      await harness.controller.teardown();
+      expect(harness.recognizer!.releaseRequests, greaterThan(before));
+    });
   });
 }

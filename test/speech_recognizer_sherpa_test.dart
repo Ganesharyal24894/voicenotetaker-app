@@ -37,7 +37,7 @@ void main() {
           fileStore: fileStore,
           modelsDirectory: modelsDir!,
         ),
-        recognizer: const SherpaOnnxSpeechRecognizer(),
+        recognizer: SherpaOnnxSpeechRecognizer(),
       );
       expect((await service.modelStatus()).isReady, isTrue);
 

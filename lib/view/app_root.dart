@@ -81,9 +81,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   /// `diagnostics_view.dart`; it fires for a notification shade and an app
   /// switcher preview, and neither means the user left.
   ///
-  /// Leaving the screen - `hidden`, then `paused` - pauses background
-  /// transcription, which is too heavy to run behind the user's back.
-  /// Always-listening is not touched either way.
+  /// Leaving the screen - `hidden`, then `paused` - tells the controller,
+  /// which pauses transcription unless its background policy allows it to
+  /// continue. Always-listening is not touched either way.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {

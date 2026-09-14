@@ -27,6 +27,14 @@ class FakeRecognizer implements SpeechRecognizer {
   /// Holds the job open until completed, for the one-at-a-time test.
   Completer<void>? gate;
 
+  /// When set and the job asks for VAD, the windows the "detector" chose.
+  List<SampleRange>? planned;
+
+  int releases = 0;
+
+  @override
+  Future<void> releaseModel() async => releases++;
+
   @override
   Stream<RecognitionEvent> transcribe(RecognitionJob job) async* {
     this.job = job;
@@ -34,7 +42,13 @@ class FakeRecognizer implements SpeechRecognizer {
     if (gate != null) await gate!.future;
     yield const RecognitionModelLoaded(Duration(milliseconds: 1200));
     if (failWith != null) throw failWith!;
-    for (var i = 0; i < job.windows.length; i++) {
+    var windows = job.windows;
+    final plan = planned;
+    if (job.vad != null && plan != null) {
+      windows = plan;
+      yield RecognitionWindowsPlanned(plan);
+    }
+    for (var i = 0; i < windows.length; i++) {
       if (stopAfter != null && i >= stopAfter!) return;
       yield RecognitionWindowDecoded(
         index: i,
@@ -343,6 +357,100 @@ void main() {
       );
     });
   });
+
+  group('voice-activity segmentation', () {
+    const vad = SpeechModels.sileroVad;
+    void installVad(InMemoryFileStore store, {int? bytes}) => store.put(
+          '$modelsDir/${vad.directoryName}/${vad.file.name}',
+          Uint8List(bytes ?? vad.file.sizeBytes),
+        );
+
+    TranscriptionService withVad({required bool enabled}) =>
+        TranscriptionService(
+          fileStore: store,
+          models: SpeechModelStore(fileStore: store, modelsDirectory: modelsDir),
+          recognizer: engine,
+          useVoiceActivitySegmentation: enabled,
+        );
+
+    test('off by default: the fixed grid, even with the VAD model installed',
+        () async {
+      installModel(store);
+      installVad(store);
+      store.put(wavPath, wav(samples: 20 * 16000));
+      await service.transcribe(wavPath);
+      expect(service.useVoiceActivitySegmentation, isFalse);
+      expect(engine.job!.vad, isNull);
+    });
+
+    test('on but the VAD model absent or truncated: the fixed grid', () async {
+      installModel(store);
+      store.put(wavPath, wav(samples: 20 * 16000));
+      final vadService = withVad(enabled: true);
+      await vadService.transcribe(wavPath);
+      expect(engine.job!.vad, isNull);
+
+      installVad(store, bytes: 10);
+      await vadService.transcribe(wavPath);
+      expect(engine.job!.vad, isNull);
+    });
+
+    test('on and installed: the job asks for it, with the grid as fallback',
+        () async {
+      installModel(store);
+      installVad(store);
+      store.put(wavPath, wav(samples: 20 * 16000));
+      await withVad(enabled: true).transcribe(wavPath);
+      final job = engine.job!;
+      expect(job.vad!.modelPath,
+          '$modelsDir/${vad.directoryName}/silero_vad.onnx');
+      expect(job.vad!.maxWindowSamples, 8 * 16000);
+      expect(job.windows, hasLength(3), reason: 'fixed grid still carried');
+    });
+
+    test('planned windows replace the grid: progress, text and timings follow',
+        () async {
+      installModel(store);
+      installVad(store);
+      store.put(wavPath, wav(samples: 20 * 16000));
+      engine
+        ..planned = const <SampleRange>[
+          SampleRange(16000, 64000),
+          SampleRange(200000, 300000),
+        ]
+        ..texts = <int, String>{0: 'पहला', 1: 'दूसरा'};
+      final progress = <String>[];
+
+      final result = await withVad(enabled: true).transcribe(
+        wavPath,
+        onProgress: (done, total) => progress.add('$done/$total'),
+      );
+
+      expect(progress, <String>['0/3', '0/2', '1/2', '2/2']);
+      expect(result.text, 'पहला दूसरा');
+      expect(result.segments, hasLength(2));
+      expect(result.segments[0].start, const Duration(seconds: 1));
+      expect(result.segments[1].end, const Duration(milliseconds: 18750));
+      expect(result.audioDuration, const Duration(seconds: 20));
+    });
+
+    test('no speech found: an empty result, not a failure', () async {
+      installModel(store);
+      installVad(store);
+      store.put(wavPath, wav(samples: 20 * 16000));
+      engine.planned = const <SampleRange>[];
+      final result = await withVad(enabled: true).transcribe(wavPath);
+      expect(result.segments, isEmpty);
+      expect(result.text, isEmpty);
+    });
+  });
+
+  group('releaseEngine', () {
+    test('asks the recognizer to free its model', () async {
+      await service.releaseEngine();
+      expect(engine.releases, 1);
+    });
+  });
 }
 
 
@@ -353,6 +461,9 @@ class HoldingRecognizer implements SpeechRecognizer {
   final Completer<void> started = Completer<void>();
   final Completer<void> release = Completer<void>();
   bool cancelRequested = false;
+
+  @override
+  Future<void> releaseModel() async {}
 
   @override
   Stream<RecognitionEvent> transcribe(RecognitionJob job) {

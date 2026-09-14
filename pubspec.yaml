@@ -30,6 +30,12 @@ dependencies:
   # lib/drivers/speech_recognizer_sherpa.dart and nowhere else.
   sherpa_onnx: 1.13.8
 
+  # Phone battery level, charger state and battery saver, on Android and iOS,
+  # for the background-transcription policy. BSD-3-Clause, Flutter Community,
+  # no permission, no second engine. Named in
+  # lib/drivers/phone_power_battery_plus.dart and nowhere else.
+  battery_plus: ^7.1.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

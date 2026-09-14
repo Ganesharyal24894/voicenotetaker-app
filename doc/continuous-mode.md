@@ -2,8 +2,9 @@
 
 The wearer keeps the recorder on all day and notes appear in the library by
 themselves, without taking the phone out. The firmware streams only speech; the
-phone turns that stream into ordinary recordings and transcribes them the next
-time the app is opened.
+phone turns that stream into ordinary recordings and transcribes them as soon
+as they are closed - off screen too, on Android, when the battery allows (see
+*Background transcription*) - or otherwise the next time the app is opened.
 
 Home shows one switch, **Always listening**, and one status line:
 *Always listening*, *Hearing speech*, *Muted on device*, *Device not
@@ -28,7 +29,11 @@ services/continuous/
                             the app support directory
 services/wav_repair.dart    startup pass: patch headers left behind by a kill
 services/transcription/
-  transcription_queue.dart  PURE: newest first, skip done/failed/writing
+  transcription_queue.dart  PURE: newest first, skip done/failed/writing/no audio
+services/audio_retention_service.dart  24 h audio sweep + keep markers
+model/background_transcription_policy.dart  PURE: may transcription run now
+model/audio_retention.dart  PURE: may this WAV be removed
+drivers/phone_power*.dart   battery/charger/saver (battery_plus) + thermal
 model/capture_flags.dart    fe08 wire format (read flags, write commands)
 model/continuous_status.dart  the one status, and its copy
 model/reconnect_backoff.dart  0, 2, 5, 15, 30, 60, 60 ... s; 20 s per attempt
@@ -111,17 +116,73 @@ deleted, and is never transcribed.
 
 ## Background transcription
 
-- On app open or resume, if the Hindi model is installed: all recordings with
-  no transcript and no saved failure, newest first, one at a time.
-- Going to the background (`hidden`/`paused`) cancels the running job and puts
-  it back at the front. Transcription is too heavy for a locked phone.
+- If the Hindi model is installed: all recordings with no transcript, no saved
+  failure and their audio still present, newest first, one at a time.
+- **When it runs** (`BackgroundTranscriptionPolicy`, pure, unit tested):
+  - app on screen: always;
+  - app off screen: only on Android (`backgroundTranscription`, set in
+    `main.dart`) AND with always-listening on, because its foreground service
+    is what keeps the process alive - and then only if the phone is **on a
+    charger**, or at **>= 30% battery with battery saver off**; never at
+    thermal status **MODERATE or hotter** (charger or not); anything the
+    phone does not report counts as "no".
+  - Asked before every job, and every **60 s** while a job runs off screen.
+    A "no" puts the running job back at the front, frees the model, and
+    listens for charger events; the next finished note or opening the app
+    also re-checks. Thermal cooling and battery saver being switched off are
+    only noticed at those moments.
+- So a note is transcribed as soon as it is closed, screen off included, when
+  the policy allows. A process Android restarts headless for always-listening
+  resumes its queue under the same rule.
+- Battery, charger and saver come from `battery_plus` behind
+  `drivers/phone_power.dart`; thermal status from
+  `PowerManager.getCurrentThermalStatus()` over the existing background channel
+  (`thermalStatus`, API 29+, null below).
+- **No wake lock** (unchanged): with the screen off Android may suspend the CPU
+  between BLE events, so background decoding can run in bursts and take longer
+  than its RTF suggests. Not measured.
+- The model is loaded once for a run of jobs; see
+  `doc/agentFindings/on-device-stt.md` ("Model kept loaded between jobs").
+- **iOS:** background execution is not guaranteed, so nothing changes there -
+  leaving the app cancels the job, frees the model, and the queue runs again
+  on open (`TranscriptionPermit.noKeepAlive`).
 - Opening a recording that is waiting moves it to the front; the playback card
   shows *Waiting to transcribe...*, then the live progress, then the text.
-- A finished note or manual recording joins the front while the app is open.
 - Failures that would repeat (`unsupported`, engine `failed`) are saved as
   `<name>.transcript-failed.json` beside the recording and skipped by the
   queue; the Transcribe button still works and clears the marker on success.
   Deleting a recording deletes the marker too.
+- UI not built yet: `AppController.transcriptionPermit` says why the queue is
+  paused (e.g. "Waiting for charger").
+
+## Audio retention (logic only, off by default)
+
+`autoDeleteAudio` (persisted in `audio-retention-settings.json`, default
+**false**; no UI yet). When on, a sweep runs at start, on every return to the
+app, when the setting is turned on, and after every saved transcript. It
+removes **only the WAV** when ALL hold (`AudioRetention`, pure, unit tested):
+
+| Rule | Detail |
+|---|---|
+| Age | >= **24 h** since the later of the file-name time and the file mtime, compared in **UTC**. The name is the start; mtime can only postpone (time-zone change, DST hour). No time at all: kept. |
+| Clock moved back | a time more than **5 min** in the future: kept until real time passes it. |
+| Transcript | a saved transcript **with words**. No transcript, a saved failure, an unreadable or empty transcript: kept. |
+| Keep | no `<name>.keep-audio.json` marker. |
+| In use | not the note being written, not being transcribed, not loaded in the player, no manual capture running (asked again right before the delete). |
+
+- The keep flag is a **presence-only sidecar**, not a transcript field: it can
+  be set before a transcript exists, older files read as "not kept", and no
+  transcript format bump is needed.
+- Before deleting, the sweep writes `<name>.audio-removed.json`. The library
+  lists a note with that marker and a transcript but no WAV as
+  `RecordingInfo.hasAudio == false` (duration from the transcript). A stray
+  transcript without the marker stays hidden, as before. Killed between marker
+  and delete: the WAV is still listed normally and the next sweep removes it.
+- Deleting a note removes the WAV, transcript, failure, keep and removed
+  markers (removed marker last).
+- Controller: `setAutoDeleteAudio(bool)`, `setKeepAudio(path, bool)`,
+  `keepAudioFor(path)`, `lastAudioSweep`. A note without audio is never played
+  (a `playbackError` is set) or queued/transcribed.
 
 ## Android specifics
 
@@ -142,8 +203,8 @@ deleted, and is never transcribed.
   the activity finishes, which is the old behaviour.
 - **Sticky restart**: if the system kills the process, Android restarts the
   service; it starts the engine headless, `main()` runs, the controller reads
-  the saved setting and reconnects. No transcription starts headless (the
-  lifecycle is not `resumed`).
+  the saved setting and reconnects. The transcription queue resumes headless
+  only as `BackgroundTranscriptionPolicy` allows (see above).
 - **Permissions** (manifest): `FOREGROUND_SERVICE`,
   `FOREGROUND_SERVICE_CONNECTED_DEVICE` (Android 14+, satisfied at runtime by
   the granted `BLUETOOTH_CONNECT`), `POST_NOTIFICATIONS` (runtime on 13+),

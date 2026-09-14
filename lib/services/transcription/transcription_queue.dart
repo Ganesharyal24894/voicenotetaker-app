@@ -3,7 +3,8 @@ import '../../model/recording_info.dart';
 /// Which recordings to transcribe in the background, and in what order.
 ///
 /// Pure ordering logic, no I/O and no timers: the controller decides WHEN a
-/// job runs (only in the foreground, one at a time) and asks this WHICH.
+/// job runs (one at a time, and off screen only as
+/// `BackgroundTranscriptionPolicy` allows) and asks this WHICH.
 ///
 /// NEWEST FIRST, because the note someone just finished is the one they are
 /// most likely to open. A recording the user opens jumps to the front.
@@ -20,8 +21,8 @@ class TranscriptionQueue {
   /// The recordings that need a transcript, newest first.
   ///
   /// Skipped: those with a saved transcript, those that already failed (the
-  /// Transcribe button is still there for them), the note still being
-  /// written, and anything already running.
+  /// Transcribe button is still there for them), those whose audio was
+  /// removed, the note still being written, and anything already running.
   static List<String> plan({
     required List<RecordingInfo> recordings,
     Set<String> failed = const <String>{},
@@ -32,7 +33,8 @@ class TranscriptionQueue {
       ..sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
     return <String>[
       for (final recording in sorted)
-        if (!recording.hasTranscript &&
+        if (recording.hasAudio &&
+            !recording.hasTranscript &&
             !recording.transcriptFailed &&
             !failed.contains(recording.path) &&
             recording.path != writing &&

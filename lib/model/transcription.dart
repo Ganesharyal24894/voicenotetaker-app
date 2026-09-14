@@ -105,6 +105,122 @@ abstract final class SpeechModels {
     featureDim: 80,
     maxWindow: Duration(seconds: 8),
   );
+
+  /// Silero VAD v4 as published by sherpa-onnx (MIT). Source: GitHub release
+  /// `k2-fsa/sherpa-onnx` `asr-models/silero_vad.onnx`, byte size as served.
+  ///
+  /// The settings are sherpa-onnx's defaults except [VadModel.minSilence],
+  /// shortened from 0.5 s to 0.25 s so that the 300 ms pauses always-listening
+  /// writes between utterances are boundaries too. None of them is measured
+  /// on this model's CER yet; see `doc/agentFindings/on-device-stt.md`.
+  static const VadModel sileroVad = VadModel(
+    id: 'silero-vad',
+    directoryName: 'silero-vad',
+    file: SpeechModelFile(name: 'silero_vad.onnx', sizeBytes: 643854),
+    threshold: 0.5,
+    minSilence: Duration(milliseconds: 250),
+    minSpeech: Duration(milliseconds: 250),
+    padding: Duration(milliseconds: 200),
+  );
+}
+
+/// A voice-activity model: finds where speech is, so windows can be cut at
+/// pauses instead of on a fixed grid.
+///
+/// Optional. Delivered exactly like the speech model - its file is placed under
+/// the app's model directory - and when it is absent transcription falls back
+/// to the fixed grid, which is what was measured.
+class VadModel {
+  const VadModel({
+    required this.id,
+    required this.directoryName,
+    required this.file,
+    required this.threshold,
+    required this.minSilence,
+    required this.minSpeech,
+    required this.padding,
+  });
+
+  final String id;
+
+  /// Sub-directory of the app's model directory holding [file].
+  final String directoryName;
+
+  final SpeechModelFile file;
+
+  /// Speech probability above which a frame counts as speech.
+  final double threshold;
+
+  /// A pause at least this long ends a speech segment.
+  final Duration minSilence;
+
+  /// A burst shorter than this is not speech.
+  final Duration minSpeech;
+
+  /// Silence kept either side of a segment, so a word's onset and release are
+  /// not clipped. Never more than half the gap to the next segment.
+  final Duration padding;
+
+  @override
+  String toString() => 'VadModel($id)';
+}
+
+/// Voice-activity segmentation for one job: which model, with what settings.
+///
+/// Carried by a [RecognitionJob] when the VAD model is installed and the
+/// feature is switched on. The recognizer runs it over the audio before
+/// decoding and reports the windows it chose with [RecognitionWindowsPlanned];
+/// if it cannot run, the job's fixed windows are used unchanged.
+class VadSegmentation {
+  const VadSegmentation({
+    required this.modelPath,
+    required this.model,
+    required this.maxWindowSamples,
+  });
+
+  final String modelPath;
+  final VadModel model;
+
+  /// The speech model's longest window, in samples: no planned window is
+  /// longer.
+  final int maxWindowSamples;
+}
+
+/// The part of a [RecognitionJob] that decides which model is in memory.
+///
+/// Two jobs with an equal config can share one loaded recognizer; a job with
+/// a different one needs the old recognizer freed first.
+class RecognizerConfig {
+  const RecognizerConfig({
+    required this.modelPath,
+    required this.tokensPath,
+    required this.featureDim,
+    required this.numThreads,
+    required this.sampleRateHz,
+  });
+
+  final String modelPath;
+  final String tokensPath;
+  final int featureDim;
+  final int numThreads;
+  final int sampleRateHz;
+
+  @override
+  bool operator ==(Object other) =>
+      other is RecognizerConfig &&
+      other.modelPath == modelPath &&
+      other.tokensPath == tokensPath &&
+      other.featureDim == featureDim &&
+      other.numThreads == numThreads &&
+      other.sampleRateHz == sampleRateHz;
+
+  @override
+  int get hashCode =>
+      Object.hash(modelPath, tokensPath, featureDim, numThreads, sampleRateHz);
+
+  @override
+  String toString() =>
+      'RecognizerConfig($modelPath, $numThreads threads, $sampleRateHz Hz)';
 }
 
 /// A half-open range of samples, `[start, end)`.
@@ -144,6 +260,7 @@ class RecognitionJob {
     required this.dataOffset,
     required this.sampleRateHz,
     required this.windows,
+    this.vad,
   });
 
   final String modelPath;
@@ -159,7 +276,22 @@ class RecognitionJob {
   final int sampleRateHz;
 
   /// Windows to decode, in order. Sample indices, not byte offsets.
+  ///
+  /// The fixed grid. When [vad] is set and runs, the recognizer replaces these
+  /// with windows cut at pauses and says so with [RecognitionWindowsPlanned].
   final List<SampleRange> windows;
+
+  /// Voice-activity segmentation to try first; null for the fixed grid.
+  final VadSegmentation? vad;
+
+  /// What must be loaded to run this job.
+  RecognizerConfig get recognizerConfig => RecognizerConfig(
+        modelPath: modelPath,
+        tokensPath: tokensPath,
+        featureDim: featureDim,
+        numThreads: numThreads,
+        sampleRateHz: sampleRateHz,
+      );
 }
 
 /// What a recognizer driver reports while a job runs.
@@ -169,9 +301,23 @@ sealed class RecognitionEvent {
 
 /// The model is in memory and ready.
 class RecognitionModelLoaded extends RecognitionEvent {
-  const RecognitionModelLoaded(this.loadTime);
+  const RecognitionModelLoaded(this.loadTime, {this.reused = false});
 
+  /// Zero when [reused].
   final Duration loadTime;
+
+  /// True when the model was already loaded by an earlier job and kept.
+  final bool reused;
+}
+
+/// Voice-activity segmentation ran and chose these windows, replacing the
+/// job's fixed grid. Arrives after [RecognitionModelLoaded] and before the
+/// first [RecognitionWindowDecoded], whose indices then refer to this list.
+/// Empty when no speech was found.
+class RecognitionWindowsPlanned extends RecognitionEvent {
+  const RecognitionWindowsPlanned(this.windows);
+
+  final List<SampleRange> windows;
 }
 
 /// One window has been decoded.
@@ -192,7 +338,7 @@ class RecognitionWindowDecoded extends RecognitionEvent {
   final Duration decodeTime;
 }
 
-/// The model has been released; nothing is held any more.
+/// The job is over: the model has been released, or kept for the next job.
 ///
 /// Always the last event of a job that did not fail. The memory figures are
 /// the whole process's resident set as the kernel reports it, `null` where the
@@ -202,16 +348,22 @@ class RecognitionReleased extends RecognitionEvent {
     this.rssBeforeLoadKb,
     this.peakRssKb,
     this.rssAfterReleaseKb,
+    this.keptLoaded = false,
   });
 
-  /// Just before the model was loaded.
+  /// Just before the job started (before the load, when there was one).
   final int? rssBeforeLoadKb;
 
   /// The highest point reached during the job.
   final int? peakRssKb;
 
-  /// After the model was released - what the job left behind.
+  /// At the end of the job - after the release, unless [keptLoaded].
   final int? rssAfterReleaseKb;
+
+  /// True when the model stays in memory for the next job. The recognizer
+  /// frees it by itself after its idle timeout, or when asked to with
+  /// `SpeechRecognizer.releaseModel`.
+  final bool keptLoaded;
 }
 
 /// One decoded window, placed on the recording's timeline.

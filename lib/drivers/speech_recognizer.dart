@@ -9,26 +9,41 @@ import '../model/transcription.dart';
 /// one file beside this one, so swapping it means writing one new class here
 /// and changing one line in `main.dart`.
 ///
-/// ONE JOB, ONE LOAD. There is deliberately no "load the model" method that a
-/// caller could forget to pair with a release: [transcribe] loads the model,
-/// decodes every window, releases the model and only then finishes. A 188 MB
-/// network sitting in memory between jobs is not free on a phone, and the
-/// owner's standing rule is that nothing runs when it is not needed.
+/// ONE MODEL, KEPT ONLY WHILE THERE IS WORK. Loading the model costs 1.2-4.9 s
+/// on the owner's phone - more than decoding a short note - so a queue of notes
+/// must not pay it per note. An implementation may keep the model loaded after
+/// a job so the next one reuses it, but it must free it by itself once no job
+/// has arrived for a short idle timeout, and at once on [releaseModel]. There
+/// is still no "load" call a caller could forget to pair: [transcribe] loads
+/// when needed, and the idle timeout is what releases in the end. A 188 MB
+/// network sitting in memory with nothing to do is not free on a phone, and
+/// the owner's standing rule is that nothing runs when it is not needed.
 ///
 /// Implementations must not decode on the calling isolate; a model this size
 /// would freeze the UI for seconds.
 abstract class SpeechRecognizer {
   /// Runs [job] and reports its progress.
   ///
-  /// The stream emits exactly one [RecognitionModelLoaded], then one
-  /// [RecognitionWindowDecoded] per window in order, then
-  /// [RecognitionReleased], then closes. A failure is delivered as a
-  /// [SpeechRecognizerException] error and closes the stream; the model has
-  /// been released by then.
+  /// The stream emits exactly one [RecognitionModelLoaded], then - only when
+  /// the job asked for voice-activity segmentation and it ran - one
+  /// [RecognitionWindowsPlanned], then one [RecognitionWindowDecoded] per
+  /// window in order, then [RecognitionReleased], then closes. A failure is
+  /// delivered as a [SpeechRecognizerException] error and closes the stream;
+  /// the model has been released by then.
   ///
-  /// Cancelling the subscription stops the job at the next window boundary and
-  /// releases the model. It does not interrupt a window already being decoded.
+  /// One job at a time: a second stream listened to while one is running
+  /// fails with a [SpeechRecognizerException].
+  ///
+  /// Cancelling the subscription stops the job at the next window boundary;
+  /// the returned future completes once it has stopped. It does not interrupt
+  /// a window already being decoded, and it does not by itself free a model
+  /// the implementation keeps - see [releaseModel].
   Stream<RecognitionEvent> transcribe(RecognitionJob job);
+
+  /// Frees the model now instead of at the idle timeout: stops a job still
+  /// running (at its next window boundary), releases the model and completes
+  /// once its memory is gone. Nothing loaded is not an error.
+  Future<void> releaseModel();
 }
 
 /// Failure raised by a [SpeechRecognizer] implementation.

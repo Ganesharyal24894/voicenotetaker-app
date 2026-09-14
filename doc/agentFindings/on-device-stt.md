@@ -251,6 +251,48 @@ segmentation is worth adding next. It fits the existing seams:
 
 **[?]** Its CER gain and on-phone cost are not measured.
 
+### Update 2026-09-15 — implemented behind a flag, default still the grid
+
+- **[V]** `silero_vad.onnx` from the sherpa-onnx GitHub release
+  (`asr-models/silero_vad.onnx`) is **643,854 B** (≈630 KB, Silero v4), not
+  2 MB. Delivered like the ASR model: `files/models/silero-vad/silero_vad.onnx`
+  (`SpeechModels.sileroVad`, exact-size check in `SpeechModelStore.isVadReady`).
+- **[V]** Off unless built with `--dart-define=STT_VAD=true`
+  (`TranscriptionService.useVoiceActivitySegmentation`). With the flag on and
+  the file absent or the wrong size, the job carries no VAD and the fixed grid
+  is used; if the detector fails inside the worker, the grid is used too.
+- **[V]** The worker runs VAD over the WAV (1 s chunks, cancellable), then the
+  pure `SpeechWindows.plan` (unit tested): merge, split > 8 s on the grid as a
+  backstop, pad 200 ms into silence (never past half a gap), pack consecutive
+  segments while the span fits 8 s. Silence between packed windows is not
+  decoded. The detector's own `maxSpeechDuration` is set to 8 s so it chooses
+  split points in long speech. `minSilenceDuration` 0.25 s (sherpa default 0.5)
+  so always-listening's 300 ms inserted pauses are boundaries.
+- **[V]** The recognizer reports the new plan with `RecognitionWindowsPlanned`;
+  transcript segment times follow the planned windows.
+- **[?]** CER against the grid, VAD cost per minute, and whether 0.25 s splits
+  words on this speaker are all unmeasured. Measure before changing the
+  default.
+
+## Model kept loaded between jobs (2026-09-15)
+
+- **[V] in unit tests with a fake worker, [?] on the phone.** The recognizer
+  now keeps ONE worker isolate and ONE loaded model across consecutive jobs
+  (`KeepWarmSpeechRecognizer` + the isolate worker in
+  `speech_recognizer_sherpa.dart`). The second and later jobs report
+  `RecognitionModelLoaded(reused: true)` and a zero load time.
+- Freed (native `free()` in the worker, then `mallopt(M_PURGE)`, then isolate
+  exit) when: 30 s pass with no job; `releaseModel()` is called; a job needs a
+  different config (old freed BEFORE new loaded - never two copies); the
+  worker fails. The controller also calls it as soon as the queue drains or
+  pauses while the app is off screen (Dart timers are unreliable with the CPU
+  asleep), on teardown, and when leaving the app where background work is not
+  allowed.
+- **[I]** Saves 1.2-4.9 s per note after the first in a run. Cost: the model's
+  ~300 MB stays resident for up to 30 s after the last on-screen job.
+- The on-device integration tests pass `idleTimeout: Duration.zero`, which
+  restores load-per-job, so their numbers stay comparable with the tables above.
+
 ## Tests
 
 - **Baseline:** **[V]** 806 passed. `flutter analyze` was clean.

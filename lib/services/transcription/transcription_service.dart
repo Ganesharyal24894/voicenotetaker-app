@@ -54,13 +54,21 @@ class TranscriptionException implements Exception {
 ///
 /// ONE AT A TIME. A second request while one is running is refused rather than
 /// queued or run alongside: two jobs would mean two copies of a 188 MB model in
-/// memory, which is exactly what the load-per-job design exists to prevent.
+/// memory. The recognizer keeps the model loaded between consecutive jobs and
+/// frees it on its own idle timeout, or at once through [releaseEngine].
+///
+/// WINDOWS. The fixed 8 s grid by default, which is what was measured. With
+/// [useVoiceActivitySegmentation] on AND the VAD model installed, the job also
+/// asks the recognizer to cut windows in the pauses; if the VAD model is
+/// absent, or cannot run, the fixed grid is used unchanged.
 class TranscriptionService {
   TranscriptionService({
     required this._fileStore,
     required this._models,
     required this._recognizer,
     this._model = SpeechModels.indicConformerHindiInt8,
+    this._vadModel = SpeechModels.sileroVad,
+    this.useVoiceActivitySegmentation = false,
     Stopwatch Function()? clock,
   }) : _clock = clock ?? Stopwatch.new;
 
@@ -68,7 +76,12 @@ class TranscriptionService {
   final SpeechModelStore _models;
   final SpeechRecognizer _recognizer;
   final SpeechModel _model;
+  final VadModel _vadModel;
   final Stopwatch Function() _clock;
+
+  /// Off by default until its CER and on-phone cost are measured - see
+  /// `doc/agentFindings/on-device-stt.md`.
+  final bool useVoiceActivitySegmentation;
 
   bool _busy = false;
 
@@ -116,13 +129,24 @@ class TranscriptionService {
     }
   }
 
+  /// Frees the speech model now rather than at the recognizer's idle timeout,
+  /// stopping a running job first. Completes once the memory is released.
+  ///
+  /// For when nothing more will run for a while: the app left the foreground
+  /// where it may not work there, the background queue drained, teardown.
+  Future<void> releaseEngine() async {
+    await cancel();
+    await _recognizer.releaseModel();
+  }
+
   /// Stops the running transcription, if there is one.
   ///
   /// The job then fails with [TranscriptionFailure.cancelled]. The returned
-  /// future completes once the engine has RELEASED the model - not merely been
-  /// asked to - so a new job started straight after can never have two copies
-  /// of it in memory. A window already being decoded is finished first, which
-  /// bounds the wait to about one window's decode time.
+  /// future completes once the engine has STOPPED - not merely been asked to -
+  /// so a new job started straight after never runs alongside it. A window
+  /// already being decoded is finished first, which bounds the wait to about
+  /// one window's decode time. The model may stay loaded for the next job;
+  /// [releaseEngine] frees it.
   Future<void> cancel() async {
     if (!_busy) return;
     _cancelRequested = true;
@@ -206,7 +230,7 @@ class TranscriptionService {
     final audioDuration = Duration(
       microseconds: totalSamples * 1000000 ~/ _model.sampleRateHz,
     );
-    final windows = WindowPlanner.forModel(_model, totalSamples);
+    var windows = WindowPlanner.forModel(_model, totalSamples);
 
     // Nothing to hear, nothing to load.
     if (windows.isEmpty) {
@@ -236,6 +260,17 @@ class TranscriptionService {
       );
     }
 
+    VadSegmentation? vad;
+    if (useVoiceActivitySegmentation && await _models.isVadReady(_vadModel)) {
+      vad = VadSegmentation(
+        modelPath: _models.vadPathOf(_vadModel),
+        model: _vadModel,
+        maxWindowSamples:
+            _model.maxWindow.inMicroseconds * _model.sampleRateHz ~/ 1000000,
+      );
+    }
+    _throwIfCancelled();
+
     final job = RecognitionJob(
       modelPath: _models.pathOf(_model, _model.modelFile),
       tokensPath: _models.pathOf(_model, _model.tokensFile),
@@ -245,11 +280,12 @@ class TranscriptionService {
       dataOffset: header.dataOffset,
       sampleRateHz: header.sampleRateHz,
       windows: windows,
+      vad: vad,
     );
 
     Duration? loadTime;
     var decodeTime = Duration.zero;
-    final texts = List<String?>.filled(windows.length, null);
+    var texts = List<String?>.filled(windows.length, null);
     RecognitionReleased? released;
     onProgress?.call(0, windows.length);
     final done = Completer<void>();
@@ -260,6 +296,12 @@ class TranscriptionService {
           switch (event) {
             case RecognitionModelLoaded():
               loadTime = event.loadTime;
+            case RecognitionWindowsPlanned():
+              // Voice-activity segmentation replaced the grid; indices from
+              // here on refer to these windows.
+              windows = event.windows;
+              texts = List<String?>.filled(windows.length, null);
+              onProgress?.call(0, windows.length);
             case RecognitionWindowDecoded():
               texts[event.index] = event.text;
               decodeTime += event.decodeTime;

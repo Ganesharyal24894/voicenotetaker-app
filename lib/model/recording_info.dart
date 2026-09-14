@@ -13,6 +13,8 @@ class RecordingInfo {
     this.channels,
     this.hasTranscript = false,
     this.transcriptFailed = false,
+    this.hasAudio = true,
+    this.keepAudio = false,
   });
 
   /// Absolute path of the WAV file.
@@ -46,6 +48,15 @@ class RecordingInfo {
   /// so the background queue passes this recording over.
   final bool transcriptFailed;
 
+  /// Whether the WAV is still on disk. False for a note whose audio was
+  /// removed by the 24-hour retention sweep: its transcript is all that is
+  /// left, [sizeBytes] is 0 and [duration] is the transcript's.
+  final bool hasAudio;
+
+  /// Whether the user asked to keep this recording's audio, so the retention
+  /// sweep never removes it.
+  final bool keepAudio;
+
   @override
   String toString() => 'RecordingInfo($name, $sizeBytes B, '
       '${duration == null ? 'unknown' : '${duration!.inMilliseconds} ms'})';
@@ -61,7 +72,9 @@ class RecordingInfo {
       other.sampleRateHz == sampleRateHz &&
       other.channels == channels &&
       other.hasTranscript == hasTranscript &&
-      other.transcriptFailed == transcriptFailed;
+      other.transcriptFailed == transcriptFailed &&
+      other.hasAudio == hasAudio &&
+      other.keepAudio == keepAudio;
 
   @override
   int get hashCode => Object.hash(
@@ -74,5 +87,7 @@ class RecordingInfo {
         channels,
         hasTranscript,
         transcriptFailed,
+        hasAudio,
+        keepAudio,
       );
 }
