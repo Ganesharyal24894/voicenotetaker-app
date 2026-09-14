@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../controller/app_controller.dart';
 import '../drivers/audio_player.dart';
 import '../model/recording_info.dart';
+import '../model/transcript.dart';
 import 'format.dart';
 import 'recording_entry.dart';
 import 'theme.dart';
@@ -121,6 +123,11 @@ class _PlaybackViewState extends State<PlaybackView> {
       _busy = true;
       unawaited(_start(recording));
     }
+    // Only LOOKS for a saved transcript - a stat and a small read. Nothing is
+    // transcribed until the user asks.
+    if (recording != null && _controller.transcriptionAvailable) {
+      unawaited(_controller.loadTranscript(recording));
+    }
   }
 
   @override
@@ -185,6 +192,32 @@ class _PlaybackViewState extends State<PlaybackView> {
     (widget.onDeleted ?? widget.onBack)?.call();
   }
 
+  /// What the transcript area shows, or null when there is nothing to show
+  /// it for: no file, or a build without speech-to-text.
+  TranscriptStatus? get _transcriptStatus {
+    final recording = _recording;
+    if (recording == null || !_controller.transcriptionAvailable) return null;
+    return _controller.transcriptStatusFor(recording);
+  }
+
+  void _transcribe() {
+    final recording = _recording;
+    if (recording == null || !_controller.transcriptionAvailable) {
+      _notice('Transcription is not available yet.');
+      return;
+    }
+    if (_controller.isTranscribing) {
+      _notice('Another recording is being transcribed.');
+      return;
+    }
+    unawaited(_controller.transcribe(recording));
+  }
+
+  Future<void> _copy(String text) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) _notice('Copied.');
+  }
+
   void _notice(String what) {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
@@ -232,6 +265,16 @@ class _PlaybackViewState extends State<PlaybackView> {
     final remaining = _duration - position;
     final enabled = _enabled;
     final status = _statusLine();
+    final transcriptStatus = _transcriptStatus;
+    final recording = _recording;
+    // The chip offers a transcript only where there is none yet; once one is
+    // running or saved, the card is where it lives.
+    final offerTranscribe = transcriptStatus == null ||
+        transcriptStatus == TranscriptStatus.none;
+    final showCard = recording != null &&
+        transcriptStatus != null &&
+        transcriptStatus != TranscriptStatus.none &&
+        transcriptStatus != TranscriptStatus.checking;
 
     return ScreenScaffold(
       child: Column(
@@ -285,68 +328,98 @@ class _PlaybackViewState extends State<PlaybackView> {
           Text(widget.entry.playbackLabel(), style: AppText.meta13),
           ?status,
           Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                ScrubWaveform(
-                  progress: _progress,
-                  onSeek: enabled
-                      ? (fraction) => _seekTo(
-                            Duration(
-                              milliseconds:
-                                  (_duration.inMilliseconds * fraction).round(),
-                            ),
-                          )
-                      : null,
-                ),
-                const SizedBox(height: 14),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: <Widget>[
-                    Text(Fmt.timer(position), style: AppText.scrubTime),
-                    const Spacer(),
-                    Text(
-                      '−${Fmt.timer(remaining)}',
-                      style: AppText.scrubTime
-                          .copyWith(color: AppColors.textTertiary),
+            // The transcript card and the transport share the space under the
+            // title. The card is capped at half of it and scrolls inside
+            // itself; the transport takes everything else, so the speed row
+            // stays at the bottom however short the transcript is.
+            child: LayoutBuilder(
+              builder: (context, box) => Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  if (showCard) ...<Widget>[
+                    const SizedBox(height: 22),
+                    ConstrainedBox(
+                      constraints:
+                          BoxConstraints(maxHeight: box.maxHeight / 2),
+                      child: _TranscriptCard(
+                        status: transcriptStatus,
+                        transcript: _controller.transcriptFor(recording),
+                        done: _controller.transcriptionDone,
+                        total: _controller.transcriptionTotal,
+                        onCancel: () =>
+                            unawaited(_controller.cancelTranscription()),
+                        onRetry: _transcribe,
+                        onCopy: (text) => unawaited(_copy(text)),
+                      ),
                     ),
                   ],
-                ),
-                const SizedBox(height: 34),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: <Widget>[
-                    _SkipButton(
-                      glyph: AppGlyph.skipBack,
-                      label: '15s',
-                      semanticLabel: 'Skip back 15 seconds',
-                      onTap: enabled
-                          ? () => _seekTo(
-                                _position - const Duration(seconds: 15),
-                              )
-                          : null,
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: <Widget>[
+                          ScrubWaveform(
+                            progress: _progress,
+                            onSeek: enabled
+                                ? (fraction) => _seekTo(
+                                      Duration(
+                                        milliseconds:
+                                            (_duration.inMilliseconds * fraction).round(),
+                                      ),
+                                    )
+                                : null,
+                          ),
+                          const SizedBox(height: 14),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.baseline,
+                            textBaseline: TextBaseline.alphabetic,
+                            children: <Widget>[
+                              Text(Fmt.timer(position), style: AppText.scrubTime),
+                              const Spacer(),
+                              Text(
+                                '−${Fmt.timer(remaining)}',
+                                style: AppText.scrubTime
+                                    .copyWith(color: AppColors.textTertiary),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 34),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: <Widget>[
+                              _SkipButton(
+                                glyph: AppGlyph.skipBack,
+                                label: '15s',
+                                semanticLabel: 'Skip back 15 seconds',
+                                onTap: enabled
+                                    ? () => _seekTo(
+                                          _position - const Duration(seconds: 15),
+                                        )
+                                    : null,
+                              ),
+                              const SizedBox(width: 34),
+                              _PlayPauseButton(
+                                playing: _playing,
+                                onTap: enabled ? _toggle : null,
+                              ),
+                              const SizedBox(width: 34),
+                              _SkipButton(
+                                glyph: AppGlyph.skipForward,
+                                label: '30s',
+                                semanticLabel: 'Skip forward 30 seconds',
+                                onTap: enabled
+                                    ? () => _seekTo(
+                                          _position + const Duration(seconds: 30),
+                                        )
+                                    : null,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(width: 34),
-                    _PlayPauseButton(
-                      playing: _playing,
-                      onTap: enabled ? _toggle : null,
-                    ),
-                    const SizedBox(width: 34),
-                    _SkipButton(
-                      glyph: AppGlyph.skipForward,
-                      label: '30s',
-                      semanticLabel: 'Skip forward 30 seconds',
-                      onTap: enabled
-                          ? () => _seekTo(
-                                _position + const Duration(seconds: 30),
-                              )
-                          : null,
-                    ),
-                  ],
-                ),
-              ],
+                ],
+              ),
             ),
           ),
           Row(
@@ -372,38 +445,37 @@ class _PlaybackViewState extends State<PlaybackView> {
                 ),
               ),
               const Spacer(),
-              TapTarget(
-                semanticLabel: 'Transcribe',
-                onTap: () => _notice(
-                  'Transcription is not available yet.',
-                ),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: AppColors.purpleChipFill,
-                    border: Border.all(color: AppColors.purpleChipBorder),
-                    borderRadius: AppShape.pill,
+              if (offerTranscribe)
+                TapTarget(
+                  semanticLabel: 'Transcribe',
+                  onTap: _transcribe,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: AppColors.purpleChipFill,
+                      border: Border.all(color: AppColors.purpleChipBorder),
+                      borderRadius: AppShape.pill,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        const AppIcon(
+                          AppGlyph.transcribe,
+                          size: 15,
+                          color: AppColors.purpleText,
+                          strokeWidth: 1.7,
+                        ),
+                        const SizedBox(width: 9),
+                        Text(
+                          'Transcribe',
+                          style: AppText.label13
+                              .copyWith(color: AppColors.purpleText),
+                        ),
+                      ],
+                    ),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      const AppIcon(
-                        AppGlyph.transcribe,
-                        size: 15,
-                        color: AppColors.purpleText,
-                        strokeWidth: 1.7,
-                      ),
-                      const SizedBox(width: 9),
-                      Text(
-                        'Transcribe',
-                        style: AppText.label13
-                            .copyWith(color: AppColors.purpleText),
-                      ),
-                    ],
-                  ),
                 ),
-              ),
             ],
           ),
         ],
@@ -516,5 +588,141 @@ class _PlayPauseButton extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// The recording's Hindi transcript: being made, made, or why it could not be.
+///
+/// One card for every state, so the words, the progress and the problems all
+/// appear in the same place. Problems use the playback screen's own status
+/// colours: [AppColors.warning] for something that can be fixed on the phone,
+/// [AppColors.error] for something that failed.
+class _TranscriptCard extends StatelessWidget {
+  const _TranscriptCard({
+    required this.status,
+    required this.transcript,
+    required this.done,
+    required this.total,
+    required this.onCancel,
+    required this.onRetry,
+    required this.onCopy,
+  });
+
+  final TranscriptStatus status;
+  final Transcript? transcript;
+  final int done;
+  final int total;
+  final VoidCallback onCancel;
+  final VoidCallback onRetry;
+  final ValueChanged<String> onCopy;
+
+  static const String caption = 'Hindi transcript';
+
+  @override
+  Widget build(BuildContext context) {
+    final text = transcript?.text ?? '';
+    final (String label, VoidCallback onTap)? action = switch (status) {
+      TranscriptStatus.running => ('Cancel', onCancel),
+      TranscriptStatus.done => ('Copy', () => onCopy(text)),
+      TranscriptStatus.failed ||
+      TranscriptStatus.modelMissing => ('Try again', onRetry),
+      _ => null,
+    };
+    final body = Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: _body(text),
+    );
+
+    return AppCard(
+      padding: const EdgeInsets.fromLTRB(16, 4, 8, 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              const Expanded(child: SectionCaption(caption)),
+              if (action != null)
+                TapTarget(
+                  onTap: action.$2,
+                  semanticLabel: action.$1,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Text(
+                      action.$1,
+                      style: AppText.label13.copyWith(
+                        color: AppColors.purpleText,
+                      ),
+                    ),
+                  ),
+                )
+              else
+                const SizedBox(height: AppShape.minTapTarget),
+            ],
+          ),
+          if (status == TranscriptStatus.done) Flexible(child: body) else body,
+        ],
+      ),
+    );
+  }
+
+  Widget _body(String text) {
+    switch (status) {
+      case TranscriptStatus.running:
+        final fraction = total == 0 ? 0.0 : done / total;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const Expanded(
+                  child: Text('Transcribing…', style: AppText.meta13),
+                ),
+                Text('${(fraction * 100).round()}%', style: AppText.scrubTime),
+              ],
+            ),
+            const SizedBox(height: 10),
+            // Determinate from the first frame - 0% until the model is loaded
+            // - so nothing animates on its own.
+            ClipRRect(
+              borderRadius: AppShape.pill,
+              child: LinearProgressIndicator(
+                value: fraction,
+                minHeight: 3,
+                color: AppColors.purpleText,
+                backgroundColor: AppColors.raised,
+              ),
+            ),
+          ],
+        );
+      case TranscriptStatus.done:
+        return SingleChildScrollView(
+          child: SelectableText(
+            text,
+            style: AppText.rowTitle.copyWith(height: 1.6),
+          ),
+        );
+      case TranscriptStatus.noSpeech:
+        return const Text('No speech found.', style: AppText.meta13);
+      case TranscriptStatus.modelMissing:
+        return Text(
+          'The Hindi model is not on this phone.',
+          style: AppText.meta13.copyWith(color: AppColors.warning),
+        );
+      case TranscriptStatus.unsupported:
+        return Text(
+          'This recording cannot be transcribed.',
+          style: AppText.meta13.copyWith(color: AppColors.error),
+        );
+      case TranscriptStatus.failed:
+        return Text(
+          'Could not transcribe this recording.',
+          style: AppText.meta13.copyWith(color: AppColors.error),
+        );
+      case TranscriptStatus.checking:
+      case TranscriptStatus.none:
+        return const SizedBox.shrink();
+    }
   }
 }

@@ -502,4 +502,46 @@ void main() {
       expect(find.textContaining('battery bars: 3 of 4'), findsOneWidget);
     });
   });
+
+  group('the last transcript card', () {
+    Future<ViewHarness> open(WidgetTester tester) async {
+      final harness = ViewHarness(recognizer: ScriptedRecognizer());
+      addTearDown(harness.dispose);
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await tester.scrollUntilVisible(find.text('LAST TRANSCRIPT'), 200);
+      await tester.pump();
+      return harness;
+    }
+
+    testWidgets('is a readout only: no recording picker, no Transcribe',
+        (tester) async {
+      await open(tester);
+
+      expect(find.text('Transcribe a recording to see its timings.'),
+          findsOneWidget);
+      expect(find.text('TRANSCRIPTION SPIKE'), findsNothing);
+      expect(find.text('Transcribe'), findsNothing);
+      expect(find.byType(DropdownButton<String>), findsNothing);
+    });
+
+    testWidgets('shows the last job\'s timings and memory', (tester) async {
+      final harness = ViewHarness(recognizer: ScriptedRecognizer());
+      addTearDown(harness.dispose);
+      await harness.seedRecording(length: const Duration(seconds: 16));
+      await tester.runAsync(
+        () => harness.controller.transcribe(harness.controller.recordings.single),
+      );
+      await harness.connect(tester);
+      await pumpScreen(tester, DeveloperView(controller: harness.controller));
+      await tester.scrollUntilVisible(find.text('Memory after'), 200);
+      await tester.pump();
+
+      expect(find.text('1200 ms'), findsOneWidget);
+      expect(find.text('293 MB'), findsOneWidget);
+      expect(find.text('684 MB'), findsOneWidget);
+      expect(find.text('303 MB'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
 }

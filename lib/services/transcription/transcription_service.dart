@@ -26,6 +26,10 @@ enum TranscriptionFailure {
 
   /// The engine failed while loading or decoding.
   recognizerFailed,
+
+  /// [TranscriptionService.cancel] was called. Not a failure anyone needs to
+  /// be told about.
+  cancelled,
 }
 
 class TranscriptionException implements Exception {
@@ -68,6 +72,15 @@ class TranscriptionService {
 
   bool _busy = false;
 
+  /// Set by [cancel]; checked at every step before the engine is running.
+  bool _cancelRequested = false;
+
+  /// The engine's event stream while it runs, so [cancel] can end it.
+  StreamSubscription<RecognitionEvent>? _engine;
+
+  /// Completes when the running engine stream has finished, one way or another.
+  Completer<void>? _engineDone;
+
   SpeechModel get model => _model;
 
   bool get isBusy => _busy;
@@ -94,10 +107,46 @@ class TranscriptionService {
       );
     }
     _busy = true;
+    _cancelRequested = false;
     try {
       return await _run(path, numThreads, onProgress);
     } finally {
       _busy = false;
+      _cancelRequested = false;
+    }
+  }
+
+  /// Stops the running transcription, if there is one.
+  ///
+  /// The job then fails with [TranscriptionFailure.cancelled]. The returned
+  /// future completes once the engine has RELEASED the model - not merely been
+  /// asked to - so a new job started straight after can never have two copies
+  /// of it in memory. A window already being decoded is finished first, which
+  /// bounds the wait to about one window's decode time.
+  Future<void> cancel() async {
+    if (!_busy) return;
+    _cancelRequested = true;
+    final engine = _engine;
+    final done = _engineDone;
+    if (engine == null || done == null) return;
+    _engine = null;
+    await engine.cancel();
+    if (!done.isCompleted) {
+      done.completeError(
+        const TranscriptionException(
+          TranscriptionFailure.cancelled,
+          'cancelled',
+        ),
+      );
+    }
+  }
+
+  void _throwIfCancelled() {
+    if (_cancelRequested) {
+      throw const TranscriptionException(
+        TranscriptionFailure.cancelled,
+        'cancelled',
+      );
     }
   }
 
@@ -174,7 +223,9 @@ class TranscriptionService {
       );
     }
 
+    _throwIfCancelled();
     final status = await _models.status(_model);
+    _throwIfCancelled();
     if (!status.isReady) {
       throw TranscriptionException(
         status.availability == SpeechModelAvailability.missing
@@ -200,32 +251,52 @@ class TranscriptionService {
     var decodeTime = Duration.zero;
     final texts = List<String?>.filled(windows.length, null);
     RecognitionReleased? released;
+    onProgress?.call(0, windows.length);
+    final done = Completer<void>();
+    _engineDone = done;
     try {
-      await for (final event in _recognizer.transcribe(job)) {
-        switch (event) {
-          case RecognitionModelLoaded():
-            loadTime = event.loadTime;
-          case RecognitionWindowDecoded():
-            texts[event.index] = event.text;
-            decodeTime += event.decodeTime;
-            onProgress?.call(event.index + 1, windows.length);
-          case RecognitionReleased():
-            released = event;
-        }
-      }
+      _engine = _recognizer.transcribe(job).listen(
+        (event) {
+          switch (event) {
+            case RecognitionModelLoaded():
+              loadTime = event.loadTime;
+            case RecognitionWindowDecoded():
+              texts[event.index] = event.text;
+              decodeTime += event.decodeTime;
+              onProgress?.call(event.index + 1, windows.length);
+            case RecognitionReleased():
+              released = event;
+          }
+        },
+        onError: (Object error) {
+          if (!done.isCompleted) done.completeError(error);
+        },
+        onDone: () {
+          if (!done.isCompleted) done.complete();
+        },
+        cancelOnError: true,
+      );
+      await done.future;
+    } on TranscriptionException {
+      rethrow;
     } on Object catch (error) {
       throw TranscriptionException(
         TranscriptionFailure.recognizerFailed,
         'the speech engine failed',
         error,
       );
+    } finally {
+      _engine = null;
+      _engineDone = null;
     }
 
     final missing = <int>[
       for (var i = 0; i < texts.length; i++)
         if (texts[i] == null) i,
     ];
-    if (loadTime == null || released == null || missing.isNotEmpty) {
+    final loaded = loadTime;
+    final release = released;
+    if (loaded == null || release == null || missing.isNotEmpty) {
       throw TranscriptionException(
         TranscriptionFailure.recognizerFailed,
         'the speech engine finished early'
@@ -249,12 +320,12 @@ class TranscriptionService {
             text: texts[i]!,
           ),
       ],
-      loadTime: loadTime,
+      loadTime: loaded,
       decodeTime: decodeTime,
       wallTime: wall.elapsed,
-      rssBeforeLoadKb: released.rssBeforeLoadKb,
-      peakRssKb: released.peakRssKb,
-      rssAfterReleaseKb: released.rssAfterReleaseKb,
+      rssBeforeLoadKb: release.rssBeforeLoadKb,
+      peakRssKb: release.peakRssKb,
+      rssAfterReleaseKb: release.rssAfterReleaseKb,
     );
   }
 }

@@ -1,4 +1,8 @@
-# On-device Hindi speech-to-text — feasibility spike
+# On-device Hindi speech-to-text — feasibility spike, then the feature
+
+> **Update 2026-09-14 (later the same day): the spike is now a feature.** See
+> *The feature* at the end. The spike sections below are kept as the record of
+> what was measured; where they are out of date, the new section says so.
 
 **Question:** can offline Hindi/Hinglish speech-to-text with native Devanagari
 output run on the owner's Android phone, inside this app?
@@ -318,3 +322,133 @@ cannot be tapped over adb (`input tap` is denied with INJECT_EVENTS).
    `adb exec-in run-as $P sh -c "cat > app_flutter/recordings/<name>"`.
 4. Run
    `flutter test integration_test/transcription_on_device_test.dart -d <id> --no-uninstall`.
+
+
+---
+
+## The feature (2026-09-14)
+
+### What the user sees — [V] on the phone
+
+Playback screen of a recording (the library is only reachable with the
+recorder connected, so on the phone this was driven through
+`integration_test/transcript_screen_on_device_test.dart`, which opens the real
+`PlaybackView` with the real controller, engine and the owner's recording):
+
+1. **Idle.** The existing purple **Transcribe** chip, bottom right. Nothing is
+   loaded or run until it is tapped. Opening the screen only stats and reads
+   the saved transcript file, if any.
+2. **Running.** A card appears under the title: `HINDI TRANSCRIPT`,
+   `Transcribing…`, a percentage, a thin determinate bar and **Cancel**. The
+   chip goes away while a transcript exists or is being made.
+3. **Done.** The card shows the Devanagari text, selectable, with **Copy**
+   (snackbar "Copied."). A long transcript scrolls inside the card, which is
+   capped at half the space under the title; the transport and speed row do
+   not move off screen.
+4. **No speech:** "No speech found." **Model missing:** "The Hindi model is
+   not on this phone." (warning colour, with Try again). **Engine failure:**
+   "Could not transcribe this recording." (error colour, with Try again).
+   **Bad file:** "This recording cannot be transcribed." No exception text is
+   ever shown. Tapping Transcribe while another recording is running shows
+   "Another recording is being transcribed."
+
+Transcript of `voicenote-20260910-042331.wav` on the phone through the UI:
+`चेक चेक ठीक है` — identical to the spike. **[V]**
+
+### How it is built
+
+| Layer | File | Change |
+|---|---|---|
+| model | `lib/model/transcript.dart` | **New.** `Transcript` (language, model id, created, audio length, segments; JSON v1, parser never throws) and `TranscriptStatus` (checking/none/running/done/noSpeech/modelMissing/unsupported/failed). |
+| model | `lib/model/transcription.dart` | `SpeechModel.languageCode` (`hi`). |
+| services | `transcription/transcript_store.dart` | **New.** Load/save/delete the sidecar through `FileStore`. A damaged or other-version file reads as "no transcript". |
+| services | `library_service.dart` | `RecordingNaming.transcriptPathOf`: `voicenote-X.wav` → `voicenote-X.transcript.json`, same folder. `LibraryService.delete` removes the recording, then its transcript. The library lists `.wav` only. |
+| services | `transcription/transcription_service.dart` | `cancel()` — completes only after the engine has released the model; job fails with `TranscriptionFailure.cancelled`, which the UI treats as "back to idle", not an error. Progress reports `0/N` before the load. |
+| drivers | `speech_recognizer_sherpa.dart` | Subscription cancel now **waits for the worker isolate to exit** (after its native `free()`), so cancel-then-start can never hold two models. Optional allocator purge after free (below). |
+| drivers | `process_memory.dart` | `releaseFreedNativeMemory()` — `mallopt(M_PURGE)` via FFI on Android. |
+| controller | `app_controller.dart` | Spike state replaced: `transcribe(recording)` (2 threads, fixed), `cancelTranscription()`, `loadTranscript`, `transcriptFor`, `transcriptStatusFor`. One job at a time. Deleting a recording cancels its job and forgets its transcript; teardown cancels. |
+| view | `playback_view.dart` | Chip wired up; `_TranscriptCard`. |
+| view | `developer_view.dart` | **Spike card removed.** Replaced by a read-only `LAST TRANSCRIPT` card: audio, load, decode, RTF, memory before/peak/after. No picker, no thread choice, no run button. |
+
+- **Model missing / download later.** The controller maps `modelMissing` and
+  `modelIncomplete` to one plain state. `SpeechModelStore.status` is still the
+  single check; a downloader only has to fill
+  `files/models/indicconformer-hi-int8/` and the card's Try again (or a future
+  Download action in the same slot) will then run.
+- **Still fixed 8 s windows**, no VAD — as asked.
+
+### Memory — the "350 MB retained" problem, re-measured **[V]**
+
+Same recording (11.5 s), same debug build, whole-process `VmRSS` sampled once a
+second from the UI isolate, with the purge off (`STT_PURGE=false`) and on:
+
+| Point | Purge off | Purge on | Purge on (final layout) |
+|---|---|---|---|
+| Idle, before tap | 373 MB | 375 MB | 372 MB |
+| During (peak sampled at 50 ms by driver) | 694 MB | 726 MB | 713 MB |
+| Driver's reading at the instant of release | **691 MB** | **405 MB** | **397 MB** |
+| UI sample ~1 s after | 455 MB | 420 MB | 412 MB |
+| 2–5 s after | 417–418 MB | ~420 MB | ~412 MB |
+| 30 s after | 423 MB | 422 MB | 417 MB |
+| `dumpsys meminfo` TOTAL RSS at ~30 s | 468 MB | 469 MB | 465 MB |
+
+Findings:
+
+- **[V] The model's memory is NOT retained.** Without the purge the RSS reads
+  ~690 MB at the moment of release — that is the number the spike recorded —
+  but it falls to ~455 MB within a second and ~418 MB within two, on its own.
+  bionic's allocator returns the pages after a short decay.
+- **[I] Why the spike saw 668–766 MB "between jobs":** its integration test ran
+  jobs back to back and sampled right at release, inside the decay window.
+- **[V] `mallopt(M_PURGE)` makes the release immediate** (691 → 405 MB at
+  release) but **changes nothing 30 s later** (423 vs 422 MB; meminfo totals
+  within 1 MB). It is kept, on by default, because it is cheap and makes the
+  "after" figure honest; it is not a fix for a leak, because there was none.
+- **[V] The isolate is not the cause:** it exits per job; cancel now waits for
+  that exit.
+- **[?] Residual ~45–50 MB** above the pre-tap idle figure persists at 30 s in
+  both modes. Not attributed. Candidates: Dart heap growth and JIT code in
+  this debug build (meminfo "Private Other" ~185 MB, "Code" ~72 MB are the big
+  non-graphics buckets), and the new card being rendered. A release (AOT)
+  build would be the right place to measure it.
+
+### Tests
+
+- **Before:** **[V]** 830 passed, 1 skipped. `flutter analyze` clean.
+- **After:** **[V]** 869 passed, 1 skipped. `flutter analyze` clean.
+- New: `test/transcript_store_test.dart` (path, round trip, no-speech,
+  replace, damaged/other-version file, delete, not listed as a recording,
+  deleting a recording deletes its transcript);
+  `test/transcription_controller_test.dart` (nothing runs until asked, saved
+  and reloaded without re-running, no speech, model missing and retry, engine
+  failure, progress, one at a time, cancel, delete cancels and removes the
+  sidecar); cancel tests in `transcription_service_test.dart`; playback view
+  in every state (idle / running+cancel / done+copy / reopened / empty /
+  failed+retry / model missing / long transcript / short transcript keeps the
+  layout / busy elsewhere); developer card is readout-only.
+- Test harness: `ScriptedRecognizer` in `test/view/harness.dart`.
+- Phone: `integration_test/transcript_screen_on_device_test.dart`
+  (`STT_MATCH`, `STT_HOLD_S`, `STT_PURGE`). **Always `--no-uninstall`.** Note
+  that `flutter test` on the device replaces the installed app with the test
+  build; reinstall the app's debug APK afterwards.
+
+### Could not verify (feature)
+
+- **[?]** The real route to the screen (library → recording) on the phone:
+  it needs the recorder connected, and MIUI refuses `adb shell input`, so no
+  tap could be injected. The screen itself, the controller and the engine were
+  exercised on the phone in-process.
+- **[?]** Cancel, Copy, the long-transcript scroll, and the failure states on
+  the phone. Unit/widget tested only.
+- **[?]** A minutes-long recording on the phone: the owner's longest restored
+  recording is 11.5 s.
+- **[?] Final install.** After the last on-phone run the phone re-enumerated
+  on USB and adb reports "no permissions", so the final debug APK
+  (`build/app/outputs/flutter-apk/app-debug.apk`, sha1 `c9a22e0e…2ea5`, the
+  tree as left) was not installed. The phone was last seen running the
+  integration-test build of the same code (identical `lib/`), with the model
+  and the three recordings intact. To finish: replug, then
+  `adb install -r build/app/outputs/flutter-apk/app-debug.apk` (a replacement
+  install; no uninstall, no data loss), and delete
+  `app_flutter/recordings/voicenote-20260910-042331.transcript.json` if the
+  untranscribed state is wanted back.

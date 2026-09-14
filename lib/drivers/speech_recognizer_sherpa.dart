@@ -27,14 +27,26 @@ import 'speech_recognizer.dart';
 /// memory outlives the job. `sherpa_onnx` keeps its FFI bindings per isolate,
 /// which is why [sherpa.initBindings] is called inside the worker.
 class SherpaOnnxSpeechRecognizer implements SpeechRecognizer {
-  const SherpaOnnxSpeechRecognizer();
+  const SherpaOnnxSpeechRecognizer({this.returnFreedMemory = true});
+
+  /// Whether the worker asks the native allocator to hand freed pages back to
+  /// the operating system once the model has been released.
+  ///
+  /// On by default: without it about 350 MB stayed resident after every job on
+  /// the phone (see `doc/agentFindings/on-device-stt.md`). Switchable so that
+  /// measurement can be repeated with and without it.
+  final bool returnFreedMemory;
 
   @override
   Stream<RecognitionEvent> transcribe(RecognitionJob job) {
     late final StreamController<RecognitionEvent> controller;
     final fromWorker = ReceivePort();
+    // Completes when the worker isolate has exited - which is after its
+    // `finally` has freed the recognizer. Cancelling waits for this, so a
+    // caller that cancels and starts another job never has two models loaded.
+    final exited = Completer<void>();
     SendPort? toWorker;
-    var cancelled = false;
+    var listenerGone = false;
 
     // The per-job memory peak, sampled from THIS isolate while the worker is
     // busy in native code. The kernel's own high-water mark cannot be reset
@@ -49,10 +61,10 @@ class SherpaOnnxSpeechRecognizer implements SpeechRecognizer {
       if (now != null && (peakRss == null || now > peakRss!)) peakRss = now;
     }
 
-    Future<void> finish() async {
+    void workerGone() {
       sampler?.cancel();
       fromWorker.close();
-      if (!controller.isClosed) await controller.close();
+      if (!exited.isCompleted) exited.complete();
     }
 
     controller = StreamController<RecognitionEvent>(
@@ -67,9 +79,10 @@ class SherpaOnnxSpeechRecognizer implements SpeechRecognizer {
           switch (message) {
             case SendPort port:
               toWorker = port;
-              if (cancelled) port.send(_cancel);
+              if (listenerGone) port.send(_cancel);
             case RecognitionReleased():
               sample();
+              sampler?.cancel();
               final after = ProcessMemory.residentKb();
               controller.add(
                 RecognitionReleased(
@@ -78,31 +91,33 @@ class SherpaOnnxSpeechRecognizer implements SpeechRecognizer {
                   rssAfterReleaseKb: after,
                 ),
               );
-              unawaited(finish());
+              unawaited(controller.close());
             case RecognitionEvent event:
               controller.add(event);
             case _WorkerFailure failure:
               controller.addError(
                 SpeechRecognizerException(failure.message, failure.detail),
               );
-              unawaited(finish());
+              unawaited(controller.close());
             case null:
-              // The worker exited. After a normal finish this is a no-op; if
-              // the worker died without reporting, say so rather than hang.
-              if (!controller.isClosed) {
+              // The worker exited. After a normal finish, a failure or a
+              // cancel this only records the fact; if it died without
+              // reporting anything, say so rather than hang.
+              if (!controller.isClosed && !listenerGone) {
                 controller.addError(
                   const SpeechRecognizerException(
                     'the recognizer isolate exited without a result',
                   ),
                 );
-                unawaited(finish());
+                unawaited(controller.close());
               }
+              workerGone();
           }
         });
         try {
           await Isolate.spawn<_WorkerStart>(
             _workerMain,
-            _WorkerStart(job, fromWorker.sendPort),
+            _WorkerStart(job, fromWorker.sendPort, returnFreedMemory),
             onExit: fromWorker.sendPort,
             debugName: 'speech-recognizer',
           );
@@ -110,17 +125,20 @@ class SherpaOnnxSpeechRecognizer implements SpeechRecognizer {
           controller.addError(
             SpeechRecognizerException('could not start the recognizer', error),
           );
-          await finish();
+          await controller.close();
+          workerGone();
         }
       },
       onCancel: () {
         // Ask, do not kill: killing the isolate mid-job would skip the native
         // free() and leave the model's memory behind. The worker checks for
-        // this between windows and releases before it exits.
-        cancelled = true;
+        // this between windows and releases before it exits. The returned
+        // future is what `StreamSubscription.cancel()` waits on, so the caller
+        // learns when the model is really gone. It also runs after a normal
+        // finish, where the worker is already on its way out.
+        listenerGone = true;
         toWorker?.send(_cancel);
-        sampler?.cancel();
-        fromWorker.close();
+        return exited.future;
       },
     );
     return controller.stream;
@@ -130,10 +148,11 @@ class SherpaOnnxSpeechRecognizer implements SpeechRecognizer {
 const String _cancel = 'cancel';
 
 class _WorkerStart {
-  const _WorkerStart(this.job, this.replies);
+  const _WorkerStart(this.job, this.replies, this.returnFreedMemory);
 
   final RecognitionJob job;
   final SendPort replies;
+  final bool returnFreedMemory;
 }
 
 class _WorkerFailure {
@@ -221,6 +240,11 @@ Future<void> _workerMain(_WorkerStart start) async {
   } finally {
     audio?.closeSync();
     recognizer?.free();
+    // onnxruntime's allocations are back in the native allocator now, but the
+    // allocator keeps the pages; ask for them to be returned to the OS.
+    if (recognizer != null && start.returnFreedMemory) {
+      ProcessMemory.releaseFreedNativeMemory();
+    }
     inbox.close();
   }
   // Memory figures are filled in on the receiving side, which has been

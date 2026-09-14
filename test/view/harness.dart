@@ -9,14 +9,18 @@ import 'package:voicenotetaker_app/drivers/audio_player.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/drivers/file_store.dart';
 import 'package:voicenotetaker_app/drivers/platform_settings.dart';
+import 'package:voicenotetaker_app/drivers/speech_recognizer.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/model/die_temperature.dart';
 import 'package:voicenotetaker_app/model/stream_info.dart';
+import 'package:voicenotetaker_app/model/transcription.dart';
 import 'package:voicenotetaker_app/services/device_test_service.dart';
 import 'package:voicenotetaker_app/services/device_test_store.dart';
 import 'package:voicenotetaker_app/services/link_monitor.dart';
+import 'package:voicenotetaker_app/services/transcription/speech_model_store.dart';
+import 'package:voicenotetaker_app/services/transcription/transcription_service.dart';
 import 'package:voicenotetaker_app/services/library_service.dart';
 import 'package:voicenotetaker_app/services/wav_writer.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
@@ -104,7 +108,10 @@ class ViewHarness {
     AudioPlayer? audioPlayer,
     this.availability = BleAvailability.poweredOn,
     this.testWindow,
+    this.recognizer,
+    bool speechModelInstalled = true,
   }) : transport = MockBleTransport() {
+    if (recognizer != null && speechModelInstalled) installSpeechModel();
     when(() => transport.currentAvailability())
         .thenAnswer((_) async => availability);
     when(() => transport.availability).thenAnswer((_) => adapter.stream);
@@ -171,6 +178,16 @@ class ViewHarness {
       audioPlayer: audioPlayer,
       platformSettings: settings,
       recordingsDirectory: recordingsDirectory,
+      transcriptionService: recognizer == null
+          ? null
+          : TranscriptionService(
+              fileStore: fileStore,
+              models: SpeechModelStore(
+                fileStore: fileStore,
+                modelsDirectory: modelsDirectory,
+              ),
+              recognizer: recognizer!,
+            ),
       deviceTestService: testWindow == null
           ? null
           : DeviceTestService(
@@ -200,6 +217,23 @@ class ViewHarness {
 
   /// Where the controller writes captures, and where the library reads them.
   static const String recordingsDirectory = '/tmp/voicenotetaker-test';
+
+  /// Where the speech model is looked for.
+  static const String modelsDirectory = '/tmp/voicenotetaker-support/models';
+
+  /// The speech engine, when the controller was built with transcription.
+  /// Null builds it without, as a build with no engine would be.
+  final ScriptedRecognizer? recognizer;
+
+  /// Puts files of exactly the model's sizes where the store looks for them.
+  /// Zero bytes: [ScriptedRecognizer] never reads them.
+  void installSpeechModel() {
+    const model = SpeechModels.indicConformerHindiInt8;
+    for (final file in model.files) {
+      fileStore.files['$modelsDirectory/${model.directoryName}/${file.name}'] =
+          Uint8List(file.sizeBytes);
+    }
+  }
 
   final MockBleTransport transport;
   final MockPlatformSettings settings = MockPlatformSettings();
@@ -544,4 +578,76 @@ class _MemorySink implements FileSink {
 
   @override
   Future<void> close() async {}
+}
+
+
+/// A speech engine the tests script: which words each window decodes to, where
+/// to hold, and whether to fail. No isolate and no model - it answers exactly
+/// as the real driver's stream would, in plain Dart.
+class ScriptedRecognizer implements SpeechRecognizer {
+  /// Text per window index; missing indices decode to ''.
+  Map<int, String> texts = <int, String>{};
+
+  /// When set, the stream fails right after the model loads.
+  Object? failWith;
+
+  /// When set, the job waits before decoding window [holdBefore] until this
+  /// completes - so a test can look at a job that is running.
+  Completer<void>? gate;
+  int holdBefore = 0;
+
+  int calls = 0;
+
+  /// True once a running job has been cancelled by its listener.
+  bool cancelled = false;
+
+  /// True once a job has released its model - finished, failed or cancelled.
+  bool released = false;
+
+  @override
+  Stream<RecognitionEvent> transcribe(RecognitionJob job) {
+    calls++;
+    released = false;
+    late final StreamController<RecognitionEvent> controller;
+    var stopped = false;
+    controller = StreamController<RecognitionEvent>(
+      onListen: () async {
+        controller.add(const RecognitionModelLoaded(Duration(milliseconds: 1200)));
+        final failure = failWith;
+        if (failure != null) {
+          released = true;
+          controller.addError(SpeechRecognizerException('boom', failure));
+          await controller.close();
+          return;
+        }
+        for (var i = 0; i < job.windows.length; i++) {
+          final hold = gate;
+          if (hold != null && i == holdBefore) await hold.future;
+          if (stopped) return;
+          controller.add(
+            RecognitionWindowDecoded(
+              index: i,
+              text: texts[i] ?? '',
+              decodeTime: const Duration(milliseconds: 100),
+            ),
+          );
+        }
+        released = true;
+        controller.add(
+          const RecognitionReleased(
+            rssBeforeLoadKb: 300000,
+            peakRssKb: 700000,
+            rssAfterReleaseKb: 310000,
+          ),
+        );
+        await controller.close();
+      },
+      onCancel: () {
+        if (!controller.isClosed) cancelled = true;
+        stopped = true;
+        released = true;
+      },
+    );
+    return controller.stream;
+  }
 }

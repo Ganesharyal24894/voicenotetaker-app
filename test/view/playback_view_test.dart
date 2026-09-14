@@ -3,10 +3,14 @@ import 'dart:async';
 import 'dart:ui' show Tristate;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/drivers/audio_player.dart';
 import 'package:voicenotetaker_app/model/recording_info.dart';
+import 'package:voicenotetaker_app/model/transcript.dart';
+import 'package:voicenotetaker_app/model/transcription.dart';
+import 'package:voicenotetaker_app/services/transcription/transcript_store.dart';
 import 'package:voicenotetaker_app/view/playback_view.dart';
 import 'package:voicenotetaker_app/view/recording_entry.dart';
 import 'package:voicenotetaker_app/view/widgets/waveform.dart';
@@ -67,10 +71,17 @@ Future<_Playback> _open(
   bool withFile = true,
   FakePlayback? fake,
   VoidCallback? onDeleted,
+  ScriptedRecognizer? recognizer,
+  bool speechModelInstalled = true,
+  Transcript? savedTranscript,
 }) async {
   final playback = fake ?? FakePlayback();
   addTearDown(playback.close);
-  final harness = ViewHarness(audioPlayer: withPlayer ? playback.player : null);
+  final harness = ViewHarness(
+    audioPlayer: withPlayer ? playback.player : null,
+    recognizer: recognizer,
+    speechModelInstalled: speechModelInstalled,
+  );
   addTearDown(harness.dispose);
 
   // The playback subscription is opened by initialise(), exactly as main.dart
@@ -85,6 +96,10 @@ Future<_Playback> _open(
     length: _length,
   );
   final info = harness.controller.recordings.firstWhere((r) => r.path == path);
+  if (savedTranscript != null) {
+    await TranscriptStore(fileStore: harness.fileStore)
+        .save(path, savedTranscript);
+  }
 
   await pumpScreen(
     tester,
@@ -413,7 +428,8 @@ void main() {
     expect(screen.harness.controller.playbackSpeed, 1.5);
   });
 
-  testWidgets('transcription is a placeholder and says so', (tester) async {
+  testWidgets('a build without a speech engine says transcription is not '
+      'available', (tester) async {
     await _open(tester);
 
     await tester.tap(find.text('Transcribe'));
@@ -522,6 +538,272 @@ void main() {
       expect(playback.harness.controller.isPlaying, isFalse);
       // The screen has nothing left to show, so it left.
       expect(left, isTrue);
+    });
+  });
+
+  group('transcript', () {
+    /// Pumps frames until the job is over, or [frames] have passed.
+    Future<void> runJob(
+      WidgetTester tester,
+      _Playback screen, {
+      int frames = 200,
+    }) async {
+      for (var i = 0; i < frames; i++) {
+        await tester.pump();
+        if (!screen.harness.controller.isTranscribing) break;
+      }
+      await tester.pump();
+    }
+
+    /// Raw failure text must never reach the screen.
+    void expectNoRawErrors() {
+      for (final raw in <String>[
+        'Exception',
+        'Error',
+        'boom',
+        'native',
+        'onnx',
+        '/tmp/',
+      ]) {
+        expect(find.textContaining(raw), findsNothing, reason: raw);
+      }
+    }
+
+    const caption = 'HINDI TRANSCRIPT';
+
+    testWidgets('idle: offers Transcribe and runs nothing by itself',
+        (tester) async {
+      final recognizer = ScriptedRecognizer();
+      await _open(tester, recognizer: recognizer);
+      await tester.pump();
+
+      expect(find.bySemanticsLabel('Transcribe'), findsOneWidget);
+      expect(find.text(caption), findsNothing);
+      expect(recognizer.calls, 0);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('running: shows progress and can be cancelled',
+        (tester) async {
+      // 4:12 is 32 windows; holding before window 8 is 25%.
+      final recognizer = ScriptedRecognizer()
+        ..gate = Completer<void>()
+        ..holdBefore = 8;
+      final screen = await _open(tester, recognizer: recognizer);
+
+      await tester.tap(find.bySemanticsLabel('Transcribe'));
+      for (var i = 0; i < 40; i++) {
+        await tester.pump();
+      }
+
+      expect(find.text(caption), findsOneWidget);
+      expect(find.text('Transcribing…'), findsOneWidget);
+      expect(find.text('25%'), findsOneWidget);
+      expect(find.byType(LinearProgressIndicator), findsOneWidget);
+      expect(find.bySemanticsLabel('Cancel'), findsOneWidget);
+      // The chip has done its job; the card is where the transcript lives.
+      expect(find.bySemanticsLabel('Transcribe'), findsNothing);
+      expect(tester.takeException(), isNull);
+
+      final cancel = tester.getSize(find.bySemanticsLabel('Cancel'));
+      expect(cancel.height, greaterThanOrEqualTo(44));
+
+      await tester.tap(find.bySemanticsLabel('Cancel'));
+      // Cancelling a stream subscription completes on the real event loop,
+      // not the tester's clock - the same as stopping a scan.
+      await flush(tester);
+      await runJob(tester, screen);
+
+      expect(recognizer.cancelled, isTrue);
+      expect(find.text(caption), findsNothing);
+      expect(find.bySemanticsLabel('Transcribe'), findsOneWidget);
+      expectNoRawErrors();
+    });
+
+    testWidgets('done: the Devanagari transcript is selectable and copyable',
+        (tester) async {
+      final recognizer = ScriptedRecognizer()
+        ..texts = <int, String>{0: 'चेक चेक', 1: 'ठीक है'};
+      final screen = await _open(tester, recognizer: recognizer);
+
+      await tester.tap(find.bySemanticsLabel('Transcribe'));
+      await runJob(tester, screen);
+
+      expect(find.text(caption), findsOneWidget);
+      final text = tester.widget<SelectableText>(find.byType(SelectableText));
+      expect(text.data, 'चेक चेक ठीक है');
+      expect(find.bySemanticsLabel('Transcribe'), findsNothing);
+
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = (call.arguments as Map<Object?, Object?>)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+
+      await tester.tap(find.bySemanticsLabel('Copy'));
+      await tester.pump();
+      await tester.pump();
+
+      expect(copied, 'चेक चेक ठीक है');
+      expect(find.text('Copied.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a saved transcript is shown when the recording is opened '
+        'again, without transcribing', (tester) async {
+      final recognizer = ScriptedRecognizer();
+      await _open(
+        tester,
+        recognizer: recognizer,
+        savedTranscript: Transcript(
+          languageCode: 'hi',
+          modelId: SpeechModels.indicConformerHindiInt8.id,
+          createdAt: DateTime(2026, 9, 14),
+          audioDuration: _length,
+          segments: const <TranscriptSegment>[
+            TranscriptSegment(
+              start: Duration.zero,
+              end: Duration(seconds: 8),
+              text: 'हैलो ओन टू थ्री',
+            ),
+          ],
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        tester.widget<SelectableText>(find.byType(SelectableText)).data,
+        'हैलो ओन टू थ्री',
+      );
+      expect(recognizer.calls, 0);
+    });
+
+    testWidgets('a short transcript leaves the speed row at the bottom',
+        (tester) async {
+      final recognizer = ScriptedRecognizer()..texts = <int, String>{0: 'हैलो'};
+      final screen = await _open(tester, recognizer: recognizer);
+      final before = tester.getRect(find.bySemanticsLabel('Playback speed'));
+
+      await tester.tap(find.bySemanticsLabel('Transcribe'));
+      await runJob(tester, screen);
+
+      expect(find.byType(SelectableText), findsOneWidget);
+      // The card takes room from the transport, never from the bottom row:
+      // on the phone an earlier layout left half the screen empty below it.
+      expect(
+        tester.getRect(find.bySemanticsLabel('Playback speed')),
+        before,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('empty: a recording with no speech says so', (tester) async {
+      final screen = await _open(tester, recognizer: ScriptedRecognizer());
+
+      await tester.tap(find.bySemanticsLabel('Transcribe'));
+      await runJob(tester, screen);
+
+      expect(find.text(caption), findsOneWidget);
+      expect(find.text('No speech found.'), findsOneWidget);
+      expect(find.byType(SelectableText), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('failed: a plain message and a way to try again',
+        (tester) async {
+      final recognizer = ScriptedRecognizer()
+        ..failWith = StateError('native onnx boom');
+      final screen = await _open(tester, recognizer: recognizer);
+
+      await tester.tap(find.bySemanticsLabel('Transcribe'));
+      await runJob(tester, screen);
+
+      expect(find.text('Could not transcribe this recording.'), findsOneWidget);
+      expect(find.bySemanticsLabel('Try again'), findsOneWidget);
+      expectNoRawErrors();
+
+      recognizer
+        ..failWith = null
+        ..texts = <int, String>{0: 'हैलो'};
+      await tester.tap(find.bySemanticsLabel('Try again'));
+      await runJob(tester, screen);
+
+      expect(find.text('Could not transcribe this recording.'), findsNothing);
+      expect(
+        tester.widget<SelectableText>(find.byType(SelectableText)).data,
+        'हैलो',
+      );
+    });
+
+    testWidgets('model missing: says so plainly and loads nothing',
+        (tester) async {
+      final recognizer = ScriptedRecognizer();
+      final screen = await _open(
+        tester,
+        recognizer: recognizer,
+        speechModelInstalled: false,
+      );
+
+      await tester.tap(find.bySemanticsLabel('Transcribe'));
+      await runJob(tester, screen);
+
+      expect(find.text('The Hindi model is not on this phone.'), findsOneWidget);
+      expect(recognizer.calls, 0);
+      expectNoRawErrors();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a long transcript scrolls in its card and leaves the '
+        'transport on screen', (tester) async {
+      final recognizer = ScriptedRecognizer()
+        ..texts = <int, String>{
+          for (var i = 0; i < 32; i++)
+            i: 'नमस्ते दोस्त मैं हूँ गुरु तुम्हारा नया दोस्त चलो आज हम कुछ नया सीखते हैं',
+        };
+      final screen = await _open(tester, recognizer: recognizer);
+
+      await tester.tap(find.bySemanticsLabel('Transcribe'));
+      await runJob(tester, screen);
+
+      expect(tester.takeException(), isNull);
+      final play = tester.getRect(find.bySemanticsLabel('Play'));
+      expect(play.bottom, lessThanOrEqualTo(844));
+      final card = tester.getRect(find.byType(SingleChildScrollView));
+      expect(card.bottom, lessThanOrEqualTo(play.top));
+    });
+
+    testWidgets('while another recording is being transcribed, Transcribe '
+        'says so instead of starting a second job', (tester) async {
+      final recognizer = ScriptedRecognizer()..gate = Completer<void>();
+      final screen = await _open(tester, recognizer: recognizer);
+      final other = await screen.harness
+          .seedRecording(at: DateTime(2026, 9, 1, 8, 0));
+      final otherInfo = screen.harness.controller.recordings
+          .firstWhere((r) => r.path == other);
+      unawaited(screen.harness.controller.transcribe(otherInfo));
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.bySemanticsLabel('Transcribe'));
+      await tester.pump();
+
+      expect(find.text('Another recording is being transcribed.'),
+          findsOneWidget);
+      expect(recognizer.calls, 1);
+
+      final cancelled = screen.harness.controller.cancelTranscription();
+      await flush(tester);
+      await cancelled;
     });
   });
 }

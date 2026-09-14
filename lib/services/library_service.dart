@@ -20,6 +20,23 @@ abstract final class RecordingNaming {
         '-${two(when.hour)}${two(when.minute)}${two(when.second)}$extension';
   }
 
+  /// Suffix of the transcript saved beside a recording.
+  static const String transcriptSuffix = '.transcript.json';
+
+  /// Where the transcript of the recording at [audioPath] is kept: the same
+  /// directory and name, `.wav` swapped for [transcriptSuffix].
+  ///
+  /// Beside the recording rather than in a folder of its own, so the two can
+  /// only be moved, backed up or deleted together. The library lists `.wav`
+  /// files only, so it never shows one as a recording.
+  static String transcriptPathOf(String audioPath) {
+    final lower = audioPath.toLowerCase();
+    final stem = lower.endsWith(extension)
+        ? audioPath.substring(0, audioPath.length - extension.length)
+        : audioPath;
+    return '$stem$transcriptSuffix';
+  }
+
   /// The capture time encoded in [name], or `null` when it is not one of ours.
   static DateTime? timestampOf(String name) {
     if (!name.startsWith(prefix) || !name.endsWith(extension)) return null;
@@ -122,9 +139,15 @@ class LibraryService {
     );
   }
 
-  /// Deletes [path] and re-publishes the list.
+  /// Deletes the recording at [path], its saved transcript with it, and
+  /// re-publishes the list.
+  ///
+  /// The recording goes first: if the transcript cannot be removed after
+  /// that, what is left is a stray sidecar nobody can see, never a recording
+  /// that has lost its transcript but is still listed.
   Future<void> delete(String path) async {
     await _fileStore.delete(path);
+    await _fileStore.delete(RecordingNaming.transcriptPathOf(path));
     await refresh();
   }
 

@@ -32,6 +32,7 @@ class SpeechModel {
   const SpeechModel({
     required this.id,
     required this.displayName,
+    required this.languageCode,
     required this.directoryName,
     required this.modelFile,
     required this.tokensFile,
@@ -44,6 +45,9 @@ class SpeechModel {
   final String id;
 
   final String displayName;
+
+  /// BCP-47 code of the one language this model is run for, e.g. `hi`.
+  final String languageCode;
 
   /// Sub-directory of the app's model directory holding [files].
   final String directoryName;
@@ -93,6 +97,7 @@ abstract final class SpeechModels {
   static const SpeechModel indicConformerHindiInt8 = SpeechModel(
     id: 'indicconformer-hi-int8',
     displayName: 'IndicConformer Hindi (int8)',
+    languageCode: 'hi',
     directoryName: 'indicconformer-hi-int8',
     modelFile: SpeechModelFile(name: 'model.int8.onnx', sizeBytes: 196977855),
     tokensFile: SpeechModelFile(name: 'tokens.txt', sizeBytes: 73238),

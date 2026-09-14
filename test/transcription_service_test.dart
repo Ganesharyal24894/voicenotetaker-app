@@ -152,7 +152,9 @@ void main() {
         SampleRange(256000, 320000),
       ]);
 
-      expect(progress, <String>['1/3', '2/3', '3/3']);
+      // 0/3 first: the total is known before the model loads, so a progress
+      // bar can show a real "0 of 3" rather than spinning.
+      expect(progress, <String>['0/3', '1/3', '2/3', '3/3']);
       expect(result.text, 'नमस्ते दोस्त कहानी');
       expect(result.segments[1].start, const Duration(seconds: 8));
       expect(result.segments[2].end, const Duration(seconds: 20));
@@ -272,6 +274,68 @@ void main() {
       expect(engine.calls, 1);
     });
 
+    test('cancel stops a running job and waits for the engine to let go',
+        () async {
+      installModel(store);
+      store.put(wavPath, wav(samples: 40 * 16000));
+      final engine = HoldingRecognizer();
+      final service = TranscriptionService(
+        fileStore: store,
+        models: SpeechModelStore(fileStore: store, modelsDirectory: modelsDir),
+        recognizer: engine,
+      );
+
+      final job = failureOf(service.transcribe(wavPath));
+      await engine.started.future;
+      expect(service.isBusy, isTrue);
+
+      var cancelReturned = false;
+      final cancel = service.cancel().then((_) => cancelReturned = true);
+      await Future<void>.delayed(Duration.zero);
+
+      // Asked, but the engine has not released the model yet: still busy, so
+      // no second model can be loaded alongside it.
+      expect(engine.cancelRequested, isTrue);
+      expect(cancelReturned, isFalse);
+      expect(service.isBusy, isTrue);
+
+      engine.release.complete();
+      await cancel;
+
+      expect(await job, TranscriptionFailure.cancelled);
+      expect(service.isBusy, isFalse);
+    });
+
+    test('cancel before the engine starts means it never starts', () async {
+      installModel(store);
+      store.put(wavPath, wav(samples: 16000));
+
+      final job = failureOf(service.transcribe(wavPath));
+      await service.cancel();
+
+      expect(await job, TranscriptionFailure.cancelled);
+      expect(engine.calls, 0);
+      expect(service.isBusy, isFalse);
+    });
+
+    test('a job after a cancelled one runs normally', () async {
+      installModel(store);
+      store.put(wavPath, wav(samples: 16000));
+      engine.texts = <int, String>{0: 'हैलो'};
+
+      final first = failureOf(service.transcribe(wavPath));
+      await service.cancel();
+      await first;
+
+      final result = await service.transcribe(wavPath);
+      expect(result.text, 'हैलो');
+    });
+
+    test('cancel with nothing running does nothing', () async {
+      await service.cancel();
+      expect(service.isBusy, isFalse);
+    });
+
     test('rejects a non-positive thread count', () {
       expect(
         () => service.transcribe(wavPath, numThreads: 0),
@@ -279,4 +343,30 @@ void main() {
       );
     });
   });
+}
+
+
+/// An engine that loads, then holds until cancelled, and only lets go of the
+/// model when the test says so - the way the real isolate finishes the window
+/// it is decoding before it frees.
+class HoldingRecognizer implements SpeechRecognizer {
+  final Completer<void> started = Completer<void>();
+  final Completer<void> release = Completer<void>();
+  bool cancelRequested = false;
+
+  @override
+  Stream<RecognitionEvent> transcribe(RecognitionJob job) {
+    late final StreamController<RecognitionEvent> controller;
+    controller = StreamController<RecognitionEvent>(
+      onListen: () {
+        controller.add(const RecognitionModelLoaded(Duration(milliseconds: 1)));
+        started.complete();
+      },
+      onCancel: () {
+        cancelRequested = true;
+        return release.future;
+      },
+    );
+    return controller.stream;
+  }
 }

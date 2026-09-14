@@ -18,13 +18,14 @@ import '../model/link_health.dart';
 import '../model/recording_info.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
+import '../model/transcript.dart';
 import '../model/transcription.dart';
 import '../services/device_test_service.dart';
 import '../services/device_test_store.dart';
 import '../services/link_monitor.dart';
 import '../services/library_service.dart';
 import '../services/recording_service.dart';
-import '../services/transcription/speech_model_store.dart';
+import '../services/transcription/transcript_store.dart';
 import '../services/transcription/transcription_service.dart';
 
 /// What the app is doing right now, as one flat enum the placeholder view can
@@ -72,6 +73,7 @@ class AppController extends ChangeNotifier {
     AudioPlayer? audioPlayer,
     PlatformSettings? platformSettings,
     TranscriptionService? transcriptionService,
+    TranscriptStore? transcriptStore,
     AudioCodec preferredCodec = AudioCodec.imaAdpcm,
     // The public parameter name `preferredCodec:` is part of the existing API,
     // while the field behind it is private because it is now reached through a
@@ -85,6 +87,8 @@ class AppController extends ChangeNotifier {
         _player = audioPlayer,
         _settings = platformSettings,
         _transcription = transcriptionService,
+        _transcripts =
+            transcriptStore ?? TranscriptStore(fileStore: fileStore),
         _library = libraryService ??
             LibraryService(
               fileStore: fileStore,
@@ -142,61 +146,94 @@ class AppController extends ChangeNotifier {
   /// Offline speech-to-text. Null when the app was built without an engine;
   /// every transcription member then reports it as unavailable.
   ///
-  /// FEASIBILITY SPIKE. Reached only from Developer options while the product
-  /// UI for transcripts is still to be designed with the owner. The service
-  /// loads the model per job and releases it afterwards, so holding this
-  /// reference costs nothing between jobs.
+  /// NOTHING RUNS UNLESS ASKED. The service loads the model for one job and
+  /// releases it at the end, so holding this reference costs nothing between
+  /// jobs, and a job only starts from [transcribe] - a tap on a recording.
   final TranscriptionService? _transcription;
 
-  bool _transcribing = false;
+  /// The saved transcripts, beside the recordings.
+  final TranscriptStore _transcripts;
+
+  /// CPU threads for a job. 2 is as fast as 4 on the owner's phone (2 big + 6
+  /// little cores) and should cost less battery.
+  static const int transcriptionThreads = 2;
+
+  /// The recording being transcribed now; null when nothing is running. There
+  /// is only ever one - the service refuses a second.
+  String? _transcribingPath;
   int _transcriptionDone = 0;
   int _transcriptionTotal = 0;
-  SpeechModelStatus? _speechModelStatus;
+
+  /// Saved transcripts that have been looked for, by recording path. A path
+  /// that is present with a null value has been checked and has none.
+  final Map<String, Transcript?> _transcriptCache = <String, Transcript?>{};
+
+  /// Why the last attempt at a recording did not produce a transcript, by
+  /// path. Cleared when that recording is tried again.
+  final Map<String, TranscriptStatus> _transcriptFailures =
+      <String, TranscriptStatus>{};
+
   TranscriptionResult? _lastTranscription;
-  String? _transcriptionError;
 
   bool get transcriptionAvailable => _transcription != null;
 
-  bool get isTranscribing => _transcribing;
+  bool get isTranscribing => _transcribingPath != null;
 
-  /// Windows decoded so far, and of how many, for the job in progress.
+  /// The recording being transcribed, if any.
+  String? get transcribingPath => _transcribingPath;
+
+  /// Windows decoded so far, and of how many, for the job in progress. The
+  /// total is 0 until the recording has been measured.
   int get transcriptionDone => _transcriptionDone;
   int get transcriptionTotal => _transcriptionTotal;
 
-  /// As of the last [refreshSpeechModelStatus]; null before it.
-  SpeechModelStatus? get speechModelStatus => _speechModelStatus;
-
+  /// The last finished job's timings and memory, for Developer options.
   TranscriptionResult? get lastTranscription => _lastTranscription;
 
-  String? get transcriptionError => _transcriptionError;
+  /// The saved transcript of [recording], once [loadTranscript] has run.
+  Transcript? transcriptFor(RecordingInfo recording) =>
+      _transcriptCache[recording.path];
 
-  /// Re-checks whether the speech model is installed. Cheap: two `stat`s.
-  Future<void> refreshSpeechModelStatus() async {
-    final service = _transcription;
-    if (service == null) return;
-    _speechModelStatus = await service.modelStatus();
+  /// What the playback screen should show for [recording]'s transcript.
+  TranscriptStatus transcriptStatusFor(RecordingInfo recording) {
+    final path = recording.path;
+    if (_transcribingPath == path) return TranscriptStatus.running;
+    final failure = _transcriptFailures[path];
+    if (failure != null) return failure;
+    if (!_transcriptCache.containsKey(path)) return TranscriptStatus.checking;
+    final transcript = _transcriptCache[path];
+    if (transcript == null) return TranscriptStatus.none;
+    return transcript.hasSpeech
+        ? TranscriptStatus.done
+        : TranscriptStatus.noSpeech;
+  }
+
+  /// Reads [recording]'s saved transcript, if it has one. Cheap: one `stat`,
+  /// and one small read when there is a file.
+  Future<void> loadTranscript(RecordingInfo recording) async {
+    final transcript = await _transcripts.load(recording.path);
+    _transcriptCache[recording.path] = transcript;
     notifyListeners();
   }
 
-  /// Transcribes [recording] with [numThreads] threads and keeps the result.
+  /// Transcribes [recording] and saves the transcript beside it.
   ///
-  /// Failures land in [transcriptionError] rather than being thrown: this is
-  /// driven straight from a button.
-  Future<void> transcribe(
-    RecordingInfo recording, {
-    required int numThreads,
-  }) async {
+  /// Does nothing while another transcription is running: one at a time.
+  /// Outcomes land in [transcriptStatusFor] rather than being thrown, because
+  /// this is driven straight from a button.
+  Future<void> transcribe(RecordingInfo recording) async {
     final service = _transcription;
-    if (service == null || _transcribing) return;
-    _transcribing = true;
+    if (service == null || _transcribingPath != null) return;
+    final path = recording.path;
+    _transcribingPath = path;
     _transcriptionDone = 0;
     _transcriptionTotal = 0;
-    _transcriptionError = null;
+    _transcriptFailures.remove(path);
     notifyListeners();
     try {
       final result = await service.transcribe(
-        recording.path,
-        numThreads: numThreads,
+        path,
+        numThreads: transcriptionThreads,
         onProgress: (done, total) {
           _transcriptionDone = done;
           _transcriptionTotal = total;
@@ -207,14 +244,43 @@ class AppController extends ChangeNotifier {
       // Logged whole, so a measurement taken on a phone can be read back over
       // adb without transcribing it off the screen.
       debugPrint('STT $result');
-      debugPrint('STT text: ${result.text}');
+      final transcript = Transcript.fromResult(
+        result,
+        languageCode: service.model.languageCode,
+        createdAt: DateTime.now(),
+      );
+      _transcriptCache[path] = transcript;
+      try {
+        await _transcripts.save(path, transcript);
+      } on Object catch (error) {
+        // The words are still on screen for this session; they are simply
+        // worked out again next time.
+        debugPrint('STT could not save the transcript: $error');
+      }
     } on TranscriptionException catch (error) {
-      _transcriptionError = error.toString();
       debugPrint('STT failed: $error');
+      final status = switch (error.failure) {
+        TranscriptionFailure.cancelled => null,
+        TranscriptionFailure.modelMissing ||
+        TranscriptionFailure.modelIncomplete =>
+          TranscriptStatus.modelMissing,
+        TranscriptionFailure.unreadableAudio ||
+        TranscriptionFailure.unsupportedAudio =>
+          TranscriptStatus.unsupported,
+        TranscriptionFailure.busy ||
+        TranscriptionFailure.recognizerFailed =>
+          TranscriptStatus.failed,
+      };
+      if (status != null) _transcriptFailures[path] = status;
     } finally {
-      _transcribing = false;
+      _transcribingPath = null;
       notifyListeners();
     }
+  }
+
+  /// Stops the running transcription. Completes once the model is released.
+  Future<void> cancelTranscription() async {
+    await _transcription?.cancel();
   }
 
   /// Null when the app was built without a playback driver; every playback
@@ -1236,11 +1302,12 @@ class AppController extends ChangeNotifier {
   /// file out from under an open player is a platform-level crash, not a
   /// tidy-up problem, so the order here is load-bearing.
   ///
-  /// The app keeps no sidecar metadata - a recording's name, timestamp and
-  /// length are read back from the file name and its own WAV header - so
-  /// "delete the metadata too" means dropping the in-memory references:
-  /// [nowPlaying], [lastRecording] and the published list. Any one of them
-  /// left pointing at a deleted path is the orphan entry.
+  /// A recording's name, timestamp and length are read back from the file
+  /// name and its own WAV header. The one file kept beside it is its saved
+  /// transcript, which `LibraryService.delete` removes with it. Everything
+  /// else is in-memory references - [nowPlaying], [lastRecording], the
+  /// transcript caches and the published list - and any one of them left
+  /// pointing at a deleted path is the orphan entry.
   Future<void> deleteRecording(RecordingInfo recording) async {
     if (_nowPlaying?.path == recording.path) {
       await stopPlayback();
@@ -1249,6 +1316,11 @@ class AppController extends ChangeNotifier {
       _playbackError = null;
     }
     if (_lastRecording?.path == recording.path) _lastRecording = null;
+    // A transcription of this file stops first, for the same reason playback
+    // does: the engine reads the file as it goes.
+    if (_transcribingPath == recording.path) await cancelTranscription();
+    _transcriptCache.remove(recording.path);
+    _transcriptFailures.remove(recording.path);
     try {
       // The service re-lists the directory itself, so the deletion and the
       // list can never disagree.
@@ -1382,6 +1454,7 @@ class AppController extends ChangeNotifier {
 
   /// The awaitable half of [dispose].
   Future<void> teardown() async {
+    await _transcription?.cancel();
     await _scanSubscription?.cancel();
     _scanSubscription = null;
     await _connectionSubscription?.cancel();

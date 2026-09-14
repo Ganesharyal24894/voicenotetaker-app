@@ -27,6 +27,8 @@ import 'package:voicenotetaker_app/services/transcription/transcription_service.
 /// `STT_MATCH=<substring of the file name>`, `STT_PASSES=<n>` (default 2), and
 /// `STT_IDLE_S=<seconds>` to keep sampling resident memory after the last job,
 /// which is how "is the model's memory really given back?" is answered.
+/// `STT_PURGE=false` turns off the allocator purge after each job, so the
+/// memory with and without it can be compared in the same harness.
 ///
 /// Timings come out of `debugPrint` as `STT ...` lines. The test asserts only
 /// that every file produced a result; the numbers are for a person to read.
@@ -46,7 +48,16 @@ void main() {
         fileStore: fileStore,
         modelsDirectory: fileStore.join(support, 'models'),
       ),
-      recognizer: const SherpaOnnxSpeechRecognizer(),
+      recognizer: const SherpaOnnxSpeechRecognizer(
+        returnFreedMemory: bool.fromEnvironment(
+          'STT_PURGE',
+          defaultValue: true,
+        ),
+      ),
+    );
+    debugPrint(
+      'STT purge=${const bool.fromEnvironment('STT_PURGE', defaultValue: true)} '
+      'idle rss ${ProcessMemory.residentKb()} kB',
     );
 
     final status = await service.modelStatus();
