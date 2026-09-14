@@ -4,11 +4,13 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:voicenotetaker_app/model/auto_sleep.dart';
 import 'package:voicenotetaker_app/controller/app_controller.dart';
 import 'package:voicenotetaker_app/drivers/audio_player.dart';
 import 'package:voicenotetaker_app/drivers/background_mode.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/drivers/file_store.dart';
+import 'package:voicenotetaker_app/drivers/haptics.dart';
 import 'package:voicenotetaker_app/drivers/phone_power.dart';
 import 'package:voicenotetaker_app/drivers/platform_settings.dart';
 import 'package:voicenotetaker_app/drivers/speech_recognizer.dart';
@@ -17,6 +19,7 @@ import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/capture_flags.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/model/die_temperature.dart';
+import 'package:voicenotetaker_app/model/not_saving_alert.dart';
 import 'package:voicenotetaker_app/model/phone_power.dart';
 import 'package:voicenotetaker_app/model/stream_info.dart';
 import 'package:voicenotetaker_app/model/transcription.dart';
@@ -46,6 +49,7 @@ void registerViewFallbacks() {
   registerFallbackValue(AudioCodec.imaAdpcm);
   registerFallbackValue(Duration.zero);
   registerFallbackValue(CaptureCommand.gateDisabled);
+  registerFallbackValue(AutoSleepDuration.off);
 }
 
 /// An [AudioPlayer] the tests drive by hand.
@@ -121,6 +125,9 @@ class ViewHarness {
     bool backgroundTranscription = false,
     Duration powerRecheckInterval = const Duration(seconds: 60),
     DateTime Function()? clock,
+    Haptics? haptics,
+    NotSavingAlertPolicy? notSavingAlert,
+    String? settingsDirectory,
   }) : transport = MockBleTransport() {
     if (recognizer != null && speechModelInstalled) installSpeechModel();
     when(() => transport.currentAvailability())
@@ -153,8 +160,14 @@ class ViewHarness {
     when(() => transport.selectCodec(any(), any())).thenAnswer((_) async {});
     // The device's own default: auto-sleep off. Tests that care re-stub this
     // - including with a throw, which is what firmware without `fe04` does.
-    when(() => transport.readAutoSleep(any())).thenAnswer((_) async => false);
+    when(() => transport.readAutoSleep(any())).thenAnswer((_) async => const AutoSleepSetting.legacy(false));
     when(() => transport.setAutoSleep(any(), any())).thenAnswer((_) async {});
+    when(() => transport.setAutoSleepDuration(any(), any()))
+        .thenAnswer((_) async {});
+    // Firmware without `fe09` unless a test says otherwise.
+    when(() => transport.readBatteryHistory(any())).thenThrow(
+      const BleTransportException('could not read the battery history'),
+    );
     // A charged, discharging cell: the ordinary case. Tests that care
     // re-stub this - including with a throw, which is what firmware without
     // `fe05` does - or push values through [battery].
@@ -208,6 +221,9 @@ class ViewHarness {
       backgroundTranscription: backgroundTranscription,
       powerRecheckInterval: powerRecheckInterval,
       clock: clock,
+      haptics: haptics,
+      notSavingAlert: notSavingAlert,
+      settingsDirectory: settingsDirectory,
       transcriptionService: recognizer == null
           ? null
           : TranscriptionService(
@@ -725,6 +741,9 @@ class FakeBackgroundMode implements BackgroundMode {
   /// order; null entries are stops.
   final List<String?> texts = <String?>[];
 
+  /// The title that went with each entry in [texts]; null entries are stops.
+  final List<String?> titles = <String?>[];
+
   bool running = false;
   bool notifications = true;
   bool batteryExempt = true;
@@ -734,12 +753,14 @@ class FakeBackgroundMode implements BackgroundMode {
   Future<void> start({required String title, required String text}) async {
     running = true;
     texts.add(text);
+    titles.add(title);
   }
 
   @override
   Future<void> stop() async {
     running = false;
     texts.add(null);
+    titles.add(null);
   }
 
   @override
@@ -767,6 +788,14 @@ class FakeBackgroundMode implements BackgroundMode {
   Future<bool> openAutostartSettings() async => false;
 }
 
+
+/// A [Haptics] that records every buzz.
+class FakeHaptics implements Haptics {
+  final List<BuzzPattern> buzzes = <BuzzPattern>[];
+
+  @override
+  Future<void> buzz(BuzzPattern pattern) async => buzzes.add(pattern);
+}
 
 /// A [PhonePower] the tests set by hand. [changes] fires only when a test
 /// calls [plug] or [emit].

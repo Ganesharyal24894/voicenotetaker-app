@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../model/audio_codec.dart';
+import '../model/auto_sleep.dart';
 import '../model/battery_status.dart';
 import '../model/capture_flags.dart';
 import '../model/device_state.dart';
@@ -66,14 +67,31 @@ abstract class BleTransport {
 
   /// Reads the `fe04` auto-sleep characteristic.
   ///
+  /// Accepts both forms: one byte from firmware that only knows on/off, two
+  /// bytes `[flags, code]` from firmware with durations - the answer's
+  /// [AutoSleepSetting.supportsDuration] says which.
+  ///
   /// Throws [BleTransportException] when the characteristic is absent - which
   /// is what firmware older than `fe04` looks like from here - or when the
-  /// value is not the single byte the protocol defines. Callers must treat
-  /// that as "unknown", never as "off".
-  Future<bool> readAutoSleep(String deviceId);
+  /// value is in neither form. Callers must treat that as "unknown", never as
+  /// "off".
+  Future<AutoSleepSetting> readAutoSleep(String deviceId);
 
-  /// Writes [enabled] to the `fe04` auto-sleep characteristic as one byte.
+  /// Writes [enabled] to `fe04` as the legacy single byte. The firmware keeps
+  /// its stored duration.
   Future<void> setAutoSleep(String deviceId, bool enabled);
+
+  /// Writes [duration] to `fe04` as two bytes. Only for firmware whose read
+  /// was two bytes; older firmware refuses the length.
+  Future<void> setAutoSleepDuration(String deviceId, AutoSleepDuration duration);
+
+  /// Reads the `fe09` battery-life history once, as its raw bytes.
+  ///
+  /// Up to 428 bytes, longer than one MTU: the platform fetches the rest with
+  /// Read Blob requests on its own. Decoding is `BatteryHistory.fromBytes`.
+  /// Throws [BleTransportException] when the characteristic is absent (older
+  /// firmware) or the read fails.
+  Future<Uint8List> readBatteryHistory(String deviceId);
 
   /// Reads the `fe05` battery characteristic once.
   ///

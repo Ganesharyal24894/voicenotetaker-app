@@ -11,6 +11,7 @@ import 'drivers/background_mode_channel.dart';
 import 'drivers/ble_transport_universal.dart';
 import 'drivers/clipboard_text.dart';
 import 'drivers/file_store.dart';
+import 'drivers/haptics_channel.dart';
 import 'drivers/phone_power_battery_plus.dart';
 import 'drivers/platform_settings_channel.dart';
 import 'drivers/share_sheet_share_plus.dart';
@@ -48,6 +49,8 @@ Future<void> main() async {
     audioPlayer: JustAudioPlayer(),
     platformSettings: const MethodChannelPlatformSettings(),
     backgroundMode: const MethodChannelBackgroundMode(),
+    // The not-saving alert's buzz. Android only in practice - see Haptics.
+    haptics: const MethodChannelHaptics(),
     phonePower: BatteryPlusPhonePower(),
     // Android only: its foreground service keeps this isolate alive with the
     // screen off. iOS makes no such promise, so there transcription waits for

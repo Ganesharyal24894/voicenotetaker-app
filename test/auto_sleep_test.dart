@@ -26,30 +26,59 @@ void main() {
       );
     });
 
-    test('bit 0 carries the flag', () {
-      expect(AutoSleep.fromBytes(<int>[0x01]), isTrue);
-      expect(AutoSleep.fromBytes(<int>[0x00]), isFalse);
+    test('one byte from older firmware: bit 0 carries the flag, no duration',
+        () {
+      expect(AutoSleep.fromBytes(<int>[0x01]), const AutoSleepSetting.legacy(true));
+      expect(AutoSleep.fromBytes(<int>[0x00]), const AutoSleepSetting.legacy(false));
+      expect(AutoSleep.fromBytes(<int>[0x01]).supportsDuration, isFalse);
     });
 
-    test('writing sends exactly one byte, 0x01 or 0x00', () {
+    test('two bytes carry the duration in force', () {
+      expect(
+        AutoSleep.fromBytes(<int>[0x00, 0x00]),
+        const AutoSleepSetting(enabled: false, duration: AutoSleepDuration.off),
+      );
+      expect(
+        AutoSleep.fromBytes(<int>[0x01, 0x01]).duration,
+        AutoSleepDuration.seconds30,
+      );
+      expect(AutoSleep.fromBytes(<int>[0x01, 0x02]).duration, AutoSleepDuration.minute1);
+      expect(AutoSleep.fromBytes(<int>[0x01, 0x03]).duration, AutoSleepDuration.minutes2);
+      expect(AutoSleep.fromBytes(<int>[0x01, 0x04]).duration, AutoSleepDuration.minutes5);
+      expect(AutoSleep.fromBytes(<int>[0x01, 0x04]).supportsDuration, isTrue);
+    });
+
+    test('writing on/off sends exactly one byte, 0x01 or 0x00', () {
       expect(AutoSleep.toBytes(true), Uint8List.fromList(<int>[0x01]));
       expect(AutoSleep.toBytes(false), Uint8List.fromList(<int>[0x00]));
     });
 
-    test('any length but one byte is rejected', () {
+    test('writing a duration sends [flags, code] with bit 0 = code != 0', () {
+      expect(AutoSleep.durationToBytes(AutoSleepDuration.off), <int>[0x00, 0x00]);
+      expect(AutoSleep.durationToBytes(AutoSleepDuration.seconds30), <int>[0x01, 0x01]);
+      expect(AutoSleep.durationToBytes(AutoSleepDuration.minute1), <int>[0x01, 0x02]);
+      expect(AutoSleep.durationToBytes(AutoSleepDuration.minutes2), <int>[0x01, 0x03]);
+      expect(AutoSleep.durationToBytes(AutoSleepDuration.minutes5), <int>[0x01, 0x04]);
+    });
+
+    test('any length but one or two bytes is rejected', () {
       expect(() => AutoSleep.fromBytes(<int>[]), throwsFormatException);
       expect(
-        () => AutoSleep.fromBytes(<int>[0x01, 0x00]),
+        () => AutoSleep.fromBytes(<int>[0x01, 0x01, 0x00]),
         throwsFormatException,
       );
     });
 
-    test('reserved bits set means a firmware this build cannot read', () {
-      // The firmware rejects these on write; on read they would mean the flag
-      // has grown a meaning we do not know, so they are not guessed at.
+    test('reserved bits, unknown codes and disagreeing flags are refused', () {
+      // The firmware rejects these on write; on read they would mean the
+      // setting has grown a meaning we do not know, so they are not guessed at.
       expect(() => AutoSleep.fromBytes(<int>[0x03]), throwsFormatException);
       expect(() => AutoSleep.fromBytes(<int>[0xFF]), throwsFormatException);
       expect(() => AutoSleep.fromBytes(<int>[0x80]), throwsFormatException);
+      expect(() => AutoSleep.fromBytes(<int>[0x03, 0x01]), throwsFormatException);
+      expect(() => AutoSleep.fromBytes(<int>[0x01, 0x05]), throwsFormatException);
+      expect(() => AutoSleep.fromBytes(<int>[0x01, 0x00]), throwsFormatException);
+      expect(() => AutoSleep.fromBytes(<int>[0x00, 0x02]), throwsFormatException);
     });
   });
 
@@ -109,7 +138,7 @@ void main() {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => true);
+          .thenAnswer((_) async => const AutoSleepSetting.legacy(true));
 
       await harness.controller.connect(knownDevice);
       expect(harness.controller.autoSleepAvailable, isTrue);
@@ -125,7 +154,7 @@ void main() {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => false);
+          .thenAnswer((_) async => const AutoSleepSetting.legacy(false));
 
       await harness.controller.connect(knownDevice);
 
@@ -179,7 +208,7 @@ void main() {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => false);
+          .thenAnswer((_) async => const AutoSleepSetting.legacy(false));
       when(() => harness.transport.setAutoSleep(any(), any()))
           .thenThrow(const BleTransportException('write failed'));
 
@@ -190,6 +219,111 @@ void main() {
           reason: 'the device kept its old setting, so the app must too');
       expect(harness.controller.autoSleepAvailable, isTrue);
       expect(harness.controller.errorMessage, 'write failed');
+    });
+  });
+
+  group('durations', () {
+    const oneMinute = AutoSleepSetting(
+      enabled: true,
+      duration: AutoSleepDuration.minute1,
+    );
+
+    test('two-byte firmware reports its duration; old firmware reports none',
+        () async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readAutoSleep(any()))
+          .thenAnswer((_) async => oneMinute);
+
+      await harness.controller.connect(knownDevice);
+      expect(harness.controller.autoSleepDurationSupported, isTrue);
+      expect(harness.controller.autoSleepDuration, AutoSleepDuration.minute1);
+
+      final old = ViewHarness();
+      addTearDown(old.dispose);
+      await old.controller.connect(knownDevice);
+      expect(old.controller.autoSleepDurationSupported, isFalse);
+      expect(old.controller.autoSleepDuration, isNull);
+    });
+
+    test('choosing one writes the two-byte form and shows it at once',
+        () async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readAutoSleep(any()))
+          .thenAnswer((_) async => oneMinute);
+      await harness.controller.connect(knownDevice);
+
+      final changed = await harness.controller
+          .setAutoSleepDuration(AutoSleepDuration.minutes5);
+
+      expect(changed, isTrue);
+      verify(() => harness.transport
+              .setAutoSleepDuration(knownDevice.id, AutoSleepDuration.minutes5))
+          .called(1);
+      expect(harness.controller.autoSleepDuration, AutoSleepDuration.minutes5);
+      expect(harness.controller.autoSleepEnabled, isTrue);
+
+      await harness.controller.setAutoSleepDuration(AutoSleepDuration.off);
+      expect(harness.controller.autoSleepEnabled, isFalse);
+    });
+
+    test('a refused write puts the old choice back and says it failed',
+        () async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      when(() => harness.transport.readAutoSleep(any()))
+          .thenAnswer((_) async => oneMinute);
+      when(() => harness.transport.setAutoSleepDuration(any(), any()))
+          .thenThrow(const BleTransportException('ATT 0x13'));
+      await harness.controller.connect(knownDevice);
+
+      final seen = <AutoSleepDuration?>[];
+      harness.controller.addListener(
+        () => seen.add(harness.controller.autoSleepDuration),
+      );
+      final changed = await harness.controller
+          .setAutoSleepDuration(AutoSleepDuration.seconds30);
+
+      expect(changed, isFalse);
+      expect(seen.first, AutoSleepDuration.seconds30, reason: 'optimistic');
+      expect(harness.controller.autoSleepDuration, AutoSleepDuration.minute1);
+      expect(harness.controller.errorMessage, isNull,
+          reason: 'the screen says it in plain words, not the error slot');
+    });
+
+    test('nothing is written to old firmware or with no link', () async {
+      final old = ViewHarness();
+      addTearDown(old.dispose);
+      expect(
+        await old.controller.setAutoSleepDuration(AutoSleepDuration.minute1),
+        isFalse,
+      );
+      await old.controller.connect(knownDevice);
+      expect(
+        await old.controller.setAutoSleepDuration(AutoSleepDuration.minute1),
+        isFalse,
+      );
+      verifyNever(() => old.transport.setAutoSleepDuration(any(), any()));
+    });
+
+    test('the on/off byte on duration firmware reads the duration back',
+        () async {
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      var reads = 0;
+      when(() => harness.transport.readAutoSleep(any())).thenAnswer((_) async {
+        reads++;
+        return reads == 1
+            ? const AutoSleepSetting(enabled: false, duration: AutoSleepDuration.off)
+            : const AutoSleepSetting(enabled: true, duration: AutoSleepDuration.minutes2);
+      });
+      await harness.controller.connect(knownDevice);
+
+      await harness.controller.setAutoSleep(true);
+
+      verify(() => harness.transport.setAutoSleep(knownDevice.id, true)).called(1);
+      expect(harness.controller.autoSleepDuration, AutoSleepDuration.minutes2);
     });
   });
 }

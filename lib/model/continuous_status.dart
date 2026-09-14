@@ -24,7 +24,11 @@ enum ContinuousStatus {
   hearingSpeech('Hearing speech'),
 
   /// The wearer muted the device with a double tap.
-  muted('Muted on device');
+  muted('Muted on device'),
+
+  /// Connected, but the recorder stopped its microphone to save battery
+  /// (`fe08` bit 3): nothing has been receiving its audio for 2 minutes.
+  micOff('Mic off to save battery');
 
   const ContinuousStatus(this.label);
 
@@ -49,6 +53,9 @@ enum ContinuousStatus {
     // Muted outranks speech: a muted device cannot be hearing anything the
     // app will keep, whatever the gate bit says.
     if (flags != null && flags.muted) return ContinuousStatus.muted;
+    // The recorder's own word that nothing is being captured, whatever the
+    // phone believes it subscribed to.
+    if (flags != null && flags.micOff) return ContinuousStatus.micOff;
     // `speechOpen` alone is "audio flowing", which is also true with the gate
     // disabled - the state the device is in for a moment after every connect,
     // before the app has written speech-only again.

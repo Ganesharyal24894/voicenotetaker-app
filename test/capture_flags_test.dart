@@ -16,6 +16,8 @@ void main() {
       expect(CaptureFlags.fromBytes(<int>[0x01]).muted, isTrue);
       expect(CaptureFlags.fromBytes(<int>[0x02]).speechOpen, isTrue);
       expect(CaptureFlags.fromBytes(<int>[0x04]).gateEnabled, isTrue);
+      expect(CaptureFlags.fromBytes(<int>[0x08]).micOff, isTrue);
+      expect(CaptureFlags.fromBytes(<int>[0x04]).micOff, isFalse);
       expect(
         CaptureFlags.fromBytes(<int>[0x07]),
         const CaptureFlags(muted: true, speechOpen: true, gateEnabled: true),
@@ -31,7 +33,8 @@ void main() {
     });
 
     test('reserved bits are refused rather than half-read', () {
-      expect(() => CaptureFlags.fromBytes(<int>[0x08]), throwsFormatException);
+      expect(() => CaptureFlags.fromBytes(<int>[0x10]), throwsFormatException);
+      expect(() => CaptureFlags.fromBytes(<int>[0x80]), throwsFormatException);
       expect(() => CaptureFlags.fromBytes(<int>[0xFF]), throwsFormatException);
     });
   });

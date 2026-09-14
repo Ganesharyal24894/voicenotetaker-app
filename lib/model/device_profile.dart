@@ -22,8 +22,8 @@ abstract final class DeviceProfile {
   static const String controlCharacteristicUuid =
       '6e40fe03-b5a3-f393-e0a9-e50e24dcca9e';
 
-  /// `fe04` - READ + WRITE, one byte holding the auto-sleep flag (see
-  /// [AutoSleep]). The firmware persists it in flash, so it survives a
+  /// `fe04` - READ + WRITE, the auto-sleep setting (see [AutoSleep]): one
+  /// byte on older firmware, `[flags, code]` with a duration on newer. The firmware persists it in flash, so it survives a
   /// reboot and must be read rather than assumed.
   ///
   /// Firmware older than this characteristic simply does not have it; the app
@@ -64,6 +64,12 @@ abstract final class DeviceProfile {
   /// a firmware update", and manual recording keeps working.
   static const String captureCharacteristicUuid =
       '6e40fe08-b5a3-f393-e0a9-e50e24dcca9e';
+
+  /// `fe09` - READ only, up to 428 bytes of battery-life history (see
+  /// `BatteryHistory`). The device has no clock, so every read is stored with
+  /// the phone's time as an anchor. Older firmware does not have it.
+  static const String batteryHistoryCharacteristicUuid =
+      '6e40fe09-b5a3-f393-e0a9-e50e24dcca9e';
 
   /// Every notification is prefixed with a little-endian uint16 sequence
   /// number; gaps in it are packets dropped on the link.

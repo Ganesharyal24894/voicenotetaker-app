@@ -269,7 +269,7 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
-  Future<bool> readAutoSleep(String deviceId) async {
+  Future<AutoSleepSetting> readAutoSleep(String deviceId) async {
     try {
       final bytes = await ub.UniversalBle.read(
         deviceId,
@@ -300,6 +300,38 @@ class UniversalBleTransport implements BleTransport {
         'could not ${enabled ? 'enable' : 'disable'} auto-sleep',
         e,
       );
+    }
+  }
+
+  @override
+  Future<void> setAutoSleepDuration(
+    String deviceId,
+    AutoSleepDuration duration,
+  ) async {
+    try {
+      await ub.UniversalBle.write(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.autoSleepCharacteristicUuid,
+        AutoSleep.durationToBytes(duration),
+      );
+    } catch (e) {
+      throw BleTransportException('could not set auto-sleep to ${duration.name}', e);
+    }
+  }
+
+  @override
+  Future<Uint8List> readBatteryHistory(String deviceId) async {
+    try {
+      // An ordinary read: Android, iOS and BlueZ fetch a value longer than
+      // one MTU with Read Blob requests by themselves.
+      return await ub.UniversalBle.read(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.batteryHistoryCharacteristicUuid,
+      );
+    } catch (e) {
+      throw BleTransportException('could not read the battery history', e);
     }
   }
 

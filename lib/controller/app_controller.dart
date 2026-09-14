@@ -6,11 +6,16 @@ import '../drivers/audio_player.dart';
 import '../drivers/background_mode.dart';
 import '../drivers/ble_transport.dart';
 import '../drivers/file_store.dart';
+import '../drivers/haptics.dart';
 import '../drivers/phone_power.dart';
 import '../drivers/platform_settings.dart';
 import '../model/audio_codec.dart';
+import '../model/auto_sleep.dart';
 import '../model/background_transcription_policy.dart';
+import '../model/battery_anchor.dart';
 import '../model/battery_bars.dart';
+import '../model/battery_history.dart';
+import '../model/battery_report.dart';
 import '../model/battery_status.dart';
 import '../model/capture_flags.dart';
 import '../model/continuous_status.dart';
@@ -20,6 +25,8 @@ import '../model/device_test_result.dart';
 import '../model/die_temperature.dart';
 import '../model/level_reading.dart';
 import '../model/link_health.dart';
+import '../model/not_saving_alert.dart';
+import '../model/notes_saving.dart';
 import '../model/phone_power.dart';
 import '../model/recording_info.dart';
 import '../model/reconnect_backoff.dart';
@@ -29,6 +36,7 @@ import '../model/stream_info.dart';
 import '../model/transcript.dart';
 import '../model/transcription.dart';
 import '../services/audio_retention_service.dart';
+import '../services/battery_anchor_store.dart';
 import '../services/continuous/continuous_session.dart';
 import '../services/continuous/continuous_settings_store.dart';
 import '../services/continuous/note_writer.dart';
@@ -53,6 +61,21 @@ enum AppPhase {
   recording,
   stopping,
   error,
+}
+
+/// Where the battery history stands on this link.
+enum BatteryHistoryStatus {
+  /// Not read yet, or nothing connected.
+  unknown,
+
+  /// Read and decoded; [AppController.batteryReport] has it.
+  ready,
+
+  /// The recorder did not answer `fe09` - older firmware.
+  notSupported,
+
+  /// The recorder answered with a layout this build cannot read.
+  unreadable,
 }
 
 /// Why a link is ending.
@@ -91,6 +114,8 @@ class AppController extends ChangeNotifier {
     TranscriptStore? transcriptStore,
     BackgroundMode? backgroundMode,
     PhonePower? phonePower,
+    this._haptics,
+    NotSavingAlertPolicy? notSavingAlert,
     this._backgroundTranscription = false,
     this._powerRecheckInterval = BackgroundTranscriptionPolicy.recheckInterval,
     DateTime Function()? clock,
@@ -111,8 +136,13 @@ class AppController extends ChangeNotifier {
         _transcription = transcriptionService,
         _background = backgroundMode,
         _power = phonePower,
+        _savingAlert = notSavingAlert ?? NotSavingAlertPolicy(),
         _now = clock ?? DateTime.now,
         _retentionSettings = AudioRetentionSettingsStore(
+          fileStore: fileStore,
+          directory: settingsDirectory ?? _recordingsDirectory,
+        ),
+        _anchorStore = BatteryAnchorStore(
           fileStore: fileStore,
           directory: settingsDirectory ?? _recordingsDirectory,
         ),
@@ -436,6 +466,7 @@ class AppController extends ChangeNotifier {
     if (!_initialised) return;
     await refreshAvailability();
     _ensureContinuousLink();
+    if (_batteryHistoryDue()) await refreshBatteryHistory();
     await _sweepAudio();
     await _planTranscriptions();
   }
@@ -728,7 +759,7 @@ class AppController extends ChangeNotifier {
   /// Null is a third state on purpose. The device persists this flag in
   /// flash, so a default of "off" would be a guess about a setting that can
   /// put the recorder to sleep - and a wrong guess is worse than no answer.
-  bool? _autoSleep;
+  AutoSleepSetting? _autoSleep;
 
   /// The device's battery reading, or null when it is unknown: nothing is
   /// connected, the read failed, or the firmware predates `fe05`.
@@ -865,7 +896,14 @@ class AppController extends ChangeNotifier {
 
   /// The device's auto-sleep flag as last read from, or written to, the
   /// recorder. Meaningless unless [autoSleepAvailable] is true.
-  bool get autoSleepEnabled => _autoSleep ?? false;
+  bool get autoSleepEnabled => _autoSleep?.enabled ?? false;
+
+  /// Whether the connected firmware takes a duration (its `fe04` read was two
+  /// bytes). False on older firmware, and while nothing is known.
+  bool get autoSleepDurationSupported => _autoSleep?.supportsDuration ?? false;
+
+  /// The duration in force, or null when unknown or not supported.
+  AutoSleepDuration? get autoSleepDuration => _autoSleep?.duration;
 
   /// Whether the connected device reported a battery status at all.
   ///
@@ -1239,6 +1277,10 @@ class AppController extends ChangeNotifier {
     if (_continuous.enabled) await _startContinuousSession(device.id);
     _syncBackground();
     notifyListeners();
+    // Every read is an anchor the phone's clock gives meaning to, so one is
+    // taken at every connect - after listening has started, so notes never
+    // wait on it.
+    await refreshBatteryHistory();
   }
 
   // -------------------------------------------------------------------------
@@ -1294,6 +1336,7 @@ class AppController extends ChangeNotifier {
     // below happens after an await.
     if (device == null) return;
     await _startDiagnostics(device.id);
+    await refreshBatteryHistory();
   }
 
   /// The diagnostics screen has stopped being visible: stop everything it
@@ -1373,6 +1416,9 @@ class AppController extends ChangeNotifier {
         (status) {
           _setBattery(status);
           notifyListeners();
+          // A battery change is the cheap moment to take a fresh anchor, at
+          // most every [batteryAnchorInterval]: no timer of its own.
+          if (_batteryHistoryDue()) unawaited(refreshBatteryHistory());
         },
         onError: (Object _) {},
       );
@@ -1450,6 +1496,102 @@ class AppController extends ChangeNotifier {
       await _transport.unsubscribeDieTemperature(deviceId);
     } on BleTransportException {
       // The notifications have stopped either way.
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // BATTERY HISTORY (`fe09`)
+  //
+  // The recorder has no clock, so it counts awake seconds, sleeps and boots
+  // since the last plug or unplug, and the PHONE supplies the time: every read
+  // is stored as an anchor (phone time + those counters) in the support
+  // directory. [BatteryReport] turns the latest read and the anchors into
+  // "unplugged at", "on battery for" and an honest runtime estimate - see the
+  // firmware's doc/battery-history.md, "What the app must compute".
+  //
+  // READ AT CONNECT, WHEN DIAGNOSTICS OPENS, AND AT MOST EVERY 30 MIN while
+  // connected - on a battery notification or a return to the app, never on a
+  // timer of its own. One read is one long ATT read; it costs the recorder
+  // nothing it was not already doing.
+  // -------------------------------------------------------------------------
+
+  /// Fresh anchors are taken no more often than this, except at connect and
+  /// when Diagnostics opens.
+  static const Duration batteryAnchorInterval = Duration(minutes: 30);
+
+  final BatteryAnchorStore _anchorStore;
+  BatteryHistory? _batteryHistory;
+  BatteryReport? _batteryReport;
+  BatteryHistoryStatus _batteryHistoryStatus = BatteryHistoryStatus.unknown;
+  DateTime? _lastBatteryHistoryRead;
+  bool _readingBatteryHistory = false;
+
+  /// The latest decoded `fe09`, or null.
+  BatteryHistory? get batteryHistory => _batteryHistory;
+
+  /// What the Diagnostics battery card shows; null until a read succeeded on
+  /// this link.
+  BatteryReport? get batteryReport => _batteryReport;
+
+  /// Why there is no [batteryReport], when there is none.
+  BatteryHistoryStatus get batteryHistoryStatus => _batteryHistoryStatus;
+
+  bool _batteryHistoryDue() {
+    final last = _lastBatteryHistoryRead;
+    return _connectedDevice != null &&
+        (last == null || _now().difference(last) >= batteryAnchorInterval);
+  }
+
+  /// Reads `fe09`, stores the anchor and recomputes the report.
+  ///
+  /// Never throws: firmware without `fe09`, a layout this build cannot read
+  /// and a failed save each leave an honest state behind rather than an error.
+  Future<void> refreshBatteryHistory() async {
+    final device = _connectedDevice;
+    if (device == null || _readingBatteryHistory) return;
+    _readingBatteryHistory = true;
+    // Stamped before the read, so firmware without `fe09` is asked again only
+    // on the next interval, not on every battery notification.
+    _lastBatteryHistoryRead = _now();
+    try {
+      final Uint8List bytes;
+      try {
+        bytes = await _transport.readBatteryHistory(device.id);
+      } on BleTransportException {
+        if (_connectedDevice?.id == device.id && _batteryHistory == null) {
+          _batteryHistoryStatus = BatteryHistoryStatus.notSupported;
+        }
+        return;
+      }
+      final now = _now();
+      final BatteryHistory history;
+      try {
+        history = BatteryHistory.fromBytes(bytes);
+      } on FormatException catch (error) {
+        debugPrint('Battery history unreadable: $error');
+        _batteryHistoryStatus = BatteryHistoryStatus.unreadable;
+        return;
+      }
+      if (_connectedDevice?.id != device.id) return;
+      List<BatteryAnchor> anchors;
+      final anchor = BatteryAnchor.fromHistory(history, now.toUtc());
+      try {
+        anchors = await _anchorStore.add(anchor);
+      } on Object catch (error) {
+        // Still useful for this run; only the phone time is forgotten.
+        debugPrint('Could not save the battery anchor: $error');
+        anchors = <BatteryAnchor>[...await _anchorStore.load(), anchor];
+      }
+      _batteryHistory = history;
+      _batteryHistoryStatus = BatteryHistoryStatus.ready;
+      _batteryReport = BatteryReport.compute(
+        history: history,
+        anchors: anchors,
+        now: now.toUtc(),
+      );
+    } finally {
+      _readingBatteryHistory = false;
+      notifyListeners();
     }
   }
 
@@ -1561,14 +1703,17 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Writes the auto-sleep flag to the connected device.
+  /// Writes the auto-sleep flag to the connected device, as the legacy byte.
   ///
   /// Does nothing unless the device reported the setting in the first place:
   /// a write to firmware that has no `fe04` would fail anyway, and writing a
   /// value the app never read would be writing a guess.
   Future<void> setAutoSleep(bool enabled) async {
     final device = _connectedDevice;
-    if (device == null || !autoSleepAvailable || enabled == _autoSleep) return;
+    final current = _autoSleep;
+    if (device == null || current == null || enabled == current.enabled) {
+      return;
+    }
     try {
       await _transport.setAutoSleep(device.id, enabled);
     } on BleTransportException catch (e) {
@@ -1578,8 +1723,43 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    _autoSleep = enabled;
+    if (current.supportsDuration) {
+      // The one-byte write keeps the stored duration, which only the device
+      // knows: read it back rather than guess.
+      await _readAutoSleep(device.id);
+      return;
+    }
+    _autoSleep = AutoSleepSetting.legacy(enabled);
     notifyListeners();
+  }
+
+  /// Sets how long the recorder waits, still, before it sleeps.
+  ///
+  /// OPTIMISTIC: the choice shows at once and is put back if the write fails.
+  /// Returns false when nothing was changed - no link, firmware without
+  /// durations, or a refused write - so the screen can say so in plain words.
+  Future<bool> setAutoSleepDuration(AutoSleepDuration duration) async {
+    final device = _connectedDevice;
+    final previous = _autoSleep;
+    if (device == null || previous == null || !previous.supportsDuration) {
+      return false;
+    }
+    if (previous.duration == duration) return true;
+    _autoSleep = AutoSleepSetting(
+      enabled: duration != AutoSleepDuration.off,
+      duration: duration,
+    );
+    notifyListeners();
+    try {
+      await _transport.setAutoSleepDuration(device.id, duration);
+    } on BleTransportException {
+      // Put back only on the same link: a link that dropped meanwhile has
+      // already cleared the setting to unknown, which is the truth now.
+      if (_connectedDevice?.id == device.id) _autoSleep = previous;
+      notifyListeners();
+      return false;
+    }
+    return true;
   }
 
   /// Ends the link the user asked to end.
@@ -1673,6 +1853,10 @@ class AppController extends ChangeNotifier {
     // a live one.
     _setBattery(null);
     _temperature = null;
+    _batteryHistory = null;
+    _batteryHistoryStatus = BatteryHistoryStatus.unknown;
+    _batteryReport = null;
+    _lastBatteryHistoryRead = null;
     // A dropped link leaves whatever message was already on screen: it explains
     // the last thing the user did, and `ConnectionLostView` supplies the reason
     // for the drop itself.
@@ -1776,6 +1960,19 @@ class AppController extends ChangeNotifier {
         captureSupported: _captureSupported,
         flags: _session?.flags,
       );
+
+  /// Where this recorder can keep audio by itself. Every recorder today has
+  /// no storage; an SD-card one would answer [RecorderStorage.card], and a lost
+  /// link then reads "Saving on recorder" instead of an alarm.
+  RecorderStorage get recorderStorage => RecorderStorage.none;
+
+  /// Are notes being saved right now - the header, the settings screen and
+  /// the not-saving alert all read this.
+  NotesSaving get notesSaving =>
+      NotesSaving.from(continuousStatus, storage: recorderStorage);
+
+  /// Whether the not-saving alert is showing (notification and buzz sent).
+  bool get notSavingAlerting => _savingAlert.alerting;
 
   /// The note being written, which the library marks and nothing transcribes.
   String? get writingNotePath => _session?.currentNotePath;
@@ -2004,7 +2201,11 @@ class AppController extends ChangeNotifier {
   /// Keeps the Android foreground service in step with [continuousStatus]:
   /// running exactly while always-listening is on, and saying what it is
   /// doing. The platform is only called when the text actually changes.
+  ///
+  /// It is also where the NOT-SAVING ALERT is asked: every change that can
+  /// start or stop notes being saved already passes through here.
   void _syncBackground() {
+    _checkNotesSaving();
     final background = _background;
     if (background == null) return;
     if (!_continuous.enabled) {
@@ -2014,10 +2215,65 @@ class AppController extends ChangeNotifier {
       }
       return;
     }
-    final text = continuousStatus.label;
-    if (text == _backgroundText) return;
-    _backgroundText = text;
-    unawaited(background.start(title: 'voiceNotetaker', text: text));
+    final alerting = _savingAlert.alerting;
+    final title = alerting ? notSavingTitle : 'voiceNotetaker';
+    final text = alerting ? _notSavingReason(notesSaving) : continuousStatus.label;
+    final key = '$title\n$text';
+    if (key == _backgroundText) return;
+    _backgroundText = key;
+    unawaited(background.start(title: title, text: text));
+  }
+
+  // -------------------------------------------------------------------------
+  // NOT-SAVING ALERT
+  //
+  // While always-listening is on and notes have not been saved for 30 s, the
+  // phone buzzes once and the listening notification says "Notes not saving".
+  // When saving resumes, one short buzz and the notification goes back. The
+  // rules - grace, one buzz per 10 min, never for mute or off - are
+  // [NotSavingAlertPolicy]'s. This only runs the one timer and the drivers.
+  //
+  // NOTHING RUNS UNLESS REQUIRED: the timer exists only while notes are being
+  // lost and the grace period has not run out.
+  // -------------------------------------------------------------------------
+
+  final Haptics? _haptics;
+  final NotSavingAlertPolicy _savingAlert;
+  Timer? _savingTimer;
+
+  /// The notification title while the alert shows.
+  static const String notSavingTitle = 'Notes not saving';
+
+  static String _notSavingReason(NotesSaving saving) => switch (saving) {
+        NotesSaving.micOff => 'Mic off to save battery',
+        NotesSaving.needsUpdate => 'Recorder needs an update',
+        _ => 'Recorder disconnected',
+      };
+
+  void _checkNotesSaving() {
+    _savingTimer?.cancel();
+    _savingTimer = null;
+    // Nobody to tell: a build without a notification or a vibrator.
+    if (_background == null && _haptics == null) return;
+    final now = _now();
+    switch (_savingAlert.update(notesSaving, now)) {
+      case NotSavingAction.alert:
+        unawaited(_haptics?.buzz(BuzzPattern.notSaving));
+      case NotSavingAction.resumed:
+        unawaited(_haptics?.buzz(BuzzPattern.resumed));
+      case NotSavingAction.alertSilently:
+      case NotSavingAction.cleared:
+      case NotSavingAction.none:
+        break;
+    }
+    final next = _savingAlert.nextCheck();
+    if (next == null) return;
+    final wait = next.difference(now);
+    _savingTimer = Timer(wait.isNegative ? Duration.zero : wait, () {
+      _savingTimer = null;
+      _syncBackground();
+      notifyListeners();
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -2359,6 +2615,8 @@ class AppController extends ChangeNotifier {
 
   /// The awaitable half of [dispose].
   Future<void> teardown() async {
+    _savingTimer?.cancel();
+    _savingTimer = null;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     await _stopContinuousSession(linkUp: false);

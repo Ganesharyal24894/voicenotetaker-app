@@ -14,6 +14,9 @@ import 'dart:typed_data';
 ///   * bit 2 - [gateEnabled]: the device is streaming speech only. It resets to
 ///     disabled on every connect and disconnect, so always-listening writes it
 ///     again after every reconnect.
+///   * bit 3 - [micOff]: the microphone is stopped to save battery, because
+///     nothing has received audio for 2 minutes (no `fe01` subscriber on a
+///     recorder without storage). Clears as soon as `fe01` is subscribed.
 ///
 /// Changes are sampled every 20 ms on the device (100 ms while muted); two
 /// within one tick arrive as one notification carrying the final state.
@@ -29,14 +32,16 @@ class CaptureFlags {
     required this.muted,
     required this.speechOpen,
     required this.gateEnabled,
+    this.micOff = false,
   });
 
   static const int mutedBit = 0x01;
   static const int speechOpenBit = 0x02;
   static const int gateEnabledBit = 0x04;
+  static const int micOffBit = 0x08;
 
   /// Every other bit.
-  static const int reservedBits = 0xF8;
+  static const int reservedBits = 0xF0;
 
   /// The characteristic is exactly this long, in both directions.
   static const int valueBytes = 1;
@@ -47,6 +52,9 @@ class CaptureFlags {
   final bool speechOpen;
 
   final bool gateEnabled;
+
+  /// The microphone is off to save battery - see the class comment.
+  final bool micOff;
 
   /// The speech gate is enabled and open: the device is hearing speech now.
   bool get hearingSpeech => gateEnabled && speechOpen && !muted;
@@ -72,6 +80,7 @@ class CaptureFlags {
       muted: value & mutedBit != 0,
       speechOpen: value & speechOpenBit != 0,
       gateEnabled: value & gateEnabledBit != 0,
+      micOff: value & micOffBit != 0,
     );
   }
 
@@ -80,14 +89,15 @@ class CaptureFlags {
       other is CaptureFlags &&
       other.muted == muted &&
       other.speechOpen == speechOpen &&
-      other.gateEnabled == gateEnabled;
+      other.gateEnabled == gateEnabled &&
+      other.micOff == micOff;
 
   @override
-  int get hashCode => Object.hash(muted, speechOpen, gateEnabled);
+  int get hashCode => Object.hash(muted, speechOpen, gateEnabled, micOff);
 
   @override
   String toString() => 'CaptureFlags(muted: $muted, speechOpen: $speechOpen, '
-      'gateEnabled: $gateEnabled)';
+      'gateEnabled: $gateEnabled, micOff: $micOff)';
 }
 
 /// What the app may WRITE to `fe08`: one byte, one of four commands.

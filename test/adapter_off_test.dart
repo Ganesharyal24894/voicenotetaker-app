@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:voicenotetaker_app/model/auto_sleep.dart';
 import 'package:voicenotetaker_app/controller/app_controller.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
@@ -61,7 +62,7 @@ void main() {
         (_) async => const BatteryStatus(percent: 64, charging: true),
       );
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => true);
+          .thenAnswer((_) async => const AutoSleepSetting.legacy(true));
 
       await harness.begin(tester);
       await harness.connect(tester);

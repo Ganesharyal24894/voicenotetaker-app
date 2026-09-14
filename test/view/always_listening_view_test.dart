@@ -4,12 +4,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/model/capture_flags.dart';
-import 'package:voicenotetaker_app/model/continuous_status.dart';
+import 'package:voicenotetaker_app/model/home_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/view/app_root.dart';
 import 'package:voicenotetaker_app/view/connection_lost_view.dart';
 import 'package:voicenotetaker_app/view/home_view.dart';
 import 'package:voicenotetaker_app/view/scan_view.dart';
+import 'package:voicenotetaker_app/view/settings_view.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
 
 import 'harness.dart';
@@ -21,13 +22,16 @@ void main() {
 
   Widget home(ViewHarness harness) => homeFor(harness);
 
-  /// The always-listening card lives in the recorder sheet the status line
-  /// opens.
+  /// The always-listening card lives on Recorder settings, which the status
+  /// line opens.
   Future<void> openSheet(WidgetTester tester) async {
     await tester.tap(recorderStatusLine());
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump(const Duration(seconds: 1));
   }
+
+  /// The Always listening switch - the first on Recorder settings.
+  Finder listeningSwitch() => find.byType(Switch).first;
 
   /// Turns always-listening off at the end of a test, which is what cancels
   /// its keep-alive and reconnect timers. The tester's own "a Timer is still
@@ -57,7 +61,7 @@ void main() {
     expect(find.text(AlwaysListeningCard.title), findsOneWidget);
     expect(find.text('Notes save when you speak'), findsOneWidget);
     expect(find.text('Disconnect'), findsOneWidget);
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+    expect(tester.widget<Switch>(listeningSwitch()).value, isFalse);
   });
 
   testWidgets('switching it on listens, and Record steps aside',
@@ -66,15 +70,16 @@ void main() {
     await pumpScreen(tester, home(harness));
     await openSheet(tester);
 
-    await tester.tap(find.byType(Switch));
+    await tester.tap(listeningSwitch());
     await flush(tester);
 
     expect(harness.controller.continuousActive, isTrue);
-    expect(find.text('Always listening'), findsNWidgets(2));
+    expect(find.text('Always listening'), findsOneWidget);
     expect(find.text('Saving notes'), findsWidgets);
     expect(find.text('Disconnect'), findsNothing);
     Navigator.of(tester.element(find.byType(AlwaysListeningCard))).pop();
-    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
     await tester.tap(find.bySemanticsLabel('Record'));
     await tester.pump();
     expect(harness.controller.isRecording, isFalse);
@@ -92,14 +97,24 @@ void main() {
       const CaptureFlags(muted: true, speechOpen: false, gateEnabled: true),
     );
     await flush(tester);
-    expect(find.text('Muted on device'), findsOneWidget);
-    expect(find.text('Muted on the recorder'), findsWidgets);
+    expect(find.text('Muted on the recorder'), findsOneWidget);
 
     harness.capture.add(
       const CaptureFlags(muted: false, speechOpen: true, gateEnabled: true),
     );
     await flush(tester);
-    expect(find.text('Hearing speech'), findsOneWidget);
+    expect(find.text('Saving notes'), findsOneWidget);
+
+    harness.capture.add(
+      const CaptureFlags(
+        muted: false,
+        speechOpen: false,
+        gateEnabled: true,
+        micOff: true,
+      ),
+    );
+    await flush(tester);
+    expect(find.text('Not saving — mic off to save battery'), findsOneWidget);
     await stopListening(tester, harness);
   });
 
@@ -111,7 +126,8 @@ void main() {
 
     expect(find.text('Not saving — recorder needs an update'), findsOneWidget);
     await openSheet(tester);
-    expect(find.text('Needs firmware update'), findsOneWidget);
+    expect(find.text('Not saving — recorder needs an update'), findsOneWidget);
+    expect(find.text('Update your recorder to change this.'), findsOneWidget);
     await stopListening(tester, harness);
   });
 
@@ -126,7 +142,7 @@ void main() {
     await pumpScreen(tester, home(harness));
     await openSheet(tester);
 
-    await tester.tap(find.byType(Switch));
+    await tester.tap(listeningSwitch());
     await flush(tester);
     expect(find.text('Keep listening'), findsOneWidget);
     expect(background.permissionRequests, 0);
@@ -139,14 +155,9 @@ void main() {
   });
 
   testWidgets('the dot colours are the theme\'s status colours', (tester) async {
-    expect(AlwaysListeningCard.statusColor(ContinuousStatus.listening),
-        AppColors.connected);
-    expect(AlwaysListeningCard.statusColor(ContinuousStatus.hearingSpeech),
-        AppColors.recording);
-    expect(AlwaysListeningCard.statusColor(ContinuousStatus.muted),
-        AppColors.warning);
-    expect(AlwaysListeningCard.statusColor(ContinuousStatus.notConnected),
-        AppColors.disconnected);
+    expect(AlwaysListeningCard.toneColor(HomeStatusTone.good), AppColors.connected);
+    expect(AlwaysListeningCard.toneColor(HomeStatusTone.warning), AppColors.warning);
+    expect(AlwaysListeningCard.toneColor(HomeStatusTone.idle), AppColors.disconnected);
   });
 
   testWidgets('a dropped link stays on Home, saying the device is not '

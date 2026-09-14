@@ -7,6 +7,7 @@ import '../model/device_test_aggregate.dart';
 import '../model/device_test_comparison.dart';
 import '../model/device_test_result.dart';
 import '../model/link_health.dart';
+import 'battery_card.dart';
 import 'format.dart';
 import 'mic_check_copy.dart';
 import 'placeholder_data.dart';
@@ -161,6 +162,13 @@ class _DiagnosticsViewState extends State<DiagnosticsView>
             child: ListView(
               padding: EdgeInsets.zero,
               children: <Widget>[
+                BatteryCard(controller: _controller),
+                const SizedBox(height: 10),
+                if (_controller.batteryReport?.sessions case final sessions?
+                    when sessions.isNotEmpty) ...<Widget>[
+                  LastChargesCard(sessions: sessions),
+                  const SizedBox(height: 10),
+                ],
                 _LinkCard(controller: _controller),
                 const SizedBox(height: 10),
                 _MicCheckCard(controller: _controller),

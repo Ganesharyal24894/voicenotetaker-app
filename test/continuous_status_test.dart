@@ -47,6 +47,28 @@ void main() {
       expect(resolve(flags: muted), ContinuousStatus.muted);
     });
 
+    test('the mic off to save battery is its own state; mute outranks it', () {
+      const micOff = CaptureFlags(
+        muted: false,
+        speechOpen: false,
+        gateEnabled: true,
+        micOff: true,
+      );
+      expect(resolve(flags: micOff), ContinuousStatus.micOff);
+      expect(
+        resolve(
+          flags: const CaptureFlags(
+            muted: true,
+            speechOpen: false,
+            gateEnabled: true,
+            micOff: true,
+          ),
+        ),
+        ContinuousStatus.muted,
+      );
+      expect(resolve(enabled: false, flags: micOff), ContinuousStatus.off);
+    });
+
     test('an open gate is hearing speech, a closed one is listening', () {
       expect(resolve(flags: speaking), ContinuousStatus.hearingSpeech);
       expect(resolve(flags: quiet), ContinuousStatus.listening);

@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../controller/app_controller.dart';
 import '../controller/summary_controller.dart';
 import '../model/battery_bars.dart';
-import '../model/continuous_status.dart';
 import '../model/device_profile.dart';
 import '../model/home_status.dart';
 import '../model/notes_overview.dart';
@@ -32,8 +31,7 @@ class HomeView extends StatefulWidget {
     required this.summaries,
     required this.onOpenLibrary,
     required this.onOpenRecording,
-    this.onOpenDiagnostics,
-    this.onConnect,
+    this.onOpenSettings,
     super.key,
   });
 
@@ -43,14 +41,10 @@ class HomeView extends StatefulWidget {
   final VoidCallback onOpenLibrary;
   final ValueChanged<RecordingEntry> onOpenRecording;
 
-  /// Opens Device Diagnostics - the header menu, for now. Non-null in RELEASE
-  /// builds too: everything on that screen is something the user can only
-  /// watch. The mutating controls live one more tap in, on Developer options.
-  final VoidCallback? onOpenDiagnostics;
-
-  /// Goes to the pairing screen. Offered in the recorder sheet while nothing
-  /// is connected and always-listening is off; null hides it.
-  final VoidCallback? onConnect;
+  /// Opens Recorder settings - from the status line and from the menu. Non-null
+  /// in RELEASE builds too; Diagnostics is one row further in. Null hides the
+  /// menu and makes the status line plain text.
+  final VoidCallback? onOpenSettings;
 
   static const int todayTab = 0;
   static const int notesTab = 1;
@@ -131,11 +125,9 @@ class _HomeViewState extends State<HomeView> {
               padding: EdgeInsets.fromLTRB(AppShape.gutter, viewPadding.top + 15, AppShape.gutter, 0),
               child: _HomeHeader(
                 controller: controller,
-                onStatus: () => unawaited(
-                  showRecorderSheet(context, controller: controller, onConnect: widget.onConnect),
-                ),
+                onStatus: widget.onOpenSettings,
                 onRecord: _record,
-                onMenu: widget.onOpenDiagnostics,
+                onMenu: widget.onOpenSettings,
               ),
             ),
             const SizedBox(height: 14),
@@ -186,7 +178,7 @@ class _HomeHeader extends StatelessWidget {
   });
 
   final AppController controller;
-  final VoidCallback onStatus;
+  final VoidCallback? onStatus;
   final VoidCallback onRecord;
   final VoidCallback? onMenu;
 
@@ -198,6 +190,7 @@ class _HomeHeader extends StatelessWidget {
       continuous: controller.continuousStatus,
       connected: connected,
       charging: controller.batteryCharging,
+      storage: controller.recorderStorage,
     );
     final canRecord = connected && !controller.continuousActive;
     final Color dot = switch (status.tone) {
@@ -218,9 +211,8 @@ class _HomeHeader extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 2),
-              // The status line is the door to the recorder's settings - for
-              // now the always-listening switch - so the whole line is the
-              // target, chevron included.
+              // The status line is the door to Recorder settings, so the whole
+              // line is the target, chevron included.
               Semantics(
                 button: true,
                 label: status.label,
@@ -249,8 +241,10 @@ class _HomeHeader extends StatelessWidget {
                             ),
                           ),
                         ),
-                        const SizedBox(width: 4),
-                        const AppIcon(AppGlyph.chevronRight, size: 13, color: AppColors.textTertiary, strokeWidth: 1.7),
+                        if (onStatus != null) ...<Widget>[
+                          const SizedBox(width: 4),
+                          const AppIcon(AppGlyph.chevronRight, size: 13, color: AppColors.textTertiary, strokeWidth: 1.7),
+                        ],
                       ],
                     ),
                   ),
@@ -279,203 +273,12 @@ class _HomeHeader extends StatelessWidget {
             offset: const Offset(12, 0),
             child: TapTarget(
               onTap: onMenu,
-              semanticLabel: 'Diagnostics',
+              semanticLabel: 'Settings',
               child: const AppIcon(AppGlyph.more, size: 19, color: AppColors.textSecondary, strokeWidth: 1.7),
             ),
           ),
       ],
     );
-  }
-}
-
-/// The sheet the status line opens: always listening, and connect or
-/// disconnect. The full recorder settings screen replaces it later.
-Future<void> showRecorderSheet(
-  BuildContext context, {
-  required AppController controller,
-  VoidCallback? onConnect,
-}) =>
-    showHomeSheet<void>(
-      context,
-      builder: (sheetContext) => ListenableBuilder(
-        listenable: controller,
-        builder: (sheetContext, _) {
-          final connected = controller.isConnected && controller.connectedDevice != null;
-          final status = HomeStatus.resolve(
-            continuous: controller.continuousStatus,
-            connected: connected,
-            charging: controller.batteryCharging,
-          );
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              const Text('Recorder', style: AppText.title21),
-              const SizedBox(height: 6),
-              Text(status.label, style: AppText.body13),
-              const SizedBox(height: 16),
-              AlwaysListeningCard(controller: controller),
-              if (connected && !controller.continuousEnabled) ...<Widget>[
-                const SizedBox(height: 16),
-                Center(
-                  child: _DisconnectChip(
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      unawaited(controller.disconnect());
-                    },
-                  ),
-                ),
-              ],
-              if (!connected && !controller.continuousEnabled && onConnect != null) ...<Widget>[
-                const SizedBox(height: 16),
-                PrimaryButton(
-                  label: 'Connect a recorder',
-                  onPressed: () {
-                    Navigator.of(sheetContext).pop();
-                    onConnect();
-                  },
-                ),
-              ],
-            ],
-          );
-        },
-      ),
-    );
-
-/// The always-listening switch and, while it is on, what it is doing.
-///
-/// A CARD, NOT A SETTINGS PAGE: it is the one mode the app has, and the status
-/// line under it ("Hearing speech", "Muted on device") is something the wearer
-/// glances at, so it lives on Home under the device it describes.
-///
-/// Turning it on asks for the background permissions first - with one sentence
-/// on why - when the phone has not already granted them. Declining still turns
-/// it on: it then works while the app is open, which is better than a switch
-/// that refuses.
-class AlwaysListeningCard extends StatelessWidget {
-  const AlwaysListeningCard({required this.controller, super.key});
-
-  final AppController controller;
-
-  static const String title = 'Always listening';
-
-  @override
-  Widget build(BuildContext context) {
-    final status = controller.continuousStatus;
-    final enabled = controller.continuousEnabled;
-    final available = enabled || controller.canUseContinuous;
-
-    return AppCard(
-      padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(title, style: AppText.rowTitle),
-                const SizedBox(height: 4),
-                Row(
-                  children: <Widget>[
-                    if (enabled) ...<Widget>[
-                      StatusDot(color: statusColor(status)),
-                      const SizedBox(width: 7),
-                    ],
-                    Flexible(
-                      child: Text(
-                        enabled ? status.label : 'Notes save when you speak',
-                        style: AppText.rowMeta,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          Semantics(
-            label: title,
-            child: Switch(
-              value: enabled,
-              onChanged: available
-                  ? (on) => unawaited(_toggle(context, on))
-                  : null,
-              thumbColor: WidgetStateProperty.resolveWith(
-                (states) => states.contains(WidgetState.selected)
-                    ? AppColors.onPrimaryFill
-                    : AppColors.textSecondary,
-              ),
-              trackColor: WidgetStateProperty.resolveWith(
-                (states) => states.contains(WidgetState.selected)
-                    ? AppColors.primaryFill
-                    : AppColors.raised,
-              ),
-              trackOutlineColor:
-                  const WidgetStatePropertyAll<Color>(AppColors.border),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// The dot beside the status. Green while it works, rose while speech is
-  /// being written - the recording colour - amber where the wearer or the
-  /// firmware has to act, grey while there is no link.
-  static Color statusColor(ContinuousStatus status) => switch (status) {
-        ContinuousStatus.listening => AppColors.connected,
-        ContinuousStatus.hearingSpeech => AppColors.recording,
-        ContinuousStatus.muted ||
-        ContinuousStatus.needsFirmwareUpdate =>
-          AppColors.warning,
-        ContinuousStatus.notConnected ||
-        ContinuousStatus.off =>
-          AppColors.disconnected,
-      };
-
-  Future<void> _toggle(BuildContext context, bool on) async {
-    if (!on) {
-      await controller.setContinuousEnabled(false);
-      return;
-    }
-    if (!await controller.backgroundPermissionsGranted()) {
-      final autostart = await controller.hasAutostartSettings();
-      if (!context.mounted) return;
-      final allow = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          backgroundColor: AppColors.card,
-          shape: const RoundedRectangleBorder(borderRadius: AppShape.card),
-          title: const Text('Keep listening', style: AppText.title22),
-          content: Text(
-            'To save notes while your phone is locked, allow notifications '
-            'and turn off battery limits for this app.'
-            '${autostart ? '\n\nOn Xiaomi phones, also turn on Autostart.' : ''}',
-            style: AppText.footnote12,
-          ),
-          actions: <Widget>[
-            if (autostart)
-              TextButton(
-                onPressed: () => unawaited(controller.openAutostartSettings()),
-                child: const Text('Autostart', style: AppText.label13),
-              ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Not now', style: AppText.label13),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: Text(
-                'Allow',
-                style: AppText.label13.copyWith(color: AppColors.purpleText),
-              ),
-            ),
-          ],
-        ),
-      );
-      if (allow == true) await controller.requestBackgroundPermissions();
-    }
-    await controller.setContinuousEnabled(true);
   }
 }
 
@@ -581,45 +384,3 @@ class _BatteryReadout extends StatelessWidget {
     return charging ? 'Battery $state, charging' : 'Battery $state';
   }
 }
-
-/// Ends the link with the recorder.
-///
-/// Placed with the connection state rather than in the header: the header is
-/// only 46px tall and already carries the logo, the device name, the battery
-/// and the diagnostics entry point, and the sentence directly under
-/// the record button - "Tap to record" / "Connect a recorder to start" - is
-/// where this screen already talks about whether a recorder is attached.
-///
-/// The same quiet pill as the note screen's speed and Transcribe chips, so
-/// this introduces no new control idiom. It is shown ONLY while connected; it
-/// is not confirmed, because disconnecting destroys nothing and reconnecting
-/// is one tap on the screen it returns to.
-class _DisconnectChip extends StatelessWidget {
-  const _DisconnectChip({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return TapTarget(
-      onTap: onTap,
-      semanticLabel: 'Disconnect',
-      // Red, because this is the one control on Home that takes something
-      // away. It stays an outline rather than a filled button: destructive
-      // AND quiet, so it reads as available without competing with the
-      // record button it sits under.
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          border: Border.all(color: AppColors.errorBorder),
-          borderRadius: AppShape.pill,
-        ),
-        child: Text(
-          'Disconnect',
-          style: AppText.label13.copyWith(color: AppColors.error),
-        ),
-      ),
-    );
-  }
-}
-

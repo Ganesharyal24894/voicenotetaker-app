@@ -18,6 +18,7 @@ import 'note_view.dart';
 import 'recording_entry.dart';
 import 'recording_view.dart';
 import 'scan_view.dart';
+import 'settings_view.dart';
 import 'theme.dart';
 
 /// Chooses which of the six screens is on top, and owns navigation between
@@ -204,6 +205,24 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     unawaited(showNoteSummarizeSheet(context, recording));
   }
 
+  /// Pushes Recorder settings - the status line and the menu both come here.
+  ///
+  /// Its "Connect a recorder" leaves the screen first, then asks for pairing,
+  /// so Back from pairing returns to Home rather than to Settings.
+  void _openSettings(BuildContext context) {
+    _push(
+      context,
+      (context) => SettingsView(
+        controller: widget.controller,
+        onBack: () => Navigator.of(context).pop(),
+        onOpenDiagnostics: () => _openDiagnostics(context),
+        onConnect: () {
+          if (mounted) setState(() => _pairing = true);
+        },
+      ),
+    );
+  }
+
   /// Pushes Device Diagnostics, and hands it the door to Developer options.
   ///
   /// Diagnostics is in every build; the developer callback it is given is null
@@ -257,8 +276,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     //
     // HOME WITH NOTES AND NO LINK. Someone who has notes can read and
     // summarize them without a recorder in range, so Home stays up for them
-    // too - unless they asked to pair (the recorder sheet's "Connect a
-    // recorder"), or a link dropped by itself, which keeps its own screen.
+    // too - unless they asked to pair (Settings' "Connect a recorder"), or a link dropped by itself, which keeps its own screen.
     // With no notes, pairing is the only useful thing, and the scan screen is
     // still where the app starts.
     if (connected) _pairing = false;
@@ -315,11 +333,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                   summaries: _summaries,
                   onOpenLibrary: () => _openAllNotes(context),
                   onOpenRecording: (entry) => _openEntry(context, entry),
-                  // Always offered: Diagnostics is an observer's screen and
-                  // ships in release builds. The debug gate is one tap further
-                  // in, on Developer options.
-                  onOpenDiagnostics: () => _openDiagnostics(context),
-                  onConnect: () => setState(() => _pairing = true),
+                  // Always offered, in release builds too. Diagnostics is a row
+                  // on Settings; the debug gate is one tap further in again,
+                  // on Developer options.
+                  onOpenSettings: () => _openSettings(context),
                 ),
               ),
             ),

@@ -8,9 +8,16 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.app.NotificationManager
+import android.media.AudioAttributes
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.os.VibrationAttributes
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
@@ -93,6 +100,10 @@ object EngineHolder {
                     "thermalStatus" -> result.success(thermalStatus(app))
                     "hasAutostartSettings" -> result.success(isXiaomi())
                     "openAutostartSettings" -> result.success(openAutostartSettings(app))
+                    "vibrate" -> {
+                        vibrate(app, call.argument<String>("pattern"))
+                        result.success(null)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -141,6 +152,56 @@ object EngineHolder {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
         val power = app.getSystemService(Context.POWER_SERVICE) as PowerManager
         return power.currentThermalStatus
+    }
+
+    /**
+     * The not-saving alert's buzz (see `lib/drivers/haptics.dart`).
+     *
+     * A NOTIFICATION vibration, so it follows the phone's rules: nothing in
+     * silent mode or Do Not Disturb (checked here as well, because not every
+     * vendor applies the usage to a direct vibrate), and the system's
+     * "vibrate for notifications" setting applies from Android 13 through
+     * [VibrationAttributes.USAGE_NOTIFICATION].
+     */
+    @Suppress("DEPRECATION")
+    private fun vibrate(app: Context, pattern: String?) {
+        val millis = if (pattern == "resumed") 60L else 400L
+        val audio = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        if (audio.ringerMode == AudioManager.RINGER_MODE_SILENT) return
+        val notifications = app.getSystemService(NotificationManager::class.java)
+        val filter = notifications?.currentInterruptionFilter
+            ?: NotificationManager.INTERRUPTION_FILTER_UNKNOWN
+        if (filter != NotificationManager.INTERRUPTION_FILTER_ALL &&
+            filter != NotificationManager.INTERRUPTION_FILTER_UNKNOWN
+        ) {
+            return
+        }
+        val vibrator: Vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (app.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager)
+                .defaultVibrator
+        } else {
+            app.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+        if (!vibrator.hasVibrator()) return
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        try {
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> vibrator.vibrate(
+                    VibrationEffect.createOneShot(millis, VibrationEffect.DEFAULT_AMPLITUDE),
+                    VibrationAttributes.createForUsage(VibrationAttributes.USAGE_NOTIFICATION),
+                )
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O -> vibrator.vibrate(
+                    VibrationEffect.createOneShot(millis, VibrationEffect.DEFAULT_AMPLITUDE),
+                    audioAttributes,
+                )
+                else -> vibrator.vibrate(millis, audioAttributes)
+            }
+        } catch (refused: SecurityException) {
+            // No VIBRATE permission on this build: the notification still says it.
+        }
     }
 
     private fun isXiaomi(): Boolean {

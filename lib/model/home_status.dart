@@ -1,11 +1,12 @@
 /// The one line under the device name on Home: are my notes being saved?
 ///
-/// PURE. It answers from the facts the controller already resolves -
-/// [ContinuousStatus] for always-listening, the link and the charger for the
-/// rest - so the header and the notification cannot disagree.
+/// PURE. It answers from [NotesSaving] for always-listening, and the link and
+/// the charger for the rest, so the header, the settings screen and the
+/// notification cannot disagree.
 library;
 
 import 'continuous_status.dart';
+import 'notes_saving.dart';
 
 enum HomeStatusTone {
   /// All is well; the dot breathes.
@@ -28,18 +29,22 @@ class HomeStatus {
     required ContinuousStatus continuous,
     required bool connected,
     required bool charging,
+    RecorderStorage storage = RecorderStorage.none,
   }) {
-    return switch (continuous) {
-      ContinuousStatus.listening ||
-      ContinuousStatus.hearingSpeech =>
+    return switch (NotesSaving.from(continuous, storage: storage)) {
+      NotesSaving.saving =>
         const HomeStatus('Saving notes', HomeStatusTone.good),
-      ContinuousStatus.muted =>
+      NotesSaving.savingOnRecorder =>
+        const HomeStatus('Saving on recorder · syncs when back', HomeStatusTone.idle),
+      NotesSaving.muted =>
         const HomeStatus('Muted on the recorder', HomeStatusTone.warning),
-      ContinuousStatus.needsFirmwareUpdate =>
+      NotesSaving.micOff =>
+        const HomeStatus('Not saving — mic off to save battery', HomeStatusTone.warning),
+      NotesSaving.needsUpdate =>
         const HomeStatus('Not saving — recorder needs an update', HomeStatusTone.warning),
-      ContinuousStatus.notConnected =>
+      NotesSaving.disconnected =>
         const HomeStatus('Not saving — recorder disconnected', HomeStatusTone.warning),
-      ContinuousStatus.off => connected
+      NotesSaving.off => connected
           ? HomeStatus(charging ? 'Charging' : 'Connected', HomeStatusTone.good)
           : const HomeStatus('Not connected', HomeStatusTone.idle),
     };

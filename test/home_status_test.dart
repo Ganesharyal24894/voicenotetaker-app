@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:voicenotetaker_app/model/continuous_status.dart';
 import 'package:voicenotetaker_app/model/home_status.dart';
+import 'package:voicenotetaker_app/model/notes_saving.dart';
 
 void main() {
   HomeStatus resolve(ContinuousStatus s, {bool connected = true, bool charging = false}) =>
@@ -18,6 +19,20 @@ void main() {
         const HomeStatus('Not saving — recorder disconnected', HomeStatusTone.warning));
     expect(resolve(ContinuousStatus.muted).tone, HomeStatusTone.warning);
     expect(resolve(ContinuousStatus.needsFirmwareUpdate).label, 'Not saving — recorder needs an update');
+    expect(resolve(ContinuousStatus.micOff),
+        const HomeStatus('Not saving — mic off to save battery', HomeStatusTone.warning));
+  });
+
+  test('an SD-card recorder away from the phone is neutral, not amber', () {
+    expect(
+      HomeStatus.resolve(
+        continuous: ContinuousStatus.notConnected,
+        connected: false,
+        charging: false,
+        storage: RecorderStorage.card,
+      ),
+      const HomeStatus('Saving on recorder · syncs when back', HomeStatusTone.idle),
+    );
   });
 
   test('always listening off: the link, or nothing', () {

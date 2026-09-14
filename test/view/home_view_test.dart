@@ -9,7 +9,7 @@ import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/view/home/notes_tab.dart';
 import 'package:voicenotetaker_app/view/home/today_tab.dart';
-import 'package:voicenotetaker_app/view/home_view.dart';
+import 'package:voicenotetaker_app/view/settings_view.dart';
 import 'package:voicenotetaker_app/view/recording_entry.dart';
 import 'package:voicenotetaker_app/view/theme.dart';
 import 'package:voicenotetaker_app/view/widgets/app_icons.dart';
@@ -20,6 +20,7 @@ import 'home_harness.dart';
 /// Home as the app actually mounts it - see `homeFor`.
 Widget _home(
   ViewHarness harness, {
+  VoidCallback? onOpenSettings,
   VoidCallback? onOpenDiagnostics,
   VoidCallback? onOpenLibrary,
   ValueChanged<RecordingEntry>? onOpenRecording,
@@ -27,6 +28,7 @@ Widget _home(
 }) =>
     homeFor(
       harness,
+      onOpenSettings: onOpenSettings,
       onOpenDiagnostics: onOpenDiagnostics,
       onOpenLibrary: onOpenLibrary,
       onOpenRecording: onOpenRecording,
@@ -36,7 +38,7 @@ Widget _home(
 Future<void> _openRecorderSheet(WidgetTester tester) async {
   await tester.tap(recorderStatusLine());
   await tester.pump();
-  await tester.pump(const Duration(milliseconds: 400));
+  await tester.pump(const Duration(seconds: 1));
 }
 
 void main() {
@@ -414,7 +416,7 @@ void main() {
     });
   });
 
-  group('the recorder sheet the status line opens', () {
+  group('Recorder settings, which the status line opens', () {
     testWidgets('holds always listening, and Disconnect while connected',
         (tester) async {
       final harness =
@@ -440,7 +442,8 @@ void main() {
       verify(() => harness.transport.disconnect(knownDevice.id)).called(1);
       expect(harness.controller.isConnected, isFalse);
       expect(harness.controller.phase, AppPhase.idle);
-      expect(find.byType(AlwaysListeningCard), findsNothing, reason: 'the sheet closed');
+      expect(find.bySemanticsLabel('Disconnect'), findsNothing,
+          reason: 'nothing left to disconnect');
     });
 
     testWidgets('leaves no stale device name or battery behind', (tester) async {
@@ -460,7 +463,9 @@ void main() {
       await _openRecorderSheet(tester);
       await tester.tap(find.bySemanticsLabel('Disconnect'));
       await flush(tester);
-      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.bySemanticsLabel('Back'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
 
       expect(find.text('Not connected'), findsOneWidget);
       expect(find.text('Charging'), findsNothing);
@@ -557,22 +562,29 @@ void main() {
 
   // Two separate tests rather than two pumps in one: pumping a second screen
   // into the same position reuses the State of the first, which hides bugs.
-  testWidgets('the menu is absent when Diagnostics is not supplied',
-      (tester) async {
+  testWidgets('the menu opens Recorder settings', (tester) async {
     final harness = ViewHarness();
     addTearDown(harness.dispose);
+    var opened = 0;
 
-    await pumpScreen(tester, _home(harness));
+    await pumpScreen(tester, _home(harness, onOpenSettings: () => opened++));
 
-    expect(find.bySemanticsLabel('Diagnostics'), findsNothing);
+    await tester.tap(find.bySemanticsLabel('Settings'));
+    await tester.pump();
+    await tester.tap(recorderStatusLine());
+    await tester.pump();
+    expect(opened, 2, reason: 'the menu and the status line both go there');
   });
 
-  testWidgets('the menu opens Diagnostics when supplied', (tester) async {
+  testWidgets('Diagnostics is a row on Recorder settings', (tester) async {
     final harness = ViewHarness();
     addTearDown(harness.dispose);
     var opened = false;
 
     await pumpScreen(tester, _home(harness, onOpenDiagnostics: () => opened = true));
+    await tester.tap(find.bySemanticsLabel('Settings'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
 
     await tester.tap(find.bySemanticsLabel('Diagnostics'));
     await tester.pump();

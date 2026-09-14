@@ -1,46 +1,131 @@
 import 'dart:typed_data';
 
+/// How long the recorder waits, still, before it puts itself to sleep.
+///
+/// The wire codes are the firmware's (`fe04` byte 1): `0` off, `1` 30 s,
+/// `2` 1 min, `3` 2 min, `4` 5 min. See the firmware's
+/// `doc/continuous-mode.md`, "Auto-sleep duration".
+enum AutoSleepDuration {
+  off(0, null),
+  seconds30(1, Duration(seconds: 30)),
+  minute1(2, Duration(minutes: 1)),
+  minutes2(3, Duration(minutes: 2)),
+  minutes5(4, Duration(minutes: 5));
+
+  const AutoSleepDuration(this.code, this.stillFor);
+
+  /// The code on the wire.
+  final int code;
+
+  /// How long the recorder must be still; null for [off].
+  final Duration? stillFor;
+
+  /// The duration for a wire [code], or null for a code this build does not
+  /// know.
+  static AutoSleepDuration? fromCode(int code) {
+    for (final value in values) {
+      if (value.code == code) return value;
+    }
+    return null;
+  }
+}
+
+/// What the recorder reported about auto-sleep.
+class AutoSleepSetting {
+  const AutoSleepSetting({required this.enabled, this.duration});
+
+  /// Firmware that only knows on/off (the one-byte form).
+  const AutoSleepSetting.legacy(this.enabled) : duration = null;
+
+  /// Whether the recorder sleeps by itself.
+  final bool enabled;
+
+  /// The duration in force, or null when the firmware predates durations and
+  /// cannot be told one. [AutoSleepDuration.off] when off on new firmware.
+  final AutoSleepDuration? duration;
+
+  /// Whether this firmware takes a duration - the two-byte form.
+  bool get supportsDuration => duration != null;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AutoSleepSetting &&
+      other.enabled == enabled &&
+      other.duration == duration;
+
+  @override
+  int get hashCode => Object.hash(enabled, duration);
+
+  @override
+  String toString() => 'AutoSleepSetting(enabled: $enabled, duration: $duration)';
+}
+
 /// Wire format of the `fe04` auto-sleep characteristic.
 ///
-/// Exactly one byte: bit 0 carries the flag, every other bit is reserved and
-/// must be zero. The firmware rejects any other length and any other bit
-/// pattern, so the app writes nothing else - and refuses to interpret
-/// anything else rather than guess what a future firmware meant by it.
+/// TWO FORMS, and the READ LENGTH says which firmware this is:
+///
+///   * one byte - older firmware: bit 0 on/off, every other bit reserved;
+///   * two bytes `[flags, code]` - firmware with durations: flags bit 0 must
+///     equal `code != 0`, other flag bits reserved, code 0..4.
+///
+/// A value outside either form is refused rather than guessed at, because this
+/// setting decides whether the recorder puts itself to sleep.
 ///
 /// Pure data, like [StreamInfo.fromBytes]: this is the device protocol, not
 /// the BLE stack, so it lives in `model/` and survives a package swap.
 abstract final class AutoSleep {
-  /// Bit 0 - auto-sleep enabled.
+  /// Bit 0 of the (first) byte - auto-sleep enabled.
   static const int enabledBit = 0x01;
 
-  /// Every other bit. Set in a value we read means a firmware newer than this
-  /// build, and the flag is not ours to interpret.
+  /// Every other bit of the (first) byte.
   static const int reservedBits = 0xFE;
 
-  /// The characteristic is exactly this long, in both directions.
-  static const int valueBytes = 1;
+  /// The legacy, on/off-only length.
+  static const int legacyBytes = 1;
 
-  /// Reads the flag out of a characteristic value.
+  /// The length that carries a duration.
+  static const int durationBytes = 2;
+
+  /// Reads a characteristic value in either form.
   ///
-  /// Throws [FormatException] on any length but one byte, or on a value with
-  /// reserved bits set.
-  static bool fromBytes(List<int> bytes) {
-    if (bytes.length != valueBytes) {
+  /// Throws [FormatException] on any other length, reserved bits, an unknown
+  /// code, or flags that disagree with the code.
+  static AutoSleepSetting fromBytes(List<int> bytes) {
+    if (bytes.length != legacyBytes && bytes.length != durationBytes) {
       throw FormatException(
-        'auto-sleep is $valueBytes byte, got ${bytes.length}',
+        'auto-sleep is $legacyBytes or $durationBytes bytes, got ${bytes.length}',
       );
     }
-    final value = bytes.first;
-    if (value & reservedBits != 0) {
+    final flags = bytes.first;
+    if (flags & reservedBits != 0) {
       throw FormatException(
         'reserved auto-sleep bits set: '
-        '0x${value.toRadixString(16).padLeft(2, '0')}',
+        '0x${flags.toRadixString(16).padLeft(2, '0')}',
       );
     }
-    return value & enabledBit != 0;
+    final enabled = flags & enabledBit != 0;
+    if (bytes.length == legacyBytes) return AutoSleepSetting.legacy(enabled);
+    final duration = AutoSleepDuration.fromCode(bytes[1]);
+    if (duration == null) {
+      throw FormatException('unknown auto-sleep code ${bytes[1]}');
+    }
+    if (enabled != (duration != AutoSleepDuration.off)) {
+      throw FormatException(
+        'auto-sleep flags say ${enabled ? 'on' : 'off'} but code is ${bytes[1]}',
+      );
+    }
+    return AutoSleepSetting(enabled: enabled, duration: duration);
   }
 
-  /// The single byte to write: `0x01` to enable, `0x00` to disable.
+  /// The legacy single byte: `0x01` to enable, `0x00` to disable. The
+  /// firmware keeps its stored duration.
   static Uint8List toBytes(bool enabled) =>
       Uint8List.fromList(<int>[enabled ? enabledBit : 0x00]);
+
+  /// The two-byte form for [duration].
+  static Uint8List durationToBytes(AutoSleepDuration duration) =>
+      Uint8List.fromList(<int>[
+        duration == AutoSleepDuration.off ? 0x00 : enabledBit,
+        duration.code,
+      ]);
 }

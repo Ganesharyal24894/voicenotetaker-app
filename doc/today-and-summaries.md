@@ -8,7 +8,7 @@ AI** builds a prompt the user pastes into ChatGPT, Claude or Gemini, and
 
 | Piece | File |
 |---|---|
-| Shell: header, tabs, recorder sheet | `lib/view/home_view.dart` |
+| Shell: header, tabs | `lib/view/home_view.dart` (Recorder settings: `lib/view/settings_view.dart`) |
 | Today tab + first run (`TodayEmpty`) | `lib/view/home/today_tab.dart` |
 | Notes tab | `lib/view/home/notes_tab.dart` |
 | Range sheet, copied state, single-note sheet | `lib/view/home/summarize_sheet.dart` |
@@ -22,12 +22,13 @@ AI** builds a prompt the user pastes into ChatGPT, Claude or Gemini, and
 
 Device name; the status line (`HomeStatus.resolve`): *Saving notes* (green,
 breathing) while always-listening works, amber *Not saving — recorder
-disconnected* / *Not saving — recorder needs an update* / *Muted on the
-recorder*, otherwise *Connected* / *Charging* / *Not connected*. Tapping it opens
-the **recorder sheet**: the Always-listening switch, Disconnect (connected,
-listening off) or Connect a recorder (nothing connected, listening off). Then
+disconnected* / *Not saving — mic off to save battery* / *Not saving —
+recorder needs an update* / *Muted on the recorder*, otherwise *Connected* /
+*Charging* / *Not connected*. Tapping it opens **Recorder settings** (see
+`settings-and-battery.md`), which replaced the interim recorder sheet. Then
 battery bars (no percentage, as before), the mic (manual recording; explains
-in words when it cannot start) and ⋮ (Diagnostics, for now).
+in words when it cannot start) and ⋮ (Recorder settings too; Diagnostics is a
+row there).
 
 ### When Home shows without a recorder (`AppRoot`)
 

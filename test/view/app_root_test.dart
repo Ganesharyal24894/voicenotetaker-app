@@ -15,6 +15,7 @@ import 'package:voicenotetaker_app/view/all_notes_view.dart';
 import 'package:voicenotetaker_app/view/note_view.dart';
 import 'package:voicenotetaker_app/view/recording_view.dart';
 import 'package:voicenotetaker_app/view/scan_view.dart';
+import 'package:voicenotetaker_app/view/settings_view.dart';
 import 'package:voicenotetaker_app/view/widgets/app_icons.dart';
 
 import 'harness.dart';
@@ -68,11 +69,12 @@ void main() {
     expect(find.byType(HomeView), findsOneWidget);
   });
 
-  testWidgets('Home opens Diagnostics, and Diagnostics opens Developer options',
-      (tester) async {
+  testWidgets('Home opens Settings, Settings opens Diagnostics, and Diagnostics '
+      'opens Developer options', (tester) async {
     // THE ROUTE ORDER IS THE OBSERVE/MUTATE SPLIT. Home's header icon goes to
-    // the screen anybody may look at; the screen that writes to the device is
-    // one tap further in, behind the debug gate.
+    // Recorder settings, and Diagnostics - the screen anybody may look at - is
+    // a row there; the developer screen is one tap further in, behind the
+    // debug gate.
     final harness = ViewHarness(devices: const <DiscoveredDevice>[knownDevice]);
     addTearDown(harness.dispose);
 
@@ -81,6 +83,9 @@ void main() {
     await harness.connect(tester);
     await settleDock(tester);
 
+    await tester.tap(find.bySemanticsLabel('Settings'));
+    await settleRoute(tester);
+    expect(find.byType(SettingsView), findsOneWidget);
     await tester.tap(find.bySemanticsLabel('Diagnostics'));
     await settleRoute(tester);
 
@@ -114,7 +119,7 @@ void main() {
     await settleRoute(tester);
 
     expect(find.byType(DiagnosticsView), findsNothing);
-    expect(find.byType(HomeView), findsOneWidget);
+    expect(find.byType(SettingsView), findsOneWidget);
     expect(harness.controller.diagnosticsOpen, isFalse);
     verify(() => harness.transport.unsubscribeFrames(knownDevice.id)).called(1);
   });

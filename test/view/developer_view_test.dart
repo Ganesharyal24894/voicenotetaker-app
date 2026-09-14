@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:voicenotetaker_app/model/auto_sleep.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
@@ -233,7 +234,7 @@ void main() {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => false);
+          .thenAnswer((_) async => const AutoSleepSetting.legacy(false));
 
       await harness.connect(tester);
       await pumpScreen(tester, DeveloperView(controller: harness.controller));
@@ -246,7 +247,7 @@ void main() {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => true);
+          .thenAnswer((_) async => const AutoSleepSetting.legacy(true));
 
       await harness.connect(tester);
       await pumpScreen(tester, DeveloperView(controller: harness.controller));
@@ -298,7 +299,7 @@ void main() {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => false);
+          .thenAnswer((_) async => const AutoSleepSetting.legacy(false));
 
       await harness.connect(tester);
       await pumpScreen(tester, DeveloperView(controller: harness.controller));
@@ -317,7 +318,7 @@ void main() {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => true);
+          .thenAnswer((_) async => const AutoSleepSetting.legacy(true));
 
       await harness.connect(tester);
       await pumpScreen(tester, DeveloperView(controller: harness.controller));

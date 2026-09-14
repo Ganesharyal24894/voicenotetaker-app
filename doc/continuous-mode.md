@@ -6,17 +6,22 @@ phone turns that stream into ordinary recordings and transcribes them as soon
 as they are closed - off screen too, on Android, when the battery allows (see
 *Background transcription*) - or otherwise the next time the app is opened.
 
-The switch, **Always listening**, lives in the recorder sheet that Home's
-header status line opens (see `today-and-summaries.md`); the sheet shows one
-status line:
-*Always listening*, *Hearing speech*, *Muted on device*, *Device not
-connected*, *Needs firmware update*. The Android notification shows the same
-line, from the same resolver (`ContinuousStatus.resolve`).
+The switch, **Always listening**, lives on **Recorder settings**, which Home's
+header status line and its menu open (see `settings-and-battery.md`). Home's
+header, the settings card and the not-saving alert all answer one question -
+*are my notes being saved?* - from one derivation
+(`ContinuousStatus.resolve` -> `NotesSaving.from` -> `HomeStatus.resolve`):
+*Saving notes*, *Muted on the recorder*, *Not saving — recorder disconnected*,
+*Not saving — mic off to save battery*, *Not saving — recorder needs an
+update*. The Android notification shows the `ContinuousStatus` label
+(*Always listening*, *Hearing speech*, *Muted on device*, *Mic off to save
+battery*, *Device not connected*, *Needs firmware update*) - except while the
+not-saving alert is up, below.
 
 ## Architecture
 
 ```
-view/home_view.dart         AlwaysListeningCard (in the recorder sheet): switch, status, permission dialog
+view/settings_view.dart     AlwaysListeningCard (Recorder settings): switch, status, permission dialog
 view/app_root.dart          Home stays up without a link while it is on;
                             lifecycle -> appForegrounded / appBackgrounded
 controller/app_controller   ALWAYS LISTENING section: settings, reconnect with
@@ -38,6 +43,9 @@ model/audio_retention.dart  PURE: may this WAV be removed
 drivers/phone_power*.dart   battery/charger/saver (battery_plus) + thermal
 model/capture_flags.dart    fe08 wire format (read flags, write commands)
 model/continuous_status.dart  the one status, and its copy
+model/notes_saving.dart     PURE: saving / muted / mic off / disconnected / SD "saving on recorder"
+model/not_saving_alert.dart PURE: when to buzz (30 s grace, 1 buzz per 10 min)
+drivers/haptics*.dart       the buzz (Android vibrator over the background channel)
 model/reconnect_backoff.dart  0, 2, 5, 15, 30, 60, 60 ... s; 20 s per attempt
 drivers/background_mode*.dart  foreground service over a MethodChannel
 android/.../ListeningService.kt, EngineHolder.kt, MainActivity.kt
@@ -52,7 +60,7 @@ service, and the app behaves as it did before the mode existed.
 
 | Direction | Value |
 |---|---|
-| READ / NOTIFY, 1 byte | bit0 muted, bit1 audio flowing, bit2 speech gate enabled; other bits reserved (a value with one set is refused, as for `fe04`/`fe05`) |
+| READ / NOTIFY, 1 byte | bit0 muted, bit1 audio flowing, bit2 speech gate enabled, bit3 mic off for power (no `fe01` subscriber for 2 min on a recorder without storage; clears on subscribe); bits 4-7 reserved (a value with one set is refused, as for `fe04`/`fe05`) |
 | WRITE, 1 byte | `0` gate disabled (stream everything), `1` speech only, `2` mute, `3` unmute. `4..255` -> ATT `0x13`, wrong length -> `0x0D` |
 
 As implemented by the firmware, and relied on here:
@@ -81,6 +89,45 @@ As implemented by the firmware, and relied on here:
   the service discovery done at connect (no radio time). The status is then
   *Needs firmware update*, and manual Record keeps working.
 - A manual recording on new firmware writes `0` before subscribing to `fe01`.
+
+## Not-saving alert
+
+While always-listening is on, the phone tells the wearer when notes stop
+being saved - not on every disconnect.
+
+| Rule | Value |
+|---|---|
+| Counts as "not saving" | `NotesSaving.isLosingNotes`: recorder disconnected (no storage on it), mic off to save battery (`fe08` bit 3), firmware needs an update |
+| Never alerts | always-listening off; **muted on the recorder** (the wearer's choice); an SD-card recorder away from the phone (*Saving on recorder · syncs when back*, grey) |
+| Grace | 30 s without a break before the alert; the clock restarts when saving resumes, not when the reason changes |
+| Alert | one 400 ms notification vibration + the listening notification becomes **"Notes not saving" / "Recorder disconnected"** (or *Mic off to save battery*, *Recorder needs an update*) |
+| Flapping | at most one not-saving buzz per 10 min; later alerts in that window update the notification silently |
+| Resume | one 60 ms buzz and the notification returns to normal - only after an alert that buzzed; after a silent one, silently |
+| Off / mute during an alert | the notification returns to normal, no buzz |
+
+- `NotSavingAlertPolicy` is pure and unit tested (timers, flapping, mute, off,
+  resume). The controller asks it on every change that passes through
+  `_syncBackground` and holds ONE one-shot timer, only while notes are being
+  lost and the grace has not run out. Nothing runs when a build has neither a
+  notification nor a vibrator.
+- Storage variant: `AppController.recorderStorage` is `RecorderStorage.none`
+  for every recorder today. An SD recorder would answer `card` (from a future
+  capability read) and a lost link then shows *Saving on recorder · syncs when
+  back* with no alarm.
+- **Android**: `EngineHolder.kt` `vibrate` over the background channel; the
+  system vibrator with `VibrationAttributes.USAGE_NOTIFICATION` (13+) or
+  `AudioAttributes.USAGE_NOTIFICATION` (8-12), and skipped outright in silent
+  ringer mode or any Do Not Disturb filter. `VIBRATE` (normal permission) added
+  to the manifest. The notification channel stays `IMPORTANCE_LOW`, so the text
+  change itself is silent.
+- **Doze**: the 30 s timer is a Dart timer. With the screen off and no BLE
+  traffic (the link is gone) it can fire late; the disconnect callback and the
+  reconnect attempts wake the CPU often enough in practice. Not measured.
+- **iOS**: no alert. A backgrounded app cannot vibrate by itself; the only way
+  is a local notification with sound, which needs notification permission and
+  a plugin this app does not have (`MethodChannelHaptics` has no iOS handler).
+  Dart timers also do not run while suspended. The header says *Not saving*
+  when the app is opened.
 
 ## Notes on disk
 
@@ -157,10 +204,10 @@ deleted, and is never transcribed.
 - UI not built yet: `AppController.transcriptionPermit` says why the queue is
   paused (e.g. "Waiting for charger").
 
-## Audio retention (logic only, off by default)
+## Audio retention (off by default)
 
 `autoDeleteAudio` (persisted in `audio-retention-settings.json`, default
-**false**; no UI yet). When on, a sweep runs at start, on every return to the
+**false**; the *Delete audio after 24 h* switch on Recorder settings). When on, a sweep runs at start, on every return to the
 app, when the setting is turned on, and after every saved transcript. It
 removes **only the WAV** when ALL hold (`AudioRetention`, pure, unit tested):
 
@@ -267,6 +314,9 @@ versions):
 - **On-device storage when the phone is away.** Speech while the phone is out
   of range or the link is down is lost; the firmware has nowhere to keep it.
 - A mute/unmute control in the app (driver method exists).
+- The not-saving alert on iOS (see above), and a "session could not start"
+  state: a session that fails to start on a connected, capable recorder still
+  reads *Saving notes*.
 - A dedicated mic-check blocker message for always-listening (it reuses "A
   recording is running").
 - Wake-lock / `AlarmManager` keep-alive, pending the Doze measurement above.

@@ -4,6 +4,7 @@ import 'package:voicenotetaker_app/controller/summary_controller.dart';
 import 'package:voicenotetaker_app/view/home/summary_scope.dart';
 import 'package:voicenotetaker_app/view/home_view.dart';
 import 'package:voicenotetaker_app/view/recording_entry.dart';
+import 'package:voicenotetaker_app/view/settings_view.dart';
 
 import '../summary/fakes.dart';
 import 'harness.dart';
@@ -31,6 +32,7 @@ SummaryController summariesFor(
 Widget homeFor(
   ViewHarness harness, {
   SummaryController? summaries,
+  VoidCallback? onOpenSettings,
   VoidCallback? onOpenDiagnostics,
   VoidCallback? onOpenLibrary,
   ValueChanged<RecordingEntry>? onOpenRecording,
@@ -46,14 +48,25 @@ Widget homeFor(
         summaries: scope,
         onOpenLibrary: onOpenLibrary ?? () {},
         onOpenRecording: onOpenRecording ?? (_) {},
-        onOpenDiagnostics: onOpenDiagnostics,
-        onConnect: onConnect,
+        // By default the status line and the menu push Recorder settings, as
+        // `AppRoot` does.
+        onOpenSettings: onOpenSettings ??
+            () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (context) => SettingsView(
+                      controller: harness.controller,
+                      onBack: () => Navigator.of(context).pop(),
+                      onOpenDiagnostics: onOpenDiagnostics,
+                      onConnect: onConnect,
+                    ),
+                  ),
+                ),
       ),
     ),
   );
 }
 
-/// The header's status line, which opens the recorder sheet.
+/// The header's status line, which opens Recorder settings.
 Finder recorderStatusLine() => find.byWidgetPredicate(
       (widget) => widget is Semantics && widget.properties.hint == 'Recorder settings',
     );
