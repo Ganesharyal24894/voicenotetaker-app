@@ -23,6 +23,17 @@ class SpeechModelFile {
   String toString() => 'SpeechModelFile($name, $sizeBytes B)';
 }
 
+/// How a speech model's network is put together, which decides how the engine
+/// is configured to load it.
+enum SpeechModelArchitecture {
+  /// One NeMo CTC network ([SpeechModel.modelFile]).
+  nemoCtc,
+
+  /// A NeMo transducer (RNN-T / TDT): [SpeechModel.modelFile] is the encoder,
+  /// with a separate decoder and joiner.
+  nemoTransducer,
+}
+
 /// A speech model the app knows how to run.
 ///
 /// The catalogue entry, not the files: [directoryName] is where the files are
@@ -39,6 +50,9 @@ class SpeechModel {
     required this.sampleRateHz,
     required this.featureDim,
     required this.maxWindow,
+    this.architecture = SpeechModelArchitecture.nemoCtc,
+    this.decoderFile,
+    this.joinerFile,
   });
 
   /// Stable identifier, safe for logs and file names.
@@ -52,8 +66,16 @@ class SpeechModel {
   /// Sub-directory of the app's model directory holding [files].
   final String directoryName;
 
-  /// The ONNX network.
+  /// The ONNX network - for a transducer, its encoder.
   final SpeechModelFile modelFile;
+
+  final SpeechModelArchitecture architecture;
+
+  /// A transducer's decoder network; null for CTC.
+  final SpeechModelFile? decoderFile;
+
+  /// A transducer's joiner network; null for CTC.
+  final SpeechModelFile? joinerFile;
 
   /// The token table the network's output indices refer to.
   final SpeechModelFile tokensFile;
@@ -70,9 +92,15 @@ class SpeechModel {
   /// [SpeechModels.indicConformerHindiInt8].
   final Duration maxWindow;
 
-  List<SpeechModelFile> get files => <SpeechModelFile>[modelFile, tokensFile];
+  List<SpeechModelFile> get files => <SpeechModelFile>[
+        modelFile,
+        ?decoderFile,
+        ?joinerFile,
+        tokensFile,
+      ];
 
-  int get totalBytes => modelFile.sizeBytes + tokensFile.sizeBytes;
+  int get totalBytes =>
+      files.fold<int>(0, (sum, file) => sum + file.sizeBytes);
 
   @override
   String toString() => 'SpeechModel($id)';
@@ -101,6 +129,31 @@ abstract final class SpeechModels {
     directoryName: 'indicconformer-hi-int8',
     modelFile: SpeechModelFile(name: 'model.int8.onnx', sizeBytes: 196977855),
     tokensFile: SpeechModelFile(name: 'tokens.txt', sizeBytes: 73238),
+    sampleRateHz: 16000,
+    featureDim: 80,
+    maxWindow: Duration(seconds: 8),
+  );
+
+  /// NVIDIA NeMo Parakeet TDT 110M (English), transducer, int8 ONNX export
+  /// for sherpa-onnx (CC-BY-4.0). Source: the sherpa-onnx GitHub release
+  /// `asr-models/sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8`
+  /// `.tar.bz2`, byte sizes as unpacked.
+  ///
+  /// Run only for windows the language router calls English (or every window
+  /// when the language setting is English): IndicConformer writes English as
+  /// Devanagari transliteration. Loaded AFTER IndicConformer is freed - never
+  /// both in memory. Decoded in the same 8 s windows so segment times match.
+  /// See `doc/agentFindings/on-device-stt.md`.
+  static const SpeechModel parakeetTdtEnglishInt8 = SpeechModel(
+    id: 'parakeet-tdt-110m-en-int8',
+    displayName: 'Parakeet TDT 110M English (int8)',
+    languageCode: 'en',
+    directoryName: 'parakeet-tdt-110m-en-int8',
+    architecture: SpeechModelArchitecture.nemoTransducer,
+    modelFile: SpeechModelFile(name: 'encoder.int8.onnx', sizeBytes: 131113202),
+    decoderFile: SpeechModelFile(name: 'decoder.int8.onnx', sizeBytes: 3955863),
+    joinerFile: SpeechModelFile(name: 'joiner.int8.onnx', sizeBytes: 1411403),
+    tokensFile: SpeechModelFile(name: 'tokens.txt', sizeBytes: 9953),
     sampleRateHz: 16000,
     featureDim: 80,
     maxWindow: Duration(seconds: 8),
@@ -197,17 +250,29 @@ class RecognizerConfig {
     required this.featureDim,
     required this.numThreads,
     required this.sampleRateHz,
+    this.architecture = SpeechModelArchitecture.nemoCtc,
+    this.decoderPath = '',
+    this.joinerPath = '',
   });
 
+  /// The CTC network, or a transducer's encoder.
   final String modelPath;
   final String tokensPath;
   final int featureDim;
   final int numThreads;
   final int sampleRateHz;
+  final SpeechModelArchitecture architecture;
+
+  /// A transducer's decoder and joiner; empty for CTC.
+  final String decoderPath;
+  final String joinerPath;
 
   @override
   bool operator ==(Object other) =>
       other is RecognizerConfig &&
+      other.architecture == architecture &&
+      other.decoderPath == decoderPath &&
+      other.joinerPath == joinerPath &&
       other.modelPath == modelPath &&
       other.tokensPath == tokensPath &&
       other.featureDim == featureDim &&
@@ -215,8 +280,16 @@ class RecognizerConfig {
       other.sampleRateHz == sampleRateHz;
 
   @override
-  int get hashCode =>
-      Object.hash(modelPath, tokensPath, featureDim, numThreads, sampleRateHz);
+  int get hashCode => Object.hash(
+        modelPath,
+        tokensPath,
+        featureDim,
+        numThreads,
+        sampleRateHz,
+        architecture,
+        decoderPath,
+        joinerPath,
+      );
 
   @override
   String toString() =>
@@ -261,9 +334,18 @@ class RecognitionJob {
     required this.sampleRateHz,
     required this.windows,
     this.vad,
+    this.architecture = SpeechModelArchitecture.nemoCtc,
+    this.decoderPath = '',
+    this.joinerPath = '',
   });
 
+  /// The CTC network, or a transducer's encoder.
   final String modelPath;
+  final SpeechModelArchitecture architecture;
+
+  /// A transducer's decoder and joiner; empty for CTC.
+  final String decoderPath;
+  final String joinerPath;
   final String tokensPath;
   final int featureDim;
 
@@ -291,6 +373,9 @@ class RecognitionJob {
         featureDim: featureDim,
         numThreads: numThreads,
         sampleRateHz: sampleRateHz,
+        architecture: architecture,
+        decoderPath: decoderPath,
+        joinerPath: joinerPath,
       );
 }
 
@@ -373,11 +458,21 @@ class TranscriptSegment {
     required this.end,
     required this.text,
     this.speaker,
+    this.languageCode,
+    this.modelId,
   });
 
   final Duration start;
   final Duration end;
   final String text;
+
+  /// The language this window was decoded as, `hi` or `en`; null in a
+  /// transcript from before language routing, which was all Hindi.
+  final String? languageCode;
+
+  /// The [SpeechModel.id] that produced [text]; null in a transcript from
+  /// before language routing (the transcript's own model then made it).
+  final String? modelId;
 
   /// Who is talking, as a stable label from speaker separation (`S1`, `S2`),
   /// or null when nobody has worked that out. Always null today: speaker
@@ -390,6 +485,20 @@ class TranscriptSegment {
   String toString() => speaker == null
       ? 'TranscriptSegment($start-$end: $text)'
       : 'TranscriptSegment($start-$end $speaker: $text)';
+
+  /// This segment with its language and model set.
+  TranscriptSegment withSource({
+    required String languageCode,
+    required String modelId,
+  }) =>
+      TranscriptSegment(
+        start: start,
+        end: end,
+        text: text,
+        speaker: speaker,
+        languageCode: languageCode,
+        modelId: modelId,
+      );
 }
 
 /// The result of transcribing one recording, with the numbers that describe
@@ -407,10 +516,22 @@ class TranscriptionResult {
     this.rssBeforeLoadKb,
     this.peakRssKb,
     this.rssAfterReleaseKb,
+    this.languageCode = 'hi',
+    this.englishModelMissing = false,
   });
 
   final String audioPath;
+
+  /// The model that produced the transcript; both ids joined with `+` when
+  /// windows were routed to two.
   final String modelId;
+
+  /// `hi` or `en` when every segment is that language, `auto` when they mix.
+  final String languageCode;
+
+  /// Some windows sounded English but the English model is not installed, so
+  /// they were kept as Hindi (Devanagari transliteration).
+  final bool englishModelMissing;
   final int numThreads;
   final Duration audioDuration;
   final List<TranscriptSegment> segments;
@@ -447,7 +568,7 @@ class TranscriptionResult {
 
   @override
   String toString() =>
-      'TranscriptionResult($modelId, $numThreads threads, '
+      'TranscriptionResult($modelId, $languageCode, $numThreads threads, '
       'audio ${audioDuration.inMilliseconds} ms, load ${loadTime.inMilliseconds} '
       'ms, decode ${decodeTime.inMilliseconds} ms, wall '
       '${wallTime.inMilliseconds} ms, rss $rssBeforeLoadKb -> peak $peakRssKb '

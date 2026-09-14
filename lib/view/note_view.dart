@@ -118,6 +118,8 @@ class _NoteViewState extends State<NoteView> {
     super.initState();
     _controller.addListener(_onControllerChanged);
     final recording = widget.recording;
+    // An empty note is not deleted while it is on screen.
+    _controller.noteOpened(recording.path);
     // Both only READ: a stat and a small file each.
     unawaited(_controller.loadTranscript(recording));
     unawaited(_controller.loadSpeakerNames(recording.path));
@@ -134,6 +136,7 @@ class _NoteViewState extends State<NoteView> {
     _scroll.dispose();
     // Leaving the note ends the playback it started.
     if (_isLoaded) unawaited(_controller.stopPlayback());
+    _controller.noteClosed(widget.recording.path);
     super.dispose();
   }
 
