@@ -292,6 +292,11 @@ class AppController extends ChangeNotifier {
   Transcript? transcriptFor(RecordingInfo recording) =>
       _transcriptCache[recording.path];
 
+  /// [transcriptFor] by path, for callers that hold a note's path and not the
+  /// note - the Speakers sheet, which stays open across a re-detection that
+  /// replaces the [RecordingInfo] it was opened from.
+  Transcript? transcriptAtPath(String path) => _transcriptCache[path];
+
   /// What the note screen should show for [recording]'s transcript.
   TranscriptStatus transcriptStatusFor(RecordingInfo recording) {
     final path = recording.path;
