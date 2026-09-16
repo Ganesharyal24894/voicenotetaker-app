@@ -285,17 +285,27 @@ class AppController extends ChangeNotifier {
   int get transcriptionDone => _transcriptionDone;
   int get transcriptionTotal => _transcriptionTotal;
 
+  /// How far the job on the note at [path] has got, 0..1, or null when that
+  /// note is not the one running.
+  ///
+  /// ONE FIGURE FOR BOTH PASSES: separating the speakers and decoding the
+  /// words report through the same progress callback (the separation pass is
+  /// the first tenth or so of the total), so this is as true of a re-run
+  /// started from the Speakers sheet as it is of a first transcription. 0
+  /// until the recording has been measured, rather than null, because the job
+  /// IS running - it just has nothing to say yet.
+  double? transcriptionProgressFor(String path) {
+    if (_transcribingPath != path) return null;
+    if (_transcriptionTotal <= 0) return 0;
+    return (_transcriptionDone / _transcriptionTotal).clamp(0.0, 1.0);
+  }
+
   /// The last finished job's timings and memory, for Developer options.
   TranscriptionResult? get lastTranscription => _lastTranscription;
 
   /// The saved transcript of [recording], once [loadTranscript] has run.
   Transcript? transcriptFor(RecordingInfo recording) =>
       _transcriptCache[recording.path];
-
-  /// [transcriptFor] by path, for callers that hold a note's path and not the
-  /// note - the Speakers sheet, which stays open across a re-detection that
-  /// replaces the [RecordingInfo] it was opened from.
-  Transcript? transcriptAtPath(String path) => _transcriptCache[path];
 
   /// What the note screen should show for [recording]'s transcript.
   TranscriptStatus transcriptStatusFor(RecordingInfo recording) {

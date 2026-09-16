@@ -112,6 +112,11 @@ class PrimaryButton extends StatelessWidget {
       button: true,
       enabled: enabled,
       label: label,
+      // WITHOUT THIS THE BUTTON CANNOT BE ACTIVATED. `excludeSemantics` drops
+      // the descendants' semantics, and the [GestureDetector]'s tap action is
+      // one of them - so a screen reader would read out a button that does
+      // nothing when it is double-tapped. Same rule as [TapTarget].
+      onTap: onPressed,
       container: true,
       excludeSemantics: true,
       child: GestureDetector(
@@ -174,7 +179,10 @@ class QuietButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
+      enabled: onPressed != null,
       label: label,
+      // The tap action, for the reason spelled out in [PrimaryButton].
+      onTap: onPressed,
       container: true,
       excludeSemantics: true,
       child: GestureDetector(
@@ -435,6 +443,8 @@ class SegmentButton extends StatelessWidget {
       enabled: enabled,
       selected: selected,
       label: semanticLabel ?? label,
+      // The tap action, for the reason spelled out in [PrimaryButton].
+      onTap: enabled ? onTap : null,
       container: true,
       excludeSemantics: true,
       child: GestureDetector(

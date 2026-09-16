@@ -59,9 +59,11 @@ the last 4 s. Tapping a paragraph plays from its start.
 
 `TranscriptSegment.speaker` is an optional label (`S1`). It is written to the
 transcript JSON only when set, so the format stays version 1: older files load
-with no speakers, and older builds ignore the key. Speaker separation itself is
-being built separately; until it lands, notes show plain paragraphs and no
-chips.
+with no speakers, and older builds ignore the key. Separation is part of
+transcribing a note (`doc/agentFindings/on-device-stt.md`): a note the engine
+heard ONE voice in carries no labels at all, so it shows plain paragraphs and
+no chips - the same as a note transcribed on a build with no separation
+models.
 
 Names are a sidecar, `<name>.speakers.json` (`{"version":1,"names":{"S1":
 "Priya"}}`), not a transcript field: transcribing again replaces the
@@ -69,6 +71,12 @@ transcript file whole, and names keyed by label survive that - labels the new
 transcript still uses keep their names. Deleted with the note; untouched by
 the retention sweep. `AppController.renameSpeakers / speakerNamesFor /
 loadSpeakerNames`.
+
+The count the user chose and the merges they made are a second sidecar,
+`<name>.speaker-settings.json`, for the same reason: they are the user's
+answer about who is who, and a transcript made again is worked out with them
+rather than losing them. `loadSpeakerNames(path)` reads both, so one call from
+the note screen fills the whole sheet.
 
 ### The Speakers sheet (`lib/view/speakers_sheet.dart`)
 
@@ -105,8 +113,23 @@ each paragraph always agree.
 The sheet is written against `SpeakersController`, not against
 `AppController`: `speakerLabelsFor`, `speakerNamesFor`, `renameSpeakers`,
 `mergeSpeakers`, `speakerCountFor`, `setSpeakerCount`, `detectionProgressFor`.
-`AppControllerSpeakers` is the real one. Reading and renaming pass straight
-through; merging, the count and the progress are `TODO(speakers-pipeline)`
-hooks held locally until the diarization pipeline lands, at which point each
-becomes one line of delegation. Tests drive the sheet through a fake, so none
-of them need a pipeline.
+`AppControllerSpeakers` is the real one, and it is PLAIN DELEGATION: every
+method is the controller's own method of the same name, and nothing about a
+speaker is remembered in the adapter, so the sheet and the note screen cannot
+disagree about a note. Labels come from the saved transcript and the count and
+merges from the settings sidecar, both through the controller, so a re-run
+that rewrites either is on screen without a refresh.
+
+`detectionProgressFor` is the one method with no controller twin:
+`AppController.transcriptionProgressFor(path)` - null unless that note is the
+job running, otherwise 0..1. Choosing a count RE-TRANSCRIBES the note (the
+turn boundaries move, so the windows move), and the separation pass and the
+decoding report through one figure, so the sheet's *Working out who spoke...
+42%* is the transcription's own progress.
+
+Tests come at it both ways: `speakers_sheet_test.dart` drives the sheet
+through a fake controller, and `speakers_pipeline_test.dart` opens it over a
+real note screen on a real controller with only the two engines scripted -
+a count re-runs detection and the sheet reports it, a merge rewrites the saved
+transcript, and a merge down to one person takes the chips and Edit off the
+note.

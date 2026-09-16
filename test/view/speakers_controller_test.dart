@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:voicenotetaker_app/controller/speakers_controller.dart';
+import 'package:voicenotetaker_app/model/diarization.dart';
 import 'package:voicenotetaker_app/model/recording_info.dart';
 import 'package:voicenotetaker_app/model/transcript.dart';
 import 'package:voicenotetaker_app/model/transcription.dart';
@@ -11,8 +13,9 @@ import 'package:voicenotetaker_app/services/library_service.dart';
 import 'harness.dart';
 
 /// Two speakers, S2 first, so "in the order they first speak" is a claim the
-/// test can actually fail.
-List<int> _transcript() => utf8.encode(jsonEncode(Transcript(
+/// test can actually fail. [third] adds an S3, for the merges that have to
+/// leave somebody behind.
+List<int> _transcript({bool third = false}) => utf8.encode(jsonEncode(Transcript(
       languageCode: 'hi',
       modelId: 'm',
       createdAt: DateTime.utc(2026, 9, 10),
@@ -30,18 +33,26 @@ List<int> _transcript() => utf8.encode(jsonEncode(Transcript(
           text: 'अच्छा',
           speaker: 'S1',
         ),
+        if (third)
+          const TranscriptSegment(
+            start: Duration(seconds: 15),
+            end: Duration(seconds: 20),
+            text: 'हाँ जी',
+            speaker: 'S3',
+          ),
       ],
     ).toJson()));
 
 Future<(ViewHarness, SpeakersController, RecordingInfo)> _seeded({
   bool withTranscript = true,
+  bool thirdSpeaker = false,
 }) async {
   final harness = ViewHarness(clock: () => DateTime(2026, 9, 10, 15));
   addTearDown(harness.dispose);
   final path = await harness.seedRecording();
   if (withTranscript) {
     harness.fileStore.files[RecordingNaming.transcriptPathOf(path)] =
-        _transcript();
+        _transcript(third: thirdSpeaker);
   }
   await harness.controller.refreshLibrary();
   final note = harness.controller.recordings
@@ -137,15 +148,93 @@ void main() {
       expect(speakers.speakerCountFor(other), isNull);
     });
 
-    test('until the pipeline lands, merging and re-detection do nothing',
+    test('the count is saved beside the note, not held in the adapter',
         () async {
-      // The TODOs in AppControllerSpeakers. Pinned so the day they start
-      // doing something, this test says so.
+      final (harness, speakers, note) = await _seeded();
+
+      await speakers.setSpeakerCount(note.path, 3);
+
+      // The controller is the one that knows, and the sidecar is written.
+      expect(harness.controller.speakerCountFor(note.path), 3);
+      expect(
+        harness.fileStore.files,
+        contains(RecordingNaming.speakerSettingsPathOf(note.path)),
+      );
+      // A second adapter over the same controller sees it: nothing about a
+      // speaker lives in AppControllerSpeakers.
+      expect(
+        AppControllerSpeakers(harness.controller).speakerCountFor(note.path),
+        3,
+      );
+    });
+
+    test('mergeSpeakers rewrites the note, and the label is gone', () async {
+      final (harness, speakers, note) = await _seeded(thirdSpeaker: true);
+      expect(speakers.speakerLabelsFor(note.path), <String>['S2', 'S1', 'S3']);
+
+      await speakers.mergeSpeakers(note.path, 'S3', 'S1');
+
+      expect(speakers.speakerLabelsFor(note.path), <String>['S2', 'S1']);
+      expect(harness.controller.speakerMergesFor(note.path),
+          <String, String>{'S3': 'S1'});
+      expect(
+        harness.fileStore.files,
+        contains(RecordingNaming.speakerSettingsPathOf(note.path)),
+      );
+    });
+
+    test('a merge that leaves one person leaves the note with no labels',
+        () async {
       final (_, speakers, note) = await _seeded();
 
       await speakers.mergeSpeakers(note.path, 'S1', 'S2');
-      expect(speakers.speakerLabelsFor(note.path), <String>['S2', 'S1']);
+
+      expect(speakers.speakerLabelsFor(note.path), isEmpty);
+    });
+
+    test('nothing is running, so there is no progress to report', () async {
+      final (_, speakers, note) = await _seeded();
+
       expect(speakers.detectionProgressFor(note.path), isNull);
+    });
+
+    test('detectionProgressFor is the running job, and only for its note',
+        () async {
+      // The re-run IS a transcription, so the sheet's progress is the
+      // transcription's - held mid-job here so there is something to read.
+      final gate = Completer<void>();
+      final harness = ViewHarness(
+        recognizer: ScriptedRecognizer()
+          ..texts = <int, String>{for (var i = 0; i < 24; i++) i: 'ठीक है'}
+          ..gate = gate
+          ..holdBefore = 1,
+        diarizer: ScriptedDiarizer()
+          ..turns = <SpeakerTurn>[
+            const SpeakerTurn(start: 0, end: 240000, speaker: 0),
+            const SpeakerTurn(start: 240000, end: 480000, speaker: 1),
+          ],
+        clock: () => DateTime(2026, 9, 10, 15),
+      );
+      addTearDown(harness.dispose);
+      final path = await harness.seedRecording(
+        length: const Duration(seconds: 30),
+      );
+      final speakers = AppControllerSpeakers(harness.controller);
+      final note = harness.controller.recordings.single;
+
+      final running = harness.controller.transcribe(note);
+      await pumpEventQueue();
+
+      final progress = speakers.detectionProgressFor(path);
+      expect(progress, isNotNull);
+      expect(progress, inInclusiveRange(0.0, 1.0));
+      expect(speakers.detectionProgressFor('/some/other/note.wav'), isNull);
+
+      gate.complete();
+      await running;
+
+      // Over: back to nothing running.
+      expect(speakers.detectionProgressFor(path), isNull);
     });
 
     test('it is the interface the sheet is written against', () async {

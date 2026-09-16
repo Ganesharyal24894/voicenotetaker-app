@@ -766,6 +766,23 @@ Only a cancel is passed on.
   `voicenote-X.speaker-settings.json` beside the recording — a sidecar, so
   transcribing again cannot lose them, and `LibraryService.deleteFiles`
   removes it with the note.
+- `transcriptionProgressFor(path)` — how far the job on that note has got,
+  0..1, or null when it is not the one running. The re-run a count starts IS a
+  transcription, and the separation pass and the decoding report through the
+  same `onProgress`, so this one figure covers both passes. 0 rather than null
+  until the recording has been measured: the job is running, it just has
+  nothing to say yet.
+
+### What the Speakers sheet is wired to — [V] 2026-09-16
+
+The sheet (`lib/view/speakers_sheet.dart`) talks to `SpeakersController`, and
+`AppControllerSpeakers` (`lib/controller/speakers_controller.dart`) is that
+interface over the controller above — plain delegation, method for method,
+with nothing about a speaker cached in the adapter. `detectionProgressFor` is
+`transcriptionProgressFor`. So the labels the sheet shows are the saved
+transcript's, the count and the merges are the sidecar's, and a re-run that
+rewrites either redraws both the sheet and the note screen off one
+`notifyListeners`.
 
 ### Model delivery (speakers)
 
@@ -848,7 +865,8 @@ that matter and have not been measured.
 
 ### Tests
 
-- Before: 1417 passed, 1 skipped. After: 1499 passed, 1 skipped.
+- Before: 1417 passed, 1 skipped. After: 1499 passed, 1 skipped. Wiring the
+  sheet to it (merged with the speakers UI): 1550 passed, 2 skipped.
 - New: `speaker_turns_test.dart` (every cleanup rule, label stability, window
   planning and the 6–8 s split point, the loudness profile),
   `speaker_settings_test.dart` (count range, merges including into an
@@ -861,6 +879,11 @@ that matter and have not been measured.
   persistence and re-run, restart, audio gone, merges and their survival
   across a re-run, names untouched) and `speaker_diarizer_sherpa_test.dart`
   (the real engine, skipped without models).
+- Wiring the sheet added `test/view/speakers_pipeline_test.dart` (the sheet
+  over a real note screen and a real controller: a count re-runs detection and
+  reports its progress, a merge rewrites the saved transcript, one person left
+  takes the chips and Edit away) and grew
+  `test/view/speakers_controller_test.dart` with the delegation itself.
 - `speech_recognizer_test.dart`'s "sherpa_onnx is imported by exactly one
   file" is now "by the two driver files": the diarizer is the second, and the
   rule it protects — one file per engine seam — is unchanged.

@@ -1,17 +1,16 @@
 import 'package:flutter/foundation.dart';
 
 import '../model/speaker_names.dart';
-import '../model/transcript_paragraphs.dart';
 import 'app_controller.dart';
 
 /// What the Speakers sheet needs from the app, and nothing else.
 ///
 /// THE SEAM BETWEEN THE SCREEN AND THE DIARIZATION PIPELINE. The sheet is
 /// built against this interface, so it can be driven by a fake in a test and
-/// by [AppController] on a phone. Every method here matches the name and
-/// signature the pipeline is implementing on [AppController], so once that
-/// lands [AppControllerSpeakers] becomes plain delegation - see the TODOs on
-/// it for the three calls that are still local.
+/// by [AppController] on a phone. Every method here has the name and the
+/// signature of the [AppController] method behind it, so the real one -
+/// [AppControllerSpeakers] - is plain delegation, and there is nothing for
+/// the two of them to disagree about.
 abstract interface class SpeakersController implements Listenable {
   /// The note's speaker labels (`S1`, `S2`, ...) in the order they first
   /// speak. Empty for a note with no speakers.
@@ -41,26 +40,23 @@ abstract interface class SpeakersController implements Listenable {
   /// How far that re-run has got: null when nothing is running for this note,
   /// otherwise 0..1 (0 before the work has reported a figure).
   ///
-  /// NOT PART OF THE PIPELINE'S PUBLISHED API - the sheet needs a way to be
-  /// honest about a slow job, so it is declared here. The pipeline's own
-  /// progress reporting can be wired to it in one line.
+  /// The re-run is a transcription - the words are decoded again - so this is
+  /// the transcription's own progress, separation pass included, and only for
+  /// the note that is running.
   double? detectionProgressFor(String recordingPath);
 }
 
 /// [SpeakersController] over the real [AppController].
 ///
-/// Renaming and reading is already the controller's job and is passed
-/// straight through. The three diarization calls are held locally until the
-/// pipeline lands - see each TODO.
+/// PLAIN DELEGATION. Every method is the controller's own method of the same
+/// name; nothing about a speaker is remembered here, so the sheet and the note
+/// screen can never disagree about a note. The one method that is not a
+/// controller method is [detectionProgressFor], which turns the running
+/// transcription's window count into the fraction the sheet draws.
 class AppControllerSpeakers implements SpeakersController {
   AppControllerSpeakers(this._app);
 
   final AppController _app;
-
-  /// TODO(speakers-pipeline): delete this map. The chosen count belongs to
-  /// the controller, which saves it beside the note; it is kept here only so
-  /// the segmented control is not a dead one on this branch.
-  final Map<String, int?> _counts = <String, int?>{};
 
   @override
   void addListener(VoidCallback listener) => _app.addListener(listener);
@@ -69,11 +65,8 @@ class AppControllerSpeakers implements SpeakersController {
   void removeListener(VoidCallback listener) => _app.removeListener(listener);
 
   @override
-  List<String> speakerLabelsFor(String recordingPath) {
-    final transcript = _app.transcriptAtPath(recordingPath);
-    if (transcript == null) return const <String>[];
-    return TranscriptLayout.speakers(transcript);
-  }
+  List<String> speakerLabelsFor(String recordingPath) =>
+      _app.speakerLabelsFor(recordingPath);
 
   @override
   SpeakerNames speakerNamesFor(String recordingPath) =>
@@ -86,29 +79,24 @@ class AppControllerSpeakers implements SpeakersController {
   ) =>
       _app.renameSpeakers(recordingPath, names);
 
-  /// TODO(speakers-pipeline): `=> _app.mergeSpeakers(path, from, into);`
-  /// Until then a merge does nothing rather than pretending: the transcript
-  /// on disk is the only place the labels live, and rewriting it is the
-  /// pipeline's job.
   @override
-  Future<void> mergeSpeakers(
-    String recordingPath,
-    String from,
-    String into,
-  ) async {}
+  Future<void> mergeSpeakers(String recordingPath, String from, String into) =>
+      _app.mergeSpeakers(recordingPath, from, into);
 
-  /// TODO(speakers-pipeline): `=> _app.speakerCountFor(path);`
   @override
-  int? speakerCountFor(String recordingPath) => _counts[recordingPath];
+  int? speakerCountFor(String recordingPath) =>
+      _app.speakerCountFor(recordingPath);
 
-  /// TODO(speakers-pipeline): `=> _app.setSpeakerCount(path, count);`
-  /// The choice is remembered so the control behaves; nothing is re-detected.
   @override
-  Future<void> setSpeakerCount(String recordingPath, int? count) async {
-    _counts[recordingPath] = count;
-  }
+  Future<void> setSpeakerCount(String recordingPath, int? count) =>
+      _app.setSpeakerCount(recordingPath, count);
 
-  /// TODO(speakers-pipeline): report the re-run's progress here.
+  /// THE RE-RUN IS A TRANSCRIPTION. Changing the count moves the turn
+  /// boundaries, so the words are decoded again, and the separation pass and
+  /// the decoding report through one progress figure - see
+  /// [AppController.transcriptionProgressFor], which is null for every note
+  /// but the one running.
   @override
-  double? detectionProgressFor(String recordingPath) => null;
+  double? detectionProgressFor(String recordingPath) =>
+      _app.transcriptionProgressFor(recordingPath);
 }
