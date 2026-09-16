@@ -147,8 +147,8 @@ void main() {
       expect(find.text('00:42'), findsOneWidget);
       expect(find.text('हाँ, सुनो'), findsOneWidget);
       expect(find.text('ठीक है'), findsOneWidget);
-      // One voice: no chips, no Rename.
-      expect(find.text('Rename'), findsNothing);
+      // One voice: no chips, no Edit.
+      expect(find.text('Edit'), findsNothing);
       // Nothing is played until asked.
       expect(find.byType(NoteAudioPanel), findsNothing);
       expect(find.text('Summarize with your AI'), findsOneWidget);
@@ -163,17 +163,17 @@ void main() {
       // A chip and a paragraph label each.
       expect(find.text('Speaker 1'), findsNWidgets(2));
       expect(find.text('Speaker 2'), findsNWidgets(2));
-      expect(find.text('Rename'), findsOneWidget);
+      expect(find.text('Edit'), findsOneWidget);
     });
 
-    testWidgets('Rename saves names that replace Speaker N everywhere',
+    testWidgets('Edit saves names that replace Speaker N everywhere',
         (tester) async {
       final note = await _open(tester, saved: _twoSpeakers);
 
-      await tester.tap(find.text('Rename'));
+      await tester.tap(find.text('Edit'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).at(1), 'Priya');
-      await tester.tap(find.text('Save'));
+      await tester.tap(find.text('Done'));
       await tester.pumpAndSettle();
       await flush(tester);
 
@@ -547,7 +547,7 @@ void main() {
       final labels = <String>[
         'Back',
         'More',
-        'Rename speakers',
+        'Edit speakers',
         'Keep',
         'Copy transcript',
         'Show audio',

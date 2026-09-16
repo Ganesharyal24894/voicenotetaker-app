@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../controller/app_controller.dart';
+import '../controller/speakers_controller.dart';
 import '../drivers/audio_player.dart';
 import '../model/recording_info.dart';
 import '../model/speaker_names.dart';
@@ -12,6 +13,8 @@ import '../model/transcript.dart';
 import '../model/transcript_paragraphs.dart';
 import 'note_audio_panel.dart';
 import 'note_list.dart';
+import 'speaker_palette.dart';
+import 'speakers_sheet.dart';
 import 'theme.dart';
 import 'widgets/app_icons.dart';
 import 'widgets/common.dart';
@@ -78,6 +81,13 @@ class _NoteViewState extends State<NoteView> {
   List<TranscriptParagraph> _paragraphs = const <TranscriptParagraph>[];
 
   AppController get _controller => widget.controller;
+
+  /// The note screen's one way into the speaker side of the controller. The
+  /// Speakers sheet is built against [SpeakersController], not against
+  /// [AppController], so the diarization pipeline can land behind it without
+  /// the sheet changing - see `controller/speakers_controller.dart`.
+  late final SpeakersController _speakers =
+      AppControllerSpeakers(_controller);
 
   /// The library's latest copy of this note - Keep and the retention sweep
   /// change it while the screen is open.
@@ -272,18 +282,12 @@ class _NoteViewState extends State<NoteView> {
     if (mounted) _notice('Copied');
   }
 
-  Future<void> _rename(List<String> speakers) async {
-    final path = widget.recording.path;
-    final changes = await showDialog<Map<String, String>>(
-      context: context,
-      builder: (context) => _RenameSpeakersDialog(
-        speakers: speakers,
-        names: _controller.speakerNamesFor(path),
-      ),
-    );
-    if (changes == null || !mounted) return;
-    await _controller.renameSpeakers(path, changes);
-  }
+  /// The Speakers sheet: name them, merge two, say how many people spoke.
+  Future<void> _editSpeakers() => showSpeakersSheet(
+        context,
+        speakers: _speakers,
+        recordingPath: widget.recording.path,
+      );
 
   Future<void> _delete() async {
     final recording = _recording;
@@ -385,7 +389,7 @@ class _NoteViewState extends State<NoteView> {
                             _SpeakerChips(
                               speakers: speakers,
                               names: names,
-                              onRename: () => unawaited(_rename(speakers)),
+                              onEdit: () => unawaited(_editSpeakers()),
                             ),
                           ?audioRow,
                           if (audioRow != null || speakers.length > 1)
@@ -573,8 +577,9 @@ class _NoteViewState extends State<NoteView> {
                         : names.labelFor(paragraphs[i].speaker!, speakers),
                     speakerColor: paragraphs[i].speaker == null
                         ? null
-                        : _speakerColor(
-                            speakers.indexOf(paragraphs[i].speaker!),
+                        : SpeakerPalette.of(
+                            paragraphs[i].speaker!,
+                            speakers,
                           ),
                     active: i == active,
                     playing: i == active && _playing,
@@ -774,29 +779,16 @@ class _NoteViewState extends State<NoteView> {
 
 enum _NoteAction { transcribe, delete }
 
-/// Speaker colours, in the order speakers first talk. Text-safe colours on
-/// the dark background - see the contrast rule in `theme.dart`.
-const List<Color> _speakerColors = <Color>[
-  AppColors.purpleText,
-  AppColors.connected,
-  AppColors.warning,
-  AppColors.recording,
-  AppColors.purple300,
-];
-
-Color _speakerColor(int index) =>
-    _speakerColors[(index < 0 ? 0 : index) % _speakerColors.length];
-
 class _SpeakerChips extends StatelessWidget {
   const _SpeakerChips({
     required this.speakers,
     required this.names,
-    required this.onRename,
+    required this.onEdit,
   });
 
   final List<String> speakers;
   final SpeakerNames names;
-  final VoidCallback onRename;
+  final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -819,10 +811,10 @@ class _SpeakerChips extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           TapTarget(
-            onTap: onRename,
-            semanticLabel: 'Rename speakers',
+            onTap: onEdit,
+            semanticLabel: 'Edit speakers',
             child: Text(
-              'Rename',
+              'Edit',
               style: AppText.label13.copyWith(color: AppColors.purpleText),
             ),
           ),
@@ -832,7 +824,7 @@ class _SpeakerChips extends StatelessWidget {
   }
 
   Widget _chip(int index) {
-    final color = _speakerColor(index);
+    final color = SpeakerPalette.at(index);
     return Container(
       height: 30,
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1005,85 +997,6 @@ class _SquareButton extends StatelessWidget {
           child: child,
         ),
       ),
-    );
-  }
-}
-
-/// Names for a note's speakers. Returns label -> name for every speaker (a
-/// blank name clears it), or null when cancelled.
-class _RenameSpeakersDialog extends StatefulWidget {
-  const _RenameSpeakersDialog({required this.speakers, required this.names});
-
-  final List<String> speakers;
-  final SpeakerNames names;
-
-  @override
-  State<_RenameSpeakersDialog> createState() => _RenameSpeakersDialogState();
-}
-
-class _RenameSpeakersDialogState extends State<_RenameSpeakersDialog> {
-  late final List<TextEditingController> _fields = <TextEditingController>[
-    for (final speaker in widget.speakers)
-      TextEditingController(text: widget.names.customName(speaker) ?? ''),
-  ];
-
-  @override
-  void dispose() {
-    for (final field in _fields) {
-      field.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: AppColors.card,
-      shape: const RoundedRectangleBorder(borderRadius: AppShape.card),
-      title: const Text('Rename speakers', style: AppText.title22),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            for (var i = 0; i < widget.speakers.length; i++)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: TextField(
-                  controller: _fields[i],
-                  cursorColor: AppColors.purpleText,
-                  textCapitalization: TextCapitalization.words,
-                  style: AppText.meta14.copyWith(color: AppColors.textPrimary),
-                  decoration: InputDecoration(
-                    hintText: 'Speaker ${i + 1}',
-                    hintStyle: AppText.meta14,
-                    prefixIcon: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: StatusDot(color: _speakerColor(i)),
-                    ),
-                    prefixIconConstraints:
-                        const BoxConstraints(minWidth: 30, minHeight: 6),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel', style: AppText.label13),
-        ),
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(<String, String>{
-            for (var i = 0; i < widget.speakers.length; i++)
-              widget.speakers[i]: _fields[i].text,
-          }),
-          child: Text(
-            'Save',
-            style: AppText.label13.copyWith(color: AppColors.purpleText),
-          ),
-        ),
-      ],
     );
   }
 }
