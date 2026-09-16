@@ -14,11 +14,13 @@ import 'package:voicenotetaker_app/drivers/file_store.dart';
 import 'package:voicenotetaker_app/drivers/haptics.dart';
 import 'package:voicenotetaker_app/drivers/phone_power.dart';
 import 'package:voicenotetaker_app/drivers/platform_settings.dart';
+import 'package:voicenotetaker_app/drivers/speaker_diarizer.dart';
 import 'package:voicenotetaker_app/drivers/speech_recognizer.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/capture_flags.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
+import 'package:voicenotetaker_app/model/diarization.dart';
 import 'package:voicenotetaker_app/model/die_temperature.dart';
 import 'package:voicenotetaker_app/model/not_saving_alert.dart';
 import 'package:voicenotetaker_app/model/pairing_outcome.dart';
@@ -120,7 +122,9 @@ class ViewHarness {
     this.availability = BleAvailability.poweredOn,
     this.testWindow,
     this.recognizer,
+    this.diarizer,
     bool speechModelInstalled = true,
+    bool speakerModelsInstalled = true,
     BackgroundMode? backgroundMode,
     Duration continuousKeepalive = const Duration(seconds: 60),
     PhonePower? phonePower,
@@ -133,6 +137,7 @@ class ViewHarness {
     BlePairing? pairing,
   }) : transport = MockBleTransport() {
     if (recognizer != null && speechModelInstalled) installSpeechModel();
+    if (diarizer != null && speakerModelsInstalled) installSpeakerModels();
     when(() => transport.currentAvailability())
         .thenAnswer((_) async => availability);
     when(() => transport.availability).thenAnswer((_) => adapter.stream);
@@ -237,6 +242,7 @@ class ViewHarness {
                 modelsDirectory: modelsDirectory,
               ),
               recognizer: recognizer!,
+              diarizer: diarizer,
             ),
       deviceTestService: testWindow == null
           ? null
@@ -274,6 +280,19 @@ class ViewHarness {
   /// The speech engine, when the controller was built with transcription.
   /// Null builds it without, as a build with no engine would be.
   final ScriptedRecognizer? recognizer;
+
+  /// The speaker-separation engine. Null builds transcription without one,
+  /// which is every build until the models are pushed.
+  final ScriptedDiarizer? diarizer;
+
+  /// Puts files of exactly the separation models' sizes where the store looks.
+  void installSpeakerModels() {
+    const models = DiarizationModels.pyannoteCamPlus;
+    for (final file in models.files) {
+      fileStore.files['$modelsDirectory/${models.directoryName}/${file.name}'] =
+          Uint8List(file.sizeBytes);
+    }
+  }
 
   /// Puts files of exactly the model's sizes where the store looks for them.
   /// Zero bytes: [ScriptedRecognizer] never reads them.
@@ -756,6 +775,36 @@ class ScriptedRecognizer implements SpeechRecognizer {
   }
 }
 
+
+/// A speaker-separation engine that answers with turns a test set.
+class ScriptedDiarizer implements SpeakerDiarizer {
+  /// What it "heard". Empty is "nobody spoke", which leaves the note without
+  /// speakers.
+  List<SpeakerTurn> turns = const <SpeakerTurn>[];
+
+  /// Turns per run, when a test wants the answer to change on a re-run; falls
+  /// back to [turns] once it is used up.
+  final List<List<SpeakerTurn>> scripted = <List<SpeakerTurn>>[];
+
+  int calls = 0;
+  int releases = 0;
+
+  /// The count each run was asked for, in order - null for Auto.
+  final List<int?> counts = <int?>[];
+
+  @override
+  Future<void> release() async => releases++;
+
+  @override
+  Stream<DiarizationEvent> diarize(DiarizationJob job) async* {
+    counts.add(job.numClusters);
+    final answer = calls < scripted.length ? scripted[calls] : turns;
+    calls++;
+    yield const DiarizationModelsLoaded(Duration(milliseconds: 300));
+    yield const DiarizationProgress(done: 1, total: 1);
+    yield DiarizationFinished(turns: answer);
+  }
+}
 
 /// A [BackgroundMode] that records what the controller asked of it.
 class FakeBackgroundMode implements BackgroundMode {

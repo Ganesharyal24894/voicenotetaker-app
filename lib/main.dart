@@ -15,6 +15,7 @@ import 'drivers/haptics_channel.dart';
 import 'drivers/phone_power_battery_plus.dart';
 import 'drivers/platform_settings_channel.dart';
 import 'drivers/share_sheet_share_plus.dart';
+import 'drivers/speaker_diarizer_sherpa.dart';
 import 'drivers/speech_recognizer_sherpa.dart';
 import 'services/summary/day_summary_store.dart';
 import 'services/transcription/speech_model_store.dart';
@@ -70,6 +71,11 @@ Future<void> main() async {
         modelsDirectory: fileStore.join(support, 'models'),
       ),
       recognizer: SherpaOnnxSpeechRecognizer(),
+      // Who spoke when, before the speech model is loaded, when
+      // `models/diarization/` holds both files. Absent - which is the ordinary
+      // case until they are pushed - and notes are transcribed with no speaker
+      // labels, exactly as before.
+      diarizer: SherpaOnnxSpeakerDiarizer(),
       // Cut windows in the pauses when `models/silero-vad/silero_vad.onnx` is
       // installed. Off unless built with --dart-define=STT_VAD=true, until
       // its CER and cost are measured; with the file absent it changes

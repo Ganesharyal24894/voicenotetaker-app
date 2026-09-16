@@ -36,9 +36,11 @@ import '../model/recording_info.dart';
 import '../model/reconnect_backoff.dart';
 import '../model/recording_metadata.dart';
 import '../model/speaker_names.dart';
+import '../model/speaker_settings.dart';
 import '../model/stream_info.dart';
 import '../model/language_router.dart';
 import '../model/transcript.dart';
+import '../model/transcript_paragraphs.dart';
 import '../model/transcription.dart';
 import '../services/audio_retention_service.dart';
 import '../services/battery_anchor_store.dart';
@@ -54,6 +56,7 @@ import '../services/pairing/pairing_store.dart';
 import '../services/library_service.dart';
 import '../services/recording_service.dart';
 import '../services/transcription/speaker_names_store.dart';
+import '../services/transcription/speaker_settings_store.dart';
 import '../services/transcription/transcript_store.dart';
 import '../services/transcription/transcription_queue.dart';
 import '../services/transcription/transcription_service.dart';
@@ -309,6 +312,10 @@ class AppController extends ChangeNotifier {
   Future<void> loadTranscript(RecordingInfo recording) async {
     final transcript = await _transcripts.load(recording.path);
     _transcriptCache[recording.path] = transcript;
+    // The speaker count the user chose has to be known before this note is
+    // transcribed again, which the background queue may do at any moment.
+    _speakerSettings[recording.path] ??=
+        await _speakerSettingsStore.load(recording.path);
     // A failure saved on an earlier launch is what the card should explain,
     // rather than offering a Transcribe button as though nothing had been
     // tried.
@@ -364,6 +371,7 @@ class AppController extends ChangeNotifier {
         path,
         numThreads: transcriptionThreads,
         language: _transcriptionLanguage,
+        speakerCount: speakerCountFor(path),
         onProgress: (done, total) {
           _transcriptionDone = done;
           _transcriptionTotal = total;
@@ -374,9 +382,11 @@ class AppController extends ChangeNotifier {
       // Logged whole, so a measurement taken on a phone can be read back over
       // adb without transcribing it off the screen.
       debugPrint('STT $result');
-      final transcript = Transcript.fromResult(
-        result,
-        createdAt: DateTime.now(),
+      // The merges the user already made are kept across a new transcript:
+      // they are the user's answer about who is who, not the engine's.
+      final transcript = _withMerges(
+        path,
+        Transcript.fromResult(result, createdAt: DateTime.now()),
       );
       _transcriptCache[path] = transcript;
       try {
@@ -736,6 +746,10 @@ class AppController extends ChangeNotifier {
   late final SpeakerNamesStore _speakerNamesStore =
       SpeakerNamesStore(fileStore: _fileStore);
   final Map<String, SpeakerNames> _speakerNames = <String, SpeakerNames>{};
+  late final SpeakerSettingsStore _speakerSettingsStore =
+      SpeakerSettingsStore(fileStore: _fileStore);
+  final Map<String, SpeakerSettings> _speakerSettings =
+      <String, SpeakerSettings>{};
   bool _loadingTranscripts = false;
 
   /// Reads the saved transcript of every recording in [recordings] that has
@@ -767,8 +781,12 @@ class AppController extends ChangeNotifier {
   SpeakerNames speakerNamesFor(String path) =>
       _speakerNames[path] ?? SpeakerNames.empty;
 
+  /// Reads the note's speaker names AND its speaker settings - the count the
+  /// user chose and the merges they made - so one call from the note screen is
+  /// enough for the whole speakers sheet.
   Future<void> loadSpeakerNames(String path) async {
     _speakerNames[path] = await _speakerNamesStore.load(path);
+    _speakerSettings[path] = await _speakerSettingsStore.load(path);
     notifyListeners();
   }
 
@@ -784,6 +802,157 @@ class AppController extends ChangeNotifier {
       _errorMessage = 'Could not save the speaker names: $error';
       notifyListeners();
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // SPEAKERS: how many, and which of them are the same person
+  //
+  // Separation is the engine's guess. These four are the user's corrections,
+  // and they outlive a transcript being made again: both are kept in
+  // `voicenote-X.speaker-settings.json` beside the recording, and
+  // [transcribe] reads them back.
+  // -------------------------------------------------------------------------
+
+  /// The speaker count the user chose for the note at [path], or null for Auto
+  /// (the clustering decides). Known once [loadSpeakerNames] or
+  /// [loadTranscript] has run for that note.
+  int? speakerCountFor(String path) => _speakerSettings[path]?.speakerCount;
+
+  /// The merges the user made in the note at [path]: a label, and the label it
+  /// now reads as.
+  Map<String, String> speakerMergesFor(String path) =>
+      _speakerSettings[path]?.merges ?? const <String, String>{};
+
+  /// The speaker labels of the note at [path], in the order they first speak.
+  ///
+  /// Empty when the note has no speakers - nobody has transcribed it yet, the
+  /// separation models are not installed, or only one person spoke, which is
+  /// deliberately not labelled at all.
+  List<String> speakerLabels(String path) {
+    final transcript = _transcriptCache[path];
+    if (transcript == null) return const <String>[];
+    return TranscriptLayout.speakers(transcript);
+  }
+
+  /// [speakerLabels], under the name the rest of this controller uses for
+  /// "the value for one note".
+  List<String> speakerLabelsFor(String path) => speakerLabels(path);
+
+  /// Says how many people are in the note at [path] - null is Auto, 2, 3 or 4,
+  /// where 4 means "four or more" - and works the note out again with it.
+  ///
+  /// RE-TRANSCRIBES. The turn boundaries move when the count changes, so the
+  /// windows move, so the words have to be decoded again: there is nothing
+  /// safe to reuse. It costs what transcribing the note cost the first time,
+  /// and it runs through [transcribe], so it is refused while another note is
+  /// being transcribed and it saves the new transcript the same way.
+  ///
+  /// The choice is saved either way. A note whose audio has been swept (24 h)
+  /// cannot be worked out again: the choice is remembered and nothing else
+  /// happens.
+  Future<void> setSpeakerCount(String path, int? count) async {
+    final current = _speakerSettings[path] ??
+        await _speakerSettingsStore.load(path);
+    if (current.speakerCount == count) return;
+    final next = current.withCount(count);
+    _speakerSettings[path] = next;
+    notifyListeners();
+    try {
+      await _speakerSettingsStore.save(path, next);
+    } on Object catch (error) {
+      _errorMessage = 'Could not save the speaker count: $error';
+      notifyListeners();
+    }
+    final recording = _recordingAt(path);
+    if (recording == null || !recording.hasAudio) return;
+    await transcribe(recording);
+  }
+
+  /// Says that [from] and [into] are the same person in the note at [path].
+  ///
+  /// Applied to the saved transcript at once - no audio is touched - and
+  /// remembered, so a transcript made again (a different speaker count, a
+  /// re-run) comes back merged the same way. Merging into a label that was
+  /// itself merged away follows the chain.
+  ///
+  /// A merge that leaves ONE speaker leaves the note with no labels at all,
+  /// the same as a note where the engine only ever heard one person.
+  Future<void> mergeSpeakers(String path, String from, String into) async {
+    if (from == into) return;
+    final current = _speakerSettings[path] ??
+        await _speakerSettingsStore.load(path);
+    final next = current.withMerge(from, into);
+    if (next == current) return;
+    _speakerSettings[path] = next;
+    final transcript = _transcriptCache[path] ?? await _transcripts.load(path);
+    if (transcript != null) {
+      final merged = _relabel(transcript, next.resolve);
+      _transcriptCache[path] = merged;
+      try {
+        await _transcripts.save(path, merged);
+      } on Object catch (error) {
+        // Shown for this session; worked out again next time.
+        debugPrint('Could not save the merged transcript: $error');
+      }
+    }
+    notifyListeners();
+    try {
+      await _speakerSettingsStore.save(path, next);
+    } on Object catch (error) {
+      _errorMessage = 'Could not save the speaker merge: $error';
+      notifyListeners();
+    }
+  }
+
+  RecordingInfo? _recordingAt(String path) {
+    for (final recording in recordings) {
+      if (recording.path == path) return recording;
+    }
+    return null;
+  }
+
+  /// [transcript] with the user's merges applied, or unchanged when there are
+  /// none.
+  Transcript _withMerges(String path, Transcript transcript) {
+    final settings = _speakerSettings[path];
+    if (settings == null || settings.merges.isEmpty) return transcript;
+    return _relabel(transcript, settings.resolve);
+  }
+
+  /// [transcript] with every speaker label put through [resolve]; labels are
+  /// dropped altogether when that leaves one speaker.
+  static Transcript _relabel(
+    Transcript transcript,
+    String Function(String label) resolve,
+  ) {
+    final labels = <String>{};
+    for (final segment in transcript.segments) {
+      final speaker = segment.speaker;
+      if (speaker != null && segment.text.trim().isNotEmpty) {
+        labels.add(resolve(speaker));
+      }
+    }
+    final plain = labels.length < 2;
+    return Transcript(
+      languageCode: transcript.languageCode,
+      modelId: transcript.modelId,
+      createdAt: transcript.createdAt,
+      audioDuration: transcript.audioDuration,
+      englishModelMissing: transcript.englishModelMissing,
+      segments: <TranscriptSegment>[
+        for (final segment in transcript.segments)
+          TranscriptSegment(
+            start: segment.start,
+            end: segment.end,
+            text: segment.text,
+            speaker: plain || segment.speaker == null
+                ? null
+                : resolve(segment.speaker!),
+            languageCode: segment.languageCode,
+            modelId: segment.modelId,
+          ),
+      ],
+    );
   }
 
   /// Null when the app was built without a playback driver; every playback
@@ -2744,6 +2913,7 @@ class AppController extends ChangeNotifier {
           _transcriptCache.remove(path);
           _transcriptFailures.remove(path);
           _speakerNames.remove(path);
+          _speakerSettings.remove(path);
           if (_lastRecording?.path == path) _lastRecording = null;
           // Stopped when its screen closed; the player lets go of it.
           if (_nowPlaying?.path == path) {

@@ -27,7 +27,8 @@ dependencies:
   # Offline speech-to-text runtime (k2-fsa, Apache-2.0). Runs ONNX models on
   # the CPU with no network. Pinned exactly: the Dart bindings mirror a native
   # C API whose config structs change between releases. Named in
-  # lib/drivers/speech_recognizer_sherpa.dart and nowhere else.
+  # lib/drivers/speech_recognizer_sherpa.dart and
+  # lib/drivers/speaker_diarizer_sherpa.dart, and nowhere else.
   sherpa_onnx: 1.13.8
 
   # Phone battery level, charger state and battery saver, on Android and iOS,

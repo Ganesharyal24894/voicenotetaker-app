@@ -84,6 +84,16 @@ abstract final class RecordingNaming {
   static String speakerNamesPathOf(String audioPath) =>
       _sidecarOf(audioPath, speakerNamesSuffix);
 
+  /// Suffix of the speaker count and merges the user chose for a note.
+  ///
+  /// A SIDECAR FOR THE SAME REASON as the names, and separate from them: it
+  /// says how the note is SEPARATED rather than what the speakers are called,
+  /// and separating the note again reads it back to reach the same answer.
+  static const String speakerSettingsSuffix = '.speaker-settings.json';
+
+  static String speakerSettingsPathOf(String audioPath) =>
+      _sidecarOf(audioPath, speakerSettingsSuffix);
+
   /// Suffix of the marker saying "nothing was said in this note; delete it
   /// once nothing is using it".
   ///
@@ -295,6 +305,7 @@ class LibraryService {
     await fileStore.delete(RecordingNaming.transcriptFailurePathOf(path));
     await fileStore.delete(RecordingNaming.keepAudioPathOf(path));
     await fileStore.delete(RecordingNaming.speakerNamesPathOf(path));
+    await fileStore.delete(RecordingNaming.speakerSettingsPathOf(path));
     // Last: for a note whose audio was already removed, this marker is what
     // lists it, so a delete interrupted before here leaves it visible and
     // deletable rather than a hidden stray.

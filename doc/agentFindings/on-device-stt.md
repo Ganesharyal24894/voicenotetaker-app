@@ -654,3 +654,213 @@ adb shell run-as $P ls -l $D   # sizes must match the table
   restart, start sweeps, language persistence and English mode), and the note
   screen's "no speech found" now checks the note goes only after the screen
   closes. Three older tests were adjusted because empty notes are now deleted.
+
+## Who said what — speaker separation (2026-09-16)
+
+### The problem
+
+A meeting note transcribed as one wall of text is hard to read and impossible
+to act on: "who agreed to that?" is the question the note is for. Separation is
+offline like everything else here — nothing leaves the phone.
+
+### The spike — [V] laptop, sherpa-onnx 1.13.8 (Dart)
+
+`sherpa_onnx` 1.13.8 has `OfflineSpeakerDiarization`, `processWithCallback`
+(progress), `FastClusteringConfig(numClusters, threshold)` and
+`windowShiftRatio`. Two models, both needed:
+
+| File | Bytes | sha256 |
+|---|---|---|
+| `segmentation.onnx` (pyannote segmentation-3.0, FLOAT) | 5,992,913 | `220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079` |
+| `campplus.onnx` (3D-Speaker CAM++ zh_en advanced) | 28,281,164 | `aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2` |
+
+**The FLOAT segmentation model on purpose:** its int8 export misses quiet
+speech — a second voice answering softly is simply not there — and 4.5 MB is
+not worth that.
+
+Settled defaults (`DiarizationModels.pyannoteCamPlus`): `threshold` 0.9,
+`windowShiftRatio` 0.5, `minDurationOn` 0.3 s, `minDurationOff` 0.5 s.
+Expected phone cost about **0.10x real time on top** of the ~1x the speech
+model already costs — a tenth more, which is what the progress bar is told.
+
+### The design
+
+**Order, and it is load-bearing.** Separate FIRST, over the whole recording,
+free everything, and only then load the speech model. The diarizer's two
+networks (34 MB) plus the recording as floats (4 bytes a sample — 38 MB for
+ten minutes, and the engine copies it natively) must never be resident
+alongside a 188 MB speech model. `TranscriptionService._separateSpeakers`
+therefore calls `SpeechRecognizer.releaseModel()` BEFORE the diarizer starts
+(the keep-warm recognizer may still be holding the previous note's model), and
+the diarizer's worker isolate frees its models, runs `mallopt(M_PURGE)` and
+exits before `DiarizationFinished` is even delivered. The order is a test:
+`recognizer.release`, `diarizer.run`, `diarizer.release`,
+`recognizer.transcribe`.
+
+**Cleaning up what the engine said** (`lib/model/speaker_turns.dart`, pure, one
+test per rule):
+
+1. overlapping turns are cut at the middle of the overlap — a window can only
+   be decoded once — and a turn sitting wholly inside another leaves the rest
+   of that turn behind it;
+2. the same speaker either side of a pause under **1 s** is one turn;
+3. a turn under **1 s** is folded into a neighbour — the closer one, on a tie
+   the longer one;
+4. a speaker heard for under **2 s** in the whole note is not a speaker, and
+   is folded away the same way;
+5. boundaries are stretched so **no audio is dropped**: the first turn starts
+   at 0, the last ends at the end, and every gap is split at its midpoint;
+6. whatever became the same speaker back to back is merged.
+
+**Windows** (`SpeakerTurns.plan`): one per turn, so a window never spans two
+people. A turn longer than the speech model's 8 s window is cut at the
+**quietest 200 ms between 6 s and 8 s** from its start, found in a loudness
+profile the service builds by reading the WAV 40 kB at a time (one mean
+absolute value per 20 ms — about 25 kB for a ten-minute note,
+`lib/model/loudness_profile.dart`). Without a profile the cut falls on 8 s,
+which is what the fixed grid always did. Voice-activity segmentation is NOT
+run as well: the turns already end in pauses, and it would cut across
+speakers.
+
+**Labels.** `S1`, `S2`, … in the order people first speak — not the
+clustering's own numbering — so they are stable within a note. Stored in the
+transcript's segments (`speaker`), which `Transcript` v1 has always allowed,
+so no format bump and no note transcribed twice. **One speaker means NO
+labels at all:** the note reads as plain paragraphs rather than "Speaker 1" in
+front of every one of them.
+
+**Language routing is unchanged** and still per window, so an English turn is
+decoded again by Parakeet and keeps its speaker.
+
+**Progress.** The separation pass is worth a tenth of the job, matching what it
+costs: `steps = ceil(gridWindows / 10)`, at least 1, and the fraction is
+`(steps + windowsDone) / (steps + windows)`. The TOTAL moves once, when the
+turns replace the fixed grid and there turn out to be a different number of
+windows — the English pass already moved it the same way.
+
+**Nothing installed, nothing said.** No diarizer, models missing or
+half-pushed, the engine failing, or nothing heard: the pass is skipped
+silently and the note is transcribed exactly as it was before this existed.
+Only a cancel is passed on.
+
+### The controller API
+
+- `speakerLabels(path)` / `speakerLabelsFor(path)` — the note's labels, in the
+  order they first speak; empty when the note has none.
+- `speakerCountFor(path)` — the stored override: null (Auto), 2, 3 or 4, where
+  **4 means "four or more"** (the clustering takes a number, and five voices
+  split into four still reads far better than one wall of text).
+- `setSpeakerCount(path, count)` — saves it and **re-transcribes**. The turn
+  boundaries move when the count changes, so the windows move, so the words
+  have to be decoded again: there is nothing safe to reuse. A note whose audio
+  the 24 h sweep removed keeps the choice and runs nothing.
+- `mergeSpeakers(path, from, into)` — rewrites the saved transcript at once
+  (no audio is touched) and remembers the merge, so a transcript made again
+  comes back merged the same way. Merging into a label that was itself merged
+  follows the chain. A merge that leaves ONE speaker leaves the note with no
+  labels, like a note the engine only ever heard one person in.
+- `renameSpeakers` / `speakerNamesFor` are unchanged; names and merges are
+  different things and survive different events.
+- Both are read by `loadSpeakerNames(path)` (and the count also by
+  `loadTranscript`), and live in
+  `voicenote-X.speaker-settings.json` beside the recording — a sidecar, so
+  transcribing again cannot lose them, and `LibraryService.deleteFiles`
+  removes it with the note.
+
+### Model delivery (speakers)
+
+Not bundled. From the sherpa-onnx GitHub release `k2-fsa/sherpa-onnx`:
+`speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2`
+(use `model.onnx`, NOT `model.int8.onnx`) and
+`speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx`
+(sic — the release tag is spelled that way). The app checks exact sizes
+(`DiarizationModels.pyannoteCamPlus`).
+
+```sh
+P=com.ganeshsharma.voicenotetaker_app
+D=files/models/diarization
+adb shell run-as $P mkdir -p $D
+adb exec-in run-as $P sh -c "cat > $D/segmentation.onnx" \
+  < sherpa-onnx-pyannote-segmentation-3-0/model.onnx
+adb exec-in run-as $P sh -c "cat > $D/campplus.onnx" \
+  < 3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx
+adb shell run-as $P sh -c "'chmod 700 files/models $D && chmod 600 $D/*'"
+adb shell run-as $P ls -l $D   # 5992913 and 28281164 bytes
+```
+
+### Real engine on the laptop — [V] 2026-09-16
+
+`test/speaker_diarizer_sherpa_test.dart`, the same shape as the recogniser's:
+
+```sh
+LD_LIBRARY_PATH=$HOME/.pub-cache/hosted/pub.dev/sherpa_onnx_linux-1.13.8/linux/x64 \
+STT_MODELS_DIR=/path/containing/diarization STT_WAV=/path/to/16k-mono.wav \
+STT_SPEAKERS=3 \
+  flutter test test/speaker_diarizer_sherpa_test.dart
+```
+
+(`LD_LIBRARY_PATH` is needed only for a host test: `flutter test` does not
+bundle the native library the way an APK does.)
+
+The Dart configuration loads this pair and separates off the calling isolate.
+On the three recordings that were still on the laptop — all of them ONE voice,
+the owner's — it answered one speaker every time, which is right:
+
+| File | Length | Raw turns | Clusters | After cleanup | RSS before → peak → after |
+|---|---|---|---|---|---|
+| `voicenote.wav` | 20.1 s | 3 | 1 | 1 speaker | 129 → 246 → 217 MB |
+| `fresh.wav` | 19.9 s | 2 | 1 | 1 speaker | 130 → 257 → 215 MB |
+| `from_phone.wav` | 7.6 s | 2 | 1 | 1 speaker | 129 → 220 → 210 MB |
+
+Two of them joined end to end (27.7 s, the same voice through two different
+microphones) reads as **one** speaker on Auto — the threshold is doing its job
+— and as **two** when the count is forced, split at 23.1 s against a true join
+at 20.1 s. So the count override reaches the engine and changes the answer.
+Asking for three on that file returns two: the engine gives what it can find,
+it does not invent a third.
+
+⚠️ **No two-person recording was available** (the spike's `rec/` and
+`rec-0915/` were gone from this machine), so how well it tells two REAL people
+apart is still unverified outside the spike's own report. The memory figures
+are a Linux test VM, where `M_PURGE` does nothing — the phone's are the ones
+that matter and have not been measured.
+
+### Honest limits
+
+- **Fast back-and-forth fails.** One-second exchanges are exactly what rules 3
+  and 4 above fold away, on purpose: a label that flickers mid-sentence is
+  worse than no label. A quick "haan… theek hai" from the other person will be
+  attributed to whoever was talking around it.
+- **Overlapping speech is a guess.** The overlap is cut down the middle and
+  given half to each; nobody is transcribed twice, so one of the two voices is
+  lost wherever they truly overlap.
+- **Long notes over-split.** The clustering sees a voice change with the
+  microphone, the room and the distance; an hour-long note can grow a speaker
+  that is really the same person further from the recorder. That is what
+  "How many people?" and merging are FOR, and why both are remembered.
+- **Neither model was trained on Hindi.** CAM++ `zh_en` is Chinese and
+  English; pyannote segmentation is multilingual but not tuned for Hindi or
+  Hinglish. Voices still separate on timbre rather than words, so it works —
+  but nobody has measured how well on Hindi, and it should be expected to be
+  worse than the English numbers published for these models.
+- **A note whose audio has been swept cannot be separated again**: the words
+  are all that is left.
+
+### Tests
+
+- Before: 1417 passed, 1 skipped. After: 1499 passed, 1 skipped.
+- New: `speaker_turns_test.dart` (every cleanup rule, label stability, window
+  planning and the 6–8 s split point, the loudness profile),
+  `speaker_settings_test.dart` (count range, merges including into an
+  already-merged label, chains and loops from a damaged file, the sidecar),
+  `speaker_diarization_service_test.dart` (the whole pipeline with a fake
+  diarizer: windows from turns, one-speaker suppression, count passed through,
+  the quiet split point, no audio dropped, VAD not run as well, the memory
+  order, progress fractions, missing/half-installed models, engine failure,
+  English routing per turn), `speaker_controller_test.dart` (labels, count
+  persistence and re-run, restart, audio gone, merges and their survival
+  across a re-run, names untouched) and `speaker_diarizer_sherpa_test.dart`
+  (the real engine, skipped without models).
+- `speech_recognizer_test.dart`'s "sherpa_onnx is imported by exactly one
+  file" is now "by the two driver files": the diarizer is the second, and the
+  rule it protects — one file per engine seam — is unchanged.

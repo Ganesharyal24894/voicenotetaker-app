@@ -1,4 +1,5 @@
 import '../../drivers/file_store.dart';
+import '../../model/diarization.dart';
 import '../../model/transcription.dart';
 
 /// Whether a speech model can be loaded right now.
@@ -76,6 +77,49 @@ class SpeechModelStore {
     }
   }
 
+  /// Where the speaker-separation models are expected.
+  String diarizationDirectoryFor(DiarizationModel model) =>
+      _fileStore.join(_modelsDirectory, model.directoryName);
+
+  String diarizationPathOf(DiarizationModel model, SpeechModelFile file) =>
+      _fileStore.join(diarizationDirectoryFor(model), file.name);
+
+  /// Checks both files of the speaker-separation [model], exactly as [status]
+  /// checks a speech model's.
+  ///
+  /// Missing is the ordinary case, not a failure: a phone without these files
+  /// transcribes notes without speaker labels, which is what the app did
+  /// before separation existed.
+  Future<DiarizationModelStatus> diarizationStatus(
+    DiarizationModel model,
+  ) async {
+    final problems = <String>[];
+    var present = 0;
+    for (final file in model.files) {
+      final info = await _fileStore.stat(diarizationPathOf(model, file));
+      if (info == null) {
+        problems.add('${file.name}: not found');
+      } else {
+        present++;
+        if (info.sizeBytes != file.sizeBytes) {
+          problems.add(
+            '${file.name}: ${info.sizeBytes} B, expected ${file.sizeBytes} B',
+          );
+        }
+      }
+    }
+    return DiarizationModelStatus(
+      model: model,
+      directory: diarizationDirectoryFor(model),
+      availability: problems.isEmpty
+          ? SpeechModelAvailability.ready
+          : present == 0
+              ? SpeechModelAvailability.missing
+              : SpeechModelAvailability.incomplete,
+      problems: List<String>.unmodifiable(problems),
+    );
+  }
+
   /// Checks every file of [model] for presence and exact size.
   ///
   /// Size, not a checksum: hashing 188 MB on a phone before every job would
@@ -110,4 +154,26 @@ class SpeechModelStore {
       problems: List<String>.unmodifiable(problems),
     );
   }
+}
+
+/// The on-disk state of a speaker-separation model pair.
+class DiarizationModelStatus {
+  const DiarizationModelStatus({
+    required this.model,
+    required this.directory,
+    required this.availability,
+    required this.problems,
+  });
+
+  final DiarizationModel model;
+
+  /// Where the files are expected.
+  final String directory;
+
+  final SpeechModelAvailability availability;
+
+  /// One line per file that is absent or the wrong size; empty when ready.
+  final List<String> problems;
+
+  bool get isReady => availability == SpeechModelAvailability.ready;
 }
