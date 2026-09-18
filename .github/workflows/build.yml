@@ -377,9 +377,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # `|| true` on the grep, not sloppiness: under `set -o pipefail` a
+          # grep that matches nothing exits 1 and takes the whole step with it.
+          # That is the state the very first run is in, and the state the repo
+          # returns to if every release is ever deleted by hand.
           gh release list --repo "$GITHUB_REPOSITORY" --limit 200 \
             --json tagName --jq '.[].tagName' \
-            | grep '^ios-v' \
+            | { grep '^ios-v' || true; } \
             | sort -Vr \
             | tail -n +11 \
             | while read -r tag; do
