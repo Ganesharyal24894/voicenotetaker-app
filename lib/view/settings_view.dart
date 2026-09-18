@@ -38,6 +38,7 @@ class SettingsView extends StatelessWidget {
     this.onConnect,
     this.onPairNewPhone,
     this.onOpenModels,
+    this.onExportNotes,
     super.key,
   });
 
@@ -54,6 +55,11 @@ class SettingsView extends StatelessWidget {
 
   /// Opens "Speech models". Null pushes it from here.
   final VoidCallback? onOpenModels;
+
+  /// Opens "Export notes" - one zip of the recordings and transcripts, handed
+  /// to the share sheet. Null hides the row, which is what a build with no
+  /// share sheet and a screen pumped on its own in a test both want.
+  final VoidCallback? onExportNotes;
 
   static const String title = 'Recorder settings';
 
@@ -115,10 +121,23 @@ class SettingsView extends StatelessWidget {
                               ),
                     ),
                   ],
-                  if (onOpenDiagnostics != null) ...<Widget>[
+                  // Two plain rows at the bottom, no section caption between
+                  // them: both are doors out of Settings rather than settings,
+                  // and each draws its own hairline so they stack.
+                  if (onExportNotes != null || onOpenDiagnostics != null)
                     const SizedBox(height: 16),
-                    _DiagnosticsRow(onTap: onOpenDiagnostics!),
-                  ],
+                  if (onExportNotes != null)
+                    _EndRow(
+                      title: 'Export notes',
+                      meta: 'One zip of your recordings and transcripts',
+                      onTap: onExportNotes!,
+                    ),
+                  if (onOpenDiagnostics != null)
+                    _EndRow(
+                      title: 'Diagnostics',
+                      meta: 'Battery, connection, mic check',
+                      onTap: onOpenDiagnostics!,
+                    ),
                 ],
               ),
             ),
@@ -591,16 +610,26 @@ class _AudioCard extends StatelessWidget {
   }
 }
 
-class _DiagnosticsRow extends StatelessWidget {
-  const _DiagnosticsRow({required this.onTap});
+/// A plain row at the foot of the screen: a title, a line of meta, a chevron
+/// and a hairline above it. Export notes and Diagnostics are both one of
+/// these, which is what makes them read as a pair rather than as two
+/// unrelated buttons that happen to be adjacent.
+class _EndRow extends StatelessWidget {
+  const _EndRow({
+    required this.title,
+    required this.meta,
+    required this.onTap,
+  });
 
+  final String title;
+  final String meta;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
-      label: 'Diagnostics',
+      label: title,
       container: true,
       excludeSemantics: true,
       onTap: onTap,
@@ -613,19 +642,19 @@ class _DiagnosticsRow extends StatelessWidget {
           decoration: const BoxDecoration(
             border: Border(top: BorderSide(color: AppColors.raised)),
           ),
-          child: const Row(
+          child: Row(
             children: <Widget>[
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text('Diagnostics', style: AppText.rowTitle),
-                    SizedBox(height: 4),
-                    Text('Battery, connection, mic check', style: AppText.rowMeta),
+                    Text(title, style: AppText.rowTitle),
+                    const SizedBox(height: 4),
+                    Text(meta, style: AppText.rowMeta),
                   ],
                 ),
               ),
-              AppIcon(
+              const AppIcon(
                 AppGlyph.chevronRight,
                 size: 17,
                 color: AppColors.textTertiary,

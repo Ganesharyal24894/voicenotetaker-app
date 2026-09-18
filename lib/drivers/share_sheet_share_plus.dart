@@ -15,4 +15,21 @@ class SharePlusShareSheet implements ShareSheet {
       ShareParams(text: text, subject: subject, sharePositionOrigin: origin),
     );
   }
+
+  @override
+  Future<void> shareFiles(
+    List<String> paths, {
+    String? subject,
+    String? text,
+    Rect? origin,
+  }) async {
+    await SharePlus.instance.share(
+      ShareParams(
+        files: <XFile>[for (final path in paths) XFile(path)],
+        text: text,
+        subject: subject,
+        sharePositionOrigin: origin,
+      ),
+    );
+  }
 }

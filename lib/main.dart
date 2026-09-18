@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'controller/app_controller.dart';
+import 'controller/export_controller.dart';
 import 'controller/summary_controller.dart';
 import 'drivers/app_directories.dart';
 import 'drivers/audio_player_just_audio.dart';
@@ -21,6 +22,7 @@ import 'drivers/platform_settings_channel.dart';
 import 'drivers/share_sheet_share_plus.dart';
 import 'drivers/speaker_diarizer_sherpa.dart';
 import 'drivers/speech_recognizer_sherpa.dart';
+import 'services/export/note_export_service.dart';
 import 'services/summary/day_summary_store.dart';
 import 'services/transcription/model_download_service.dart';
 import 'services/transcription/speech_model_store.dart';
@@ -135,14 +137,43 @@ Future<void> main() async {
     shareSheet: const SharePlusShareSheet(),
   );
 
-  runApp(VoiceNotetakerApp(controller: controller, summaries: summaries));
+  // "Export notes": one zip of the recordings directory, handed to the share
+  // sheet. The zip is written to the SUPPORT directory, not to documents:
+  // it is a copy made to be sent somewhere and then deleted, and a second
+  // copy of the whole library sitting in the user's Files app beside the real
+  // one is a way to lose track of which is which.
+  final exports = NoteExportService(
+    fileStore: fileStore,
+    recordingsDirectory: fileStore.join(documents, 'recordings'),
+    exportsDirectory: fileStore.join(support, 'exports'),
+    // Asked before a multi-hundred-megabyte zip is started, so an export that
+    // cannot fit says so first instead of filling the phone and failing.
+    diskSpace: const MethodChannelDiskSpace(),
+  );
+
+  runApp(VoiceNotetakerApp(
+    controller: controller,
+    summaries: summaries,
+    newExportController: () => ExportController(
+      exports: exports,
+      shareSheet: const SharePlusShareSheet(),
+    ),
+  ));
 }
 
 class VoiceNotetakerApp extends StatefulWidget {
-  const VoiceNotetakerApp({required this.controller, this.summaries, super.key});
+  const VoiceNotetakerApp({
+    required this.controller,
+    this.summaries,
+    this.newExportController,
+    super.key,
+  });
 
   final AppController controller;
   final SummaryController? summaries;
+
+  /// Makes the controller behind "Export notes", one per opening of the sheet.
+  final ExportController Function()? newExportController;
 
   @override
   State<VoiceNotetakerApp> createState() => _VoiceNotetakerAppState();
@@ -181,7 +212,11 @@ class _VoiceNotetakerAppState extends State<VoiceNotetakerApp> {
       title: 'voiceNotetaker',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(),
-      home: AppRoot(controller: widget.controller, summaries: widget.summaries),
+      home: AppRoot(
+        controller: widget.controller,
+        summaries: widget.summaries,
+        newExportController: widget.newExportController,
+      ),
     );
   }
 }

@@ -4,12 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../controller/export_controller.dart';
 import '../controller/summary_controller.dart';
 import '../model/device_state.dart';
 import '../model/recording_info.dart';
 import 'connection_lost_view.dart';
 import 'developer_view.dart';
 import 'diagnostics_view.dart';
+import 'export_notes_sheet.dart';
 import 'home/summarize_sheet.dart';
 import 'home/summary_scope.dart';
 import 'home_view.dart';
@@ -37,7 +39,12 @@ import 'theme.dart';
 /// All notes, a note, diagnostics and the developer screen are pushed on top,
 /// because they are places the user chose to go.
 class AppRoot extends StatefulWidget {
-  const AppRoot({required this.controller, this.summaries, super.key});
+  const AppRoot({
+    required this.controller,
+    this.summaries,
+    this.newExportController,
+    super.key,
+  });
 
   final AppController controller;
 
@@ -45,6 +52,15 @@ class AppRoot extends StatefulWidget {
   /// through [controller] and keeps nothing between launches - what a test
   /// that is not about summaries wants. `main.dart` passes a persisted one.
   final SummaryController? summaries;
+
+  /// Makes the controller behind "Export notes", one per opening of the sheet
+  /// - it owns a write that must be cancellable and a zip that must be thrown
+  /// away when the sheet closes, so a shared instance would be wrong.
+  ///
+  /// Null hides the row entirely. That is the honest state for a screen pumped
+  /// on its own in a test, and it is why nothing in Settings can offer an
+  /// export it has no way to perform.
+  final ExportController Function()? newExportController;
 
   @override
   State<AppRoot> createState() => _AppRootState();
@@ -225,8 +241,19 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         onConnect: () {
           if (mounted) setState(() => _pairing = true);
         },
+        onExportNotes: widget.newExportController == null
+            ? null
+            : () => _exportNotes(context),
       ),
     );
+  }
+
+  /// Opens "Export notes". A fresh controller each time, disposed by the
+  /// sheet, which is also what deletes the zip it made.
+  void _exportNotes(BuildContext context) {
+    final make = widget.newExportController;
+    if (make == null) return;
+    unawaited(showExportNotesSheet(context, exports: make()));
   }
 
   /// Pushes Device Diagnostics, and hands it the door to Developer options.

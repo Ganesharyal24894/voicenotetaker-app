@@ -74,7 +74,7 @@ version history and will install any of them.
 
 Your recordings and their transcripts live in the app's own **Documents**
 folder on the phone. From build **1.0.0.34** that folder is open, so there are
-two ways to get at it. Nothing here uploads anything anywhere - every route
+three ways to get at it. Nothing here uploads anything anywhere - every route
 below is the phone handing a file to something you chose.
 
 ### 1. The Files app, on the phone itself
@@ -128,6 +128,23 @@ and update.
 *(macOS instead of Linux: Finder shows the same folder. Plug the phone in,
 open Finder, pick the phone in the sidebar, then the **Files** tab, and drag
 `voiceNotetaker` out. Same files, same folder.)*
+
+### 3. No cable: Export notes
+
+**Recorder settings -> Export notes.** Pick **Today**, **Last 7 days** or
+**Everything**; it tells you how many notes and how big the zip will be before
+it makes one. Tap **Make the zip**, wait for the bar, then **Send it** - AirDrop
+to a Mac, Save to Files, attach it to a message, whatever the phone offers.
+
+The zip is uncompressed, so it weighs about what the notes weigh; a day of
+continuous recording can be several hundred megabytes, and the phone needs room
+for it as well as for the notes themselves. It says so rather than filling up.
+
+The zip is a copy; your notes have not moved. It is thrown away when you close
+the sheet without sending it, and if you did send it, the next time you open
+**Export notes** - not the moment the sheet closes, because AirDrop of a big
+file carries on after the sheet goes away and deleting it mid-flight would
+break the transfer.
 
 ### About backups and iCloud
 

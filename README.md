@@ -375,8 +375,9 @@ iPhone > voiceNotetaker" and is reachable over USB through AFC. That is what
 `tool/pull_iphone_notes.sh` uses: it mounts the container with `ifuse`, copies
 recordings, transcripts and sidecars into
 `~/personalProjects/notetaker-data/iphone-<timestamp>/`, checks counts, bytes
-and sha256s, and never deletes anything on the phone. See
-`doc/ios-install.md`.
+and sha256s, and never deletes anything on the phone. With no cable there is
+**Recorder settings -> Export notes**, which streams one uncompressed zip of
+the chosen range to the share sheet. See `doc/ios-install.md`.
 
 ## Application id — note
 

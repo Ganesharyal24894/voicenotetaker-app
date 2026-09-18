@@ -22,10 +22,20 @@ class FakeClipboard implements ClipboardText {
 
 class FakeShareSheet implements ShareSheet {
   final List<String> shared = <String>[];
+  final List<List<String>> sharedFiles = <List<String>>[];
 
   @override
   Future<void> shareText(String text, {String? subject, Rect? origin}) async =>
       shared.add(text);
+
+  @override
+  Future<void> shareFiles(
+    List<String> paths, {
+    String? subject,
+    String? text,
+    Rect? origin,
+  }) async =>
+      sharedFiles.add(List<String>.of(paths));
 }
 
 RecordingInfo recordingAt(DateTime at, {int minutes = 12, bool hasTranscript = true}) => RecordingInfo(
