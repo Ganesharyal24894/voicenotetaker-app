@@ -30,6 +30,32 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- YOUR NOTES ARE YOURS, AND REACHABLE WITHOUT THIS APP.
+
+	     Recordings and their transcripts are written to the app's Documents
+	     directory (`getApplicationDocumentsDirectory()`, which on iOS is
+	     NSDocumentDirectory). These two keys make that directory visible:
+
+	       UIFileSharingEnabled            -> Files app, under
+	                                          "On My iPhone > voiceNotetaker",
+	                                          and over USB through AFC, which
+	                                          is what ifuse's documents mode and
+	                                          Finder's Files tab read.
+	       LSSupportsOpeningDocumentsInPlace -> the Files app edits and shares
+	                                          the real file instead of handing
+	                                          out a copy, so a note opened
+	                                          from there is the note.
+
+	     WHAT THIS DOES NOT DO. It is not iCloud, not a sync, and not a new
+	     network path: there is no iCloud container and no entitlements file
+	     in this project, and nothing here uploads anywhere. Documents/ was
+	     already inside the iPhone's backup before these keys existed - they
+	     change who can SEE the folder on the phone, not where its bytes
+	     travel. See doc/ios-install.md. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

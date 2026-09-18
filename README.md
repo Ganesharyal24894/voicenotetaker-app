@@ -368,6 +368,16 @@ is, the 7-day expiry, the 3-app limit, and the two things the app genuinely
 cannot do on an iPhone (no background alert, and transcripts finish when the app
 is opened). The speech models download inside the app on both platforms.
 
+**Getting the notes back off the phone.** `ios/Runner/Info.plist` sets
+`UIFileSharingEnabled`, so the app's `Documents` directory - which holds
+`recordings/` and nothing else - shows up in the Files app under "On My
+iPhone > voiceNotetaker" and is reachable over USB through AFC. That is what
+`tool/pull_iphone_notes.sh` uses: it mounts the container with `ifuse`, copies
+recordings, transcripts and sidecars into
+`~/personalProjects/notetaker-data/iphone-<timestamp>/`, checks counts, bytes
+and sha256s, and never deletes anything on the phone. See
+`doc/ios-install.md`.
+
 ## Application id — note
 
 The Android namespace / iOS bundle id is `com.ganeshsharma.voicenotetaker_app`.
@@ -407,5 +417,7 @@ resolves inside `code_cache`, which the OS is free to evict.
 * `design/` — design mockups owned by the project owner. Not touched by the app
   code, not built into anything.
 * `tool/generate_adpcm_fixtures.py` — regenerates the golden vectors.
+* `tool/pull_iphone_notes.sh` — copies the notes off a USB-connected iPhone.
+  Read-only on the phone; needs `libimobiledevice-utils` and `ifuse`.
 * Git is handled by the project owner. Nothing here initialises a repository
   or commits.

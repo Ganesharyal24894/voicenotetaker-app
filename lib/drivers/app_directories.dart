@@ -23,6 +23,13 @@ abstract class AppDirectories {
   /// Must be a location the OS keeps until the app is uninstalled - a cache
   /// directory is not acceptable, because recordings there are evicted under
   /// storage pressure.
+  ///
+  /// THE USER CAN SEE INSIDE THIS ONE. On iOS `UIFileSharingEnabled` exposes
+  /// it in the Files app and over USB (which is how
+  /// `tool/pull_iphone_notes.sh` reaches it), so only files the user owns may
+  /// go here. Anything the APP needs and the user never asked for belongs in
+  /// [supportDirectory] - settings, downloaded models, and the temporary zip
+  /// an export makes.
   Future<String> documentsDirectory();
 
   /// Directory for files the APP needs and the user never sees - downloaded
@@ -38,8 +45,13 @@ abstract class AppDirectories {
 /// `path_provider` implementation.
 ///
 /// On Android this is the app's private `app_flutter` directory, on iOS the
-/// app's `Documents` directory; neither is a cache, so recordings survive a
-/// restart and are only removed when the app is uninstalled.
+/// app's `Documents` directory (`NSDocumentDirectory`); neither is a cache, so
+/// recordings survive a restart and are only removed when the app is
+/// uninstalled.
+///
+/// The iOS one is the directory `UIFileSharingEnabled` opens up - see
+/// `ios/Runner/Info.plist`. It is also inside the iPhone's encrypted backup,
+/// and always was; nothing in this app syncs it to iCloud Drive.
 class PathProviderAppDirectories implements AppDirectories {
   const PathProviderAppDirectories();
 

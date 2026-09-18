@@ -70,6 +70,89 @@ for the app, so you can always tell what is actually on the phone.
 If you want an older build, SideStore lists the last ten under the app's
 version history and will install any of them.
 
+## Getting your notes onto a computer
+
+Your recordings and their transcripts live in the app's own **Documents**
+folder on the phone. From build **1.0.0.34** that folder is open, so there are
+two ways to get at it. Nothing here uploads anything anywhere - every route
+below is the phone handing a file to something you chose.
+
+### 1. The Files app, on the phone itself
+
+Open **Files -> Browse -> On My iPhone -> voiceNotetaker -> recordings**.
+
+Every note is there: `voicenote-20260918-143005.wav` plus small `.json` files
+beside it holding its transcript and its speaker names. You can play one, copy
+it, AirDrop it, or move the lot into iCloud Drive or a Dropbox folder if you
+want to. Deleting from here deletes for real - the app has no second copy.
+
+### 2. Over a cable, which is what testing uses
+
+Plug the phone into a Linux or macOS machine and copy everything across in one
+command. On this laptop, once:
+
+```
+sudo apt install libimobiledevice-utils ifuse
+```
+
+Then, with the phone plugged in and unlocked:
+
+```
+cd ~/personalProjects/voicenotetaker-app
+tool/pull_iphone_notes.sh
+```
+
+The first time, the phone asks **"Trust This Computer?"**. Tap Trust and type
+the passcode, then run it again.
+
+It lands everything in a new folder named for the moment you pulled it:
+
+```
+~/personalProjects/notetaker-data/iphone-20260918-2115/
+  recordings/     every .wav and every .json beside it
+  MANIFEST.tsv    size, time and sha256 of each file
+  SUMMARY.txt     what was copied, and from which phone
+```
+
+It copies. It never deletes anything on the phone, and it has no code that
+could: the phone is mounted read-only. If the counts or the byte totals do not
+match it says so and stops with a non-zero exit, and running it again is the
+right response. To put the copy somewhere else, pass a directory:
+`tool/pull_iphone_notes.sh ~/somewhere-else`.
+
+If it cannot find the phone it will say which of the three usual things is
+wrong - cable, lock screen, or Trust. If `ifuse` says `ApplicationLookupFailed`
+the app on the phone is older than 1.0.0.34; refresh the source in SideStore
+and update.
+
+*(macOS instead of Linux: Finder shows the same folder. Plug the phone in,
+open Finder, pick the phone in the sidebar, then the **Files** tab, and drag
+`voiceNotetaker` out. Same files, same folder.)*
+
+### About backups and iCloud
+
+This is worth being clear about, because nothing here changed it.
+
+The Documents folder has always been part of the iPhone's backup - the iCloud
+backup if you have iCloud Backup on, or the Finder/iTunes backup if you back up
+to a computer (that one is only encrypted if you ticked "Encrypt local
+backup"). That was true before these builds and it is true now. Opening the
+folder to the Files app changes who can **see** it on the phone; it does not
+change where its bytes go.
+
+So: if iCloud Backup is on, your recordings are in it, as they already were.
+Nothing about them is separately synced to iCloud Drive, nothing is uploaded by
+the app, and the app makes no network request that carries audio - the only
+thing it ever downloads is the speech model, and the only thing it ever uploads
+is nothing.
+
+If you would rather your audio were not in the iCloud backup, turn iCloud
+Backup off for this app in **Settings -> [your name] -> iCloud -> Manage
+Storage -> Backups**, or leave **Delete audio after 24 h** on in Recorder
+settings so there is little audio to back up. We have deliberately not excluded
+the folder from backup in the app: that would mean a restored phone came back
+with no notes, silently, which is a worse surprise than this one.
+
 ## What this app cannot do on an iPhone
 
 None of these are bugs, and none of them are being worked around. They are what
