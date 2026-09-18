@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/model/auto_sleep.dart';
+import 'package:voicenotetaker_app/model/model_download.dart';
+import 'package:voicenotetaker_app/view/models_view.dart';
 import 'package:voicenotetaker_app/view/settings_view.dart';
 import 'package:voicenotetaker_app/view/widgets/common.dart';
 
@@ -110,6 +112,64 @@ void main() {
 
     expect(selected(tester, '1 min'), isTrue);
     expect(find.text(AutoSleepCard.couldNotChange), findsOneWidget);
+  });
+
+  testWidgets('speech models: the row says what is on the phone and opens the '
+      'screen', (tester) async {
+    final harness = ViewHarness();
+    addTearDown(harness.dispose);
+    var opened = false;
+    await pumpScreen(
+      tester,
+      SettingsView(
+        controller: harness.controller,
+        onBack: () {},
+        onOpenDiagnostics: () {},
+        onOpenModels: () => opened = true,
+      ),
+    );
+
+    expect(find.text('SPEECH MODELS'), findsOneWidget);
+    expect(find.text('Speech models'), findsOneWidget);
+    // A build with no downloader wired in has nothing installed, and says so
+    // rather than inventing a figure.
+    expect(find.text('Nothing downloaded yet'), findsOneWidget);
+
+    await tester.tap(find.bySemanticsLabel('Speech models'));
+    expect(opened, isTrue);
+  });
+
+  test('speech models: a phone with nothing installed goes to the picker', () {
+    final nothing = <ModelInstallStatus>[
+      for (final release in ModelCatalogue.all)
+        ModelInstallStatus.unknown(release),
+    ];
+    expect(SettingsView.opensSetup(nothing), isTrue);
+
+    final some = <ModelInstallStatus>[
+      ModelInstallStatus(
+        release: ModelCatalogue.hindiSpeech,
+        state: ModelInstallState.installed,
+      ),
+      ModelInstallStatus.unknown(ModelCatalogue.englishSpeech),
+    ];
+    expect(SettingsView.opensSetup(some), isFalse);
+
+    // A build with no downloader at all has nothing to pick from either.
+    expect(SettingsView.opensSetup(const <ModelInstallStatus>[]), isFalse);
+  });
+
+  testWidgets('speech models: with no callback the row pushes the screen '
+      'itself', (tester) async {
+    final harness = ViewHarness();
+    addTearDown(harness.dispose);
+    await pumpScreen(tester, screen(harness));
+
+    await tester.tap(find.bySemanticsLabel('Speech models'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ModelsSettingsView), findsOneWidget);
+    expect(find.text(ModelsCopy.settingsBody), findsOneWidget);
   });
 
   testWidgets('audio: the switch is the retention setting', (tester) async {

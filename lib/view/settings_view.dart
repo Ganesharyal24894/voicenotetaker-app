@@ -4,9 +4,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../controller/models_controller.dart';
 import '../model/auto_sleep.dart';
 import '../model/home_status.dart';
+import '../model/model_download.dart';
 import 'format.dart';
+import 'models_view.dart';
 import 'pair_new_phone_view.dart';
 import 'theme.dart';
 import 'widgets/app_icons.dart';
@@ -34,6 +37,7 @@ class SettingsView extends StatelessWidget {
     this.onOpenDiagnostics,
     this.onConnect,
     this.onPairNewPhone,
+    this.onOpenModels,
     super.key,
   });
 
@@ -47,6 +51,9 @@ class SettingsView extends StatelessWidget {
 
   /// Opens the "Pair a new phone" instructions. Null pushes them from here.
   final VoidCallback? onPairNewPhone;
+
+  /// Opens "Speech models". Null pushes it from here.
+  final VoidCallback? onOpenModels;
 
   static const String title = 'Recorder settings';
 
@@ -87,6 +94,12 @@ class SettingsView extends StatelessWidget {
                   const SizedBox(height: 16),
                   const _Section('Audio'),
                   _AudioCard(controller: controller),
+                  const SizedBox(height: 16),
+                  const _Section(ModelsCopy.settingsTitle),
+                  _ModelsCard(
+                    controller: controller,
+                    onTap: onOpenModels ?? () => _openModels(context),
+                  ),
                   if (controller.pairedToThisPhone) ...<Widget>[
                     const SizedBox(height: 16),
                     const _Section('Pairing'),
@@ -111,6 +124,36 @@ class SettingsView extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Which speech-model screen the row opens.
+  ///
+  /// A PHONE WITH NOTHING INSTALLED HAS NOTHING TO MANAGE. There is one thing
+  /// to do - pick the packs and start - so the row goes straight to the setup
+  /// screen, with its ticks and its one-time total, rather than to a list of
+  /// three rows that each say Download. Once a pack is here, the manage screen
+  /// is the useful one.
+  static bool opensSetup(List<ModelInstallStatus> statuses) =>
+      statuses.isNotEmpty && !statuses.any((status) => status.isInstalled);
+
+  /// Speech models is a page under this screen, the way Diagnostics is.
+  void _openModels(BuildContext context) {
+    final models = AppControllerModels(controller);
+    final setup = opensSetup(controller.modelStatuses);
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => setup
+            ? ModelsSetupView(
+                models: models,
+                backLabel: SettingsView.title,
+                onBack: () => Navigator.of(context).pop(),
+              )
+            : ModelsSettingsView(
+                models: models,
+                onBack: () => Navigator.of(context).pop(),
+              ),
       ),
     );
   }
@@ -198,6 +241,78 @@ class PairingCard extends StatelessWidget {
             onPressed: onPairNewPhone,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// "Speech models": how much is installed, and the way into the screen that
+/// manages it.
+///
+/// THE SIZE IS THE POINT OF THE ROW. A pack is the largest thing this app ever
+/// puts on somebody's phone, so the number is on the row itself rather than one
+/// tap further in.
+class _ModelsCard extends StatelessWidget {
+  const _ModelsCard({required this.controller, required this.onTap});
+
+  final AppController controller;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final statuses = controller.modelStatuses;
+    final installed = statuses.where((status) => status.isInstalled).length;
+    final busy = statuses.any((status) => status.isBusy);
+    final String meta;
+    if (busy) {
+      meta = 'Downloading\u2026';
+    } else if (installed == 0) {
+      meta = 'Nothing downloaded yet';
+    } else {
+      meta = '$installed of ${statuses.length} downloaded \u00B7 '
+          '${formatBytes(controller.installedModelBytes)}';
+    }
+
+    return Semantics(
+      button: true,
+      label: ModelsCopy.settingsTitle,
+      container: true,
+      excludeSemantics: true,
+      onTap: onTap,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: AppCard(
+          padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+          child: ConstrainedBox(
+            constraints:
+                const BoxConstraints(minHeight: AppShape.minTapTarget),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      const Text(
+                        ModelsCopy.settingsTitle,
+                        style: AppText.rowTitle,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(meta, style: AppText.rowMeta),
+                    ],
+                  ),
+                ),
+                const AppIcon(
+                  AppGlyph.chevronRight,
+                  size: 17,
+                  color: AppColors.textTertiary,
+                  strokeWidth: 1.7,
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

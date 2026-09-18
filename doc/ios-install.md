@@ -85,10 +85,17 @@ run a timer pretending otherwise.
 recorder is linked, but the transcription only runs while the app is on screen.
 Open the app for a minute and it catches up.
 
-**The speech model cannot be downloaded in the app yet.** Transcription runs
-entirely on the phone, which means the model has to be on the phone, and there
-is no download button for it yet. Until there is, notes record and save
-normally and transcripts report a missing model.
+**The speech model downloads inside the app, over Wi-Fi.** Transcription runs
+entirely on the phone, so the language pack has to be on the phone. Open a note
+that has not been written down and tap **Download the language pack**, or go to
+**Recorder settings → Speech models**. Hindi is 197 MB and speaker detection is
+34 MB; English is another 136 MB if you want it. It is a one-time download and
+it works offline afterwards.
+
+**A download pauses when you leave the app.** iOS suspends the app within
+seconds of it going off screen, so the download stops where it is and carries
+on from that byte when you come back. Nothing is lost, and nothing downloads
+behind your back. (On Android it keeps going while the app is open.)
 
 ## If something goes wrong
 

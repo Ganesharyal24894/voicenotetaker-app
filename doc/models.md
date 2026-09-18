@@ -241,10 +241,46 @@ about fifteen lines each, written the same way and for the same reason as
 `MethodChannelPlatformSettings`. A platform with no handler answers null and
 the download starts anyway.
 
-## What the UI will need
+## The screens
+
+`lib/view/models_view.dart`, drawn from the approved artboards
+`ModelsSetup.dc.html`, `ModelsDownloading.dc.html`, `ModelsSettings.dc.html`
+and `NoteBlocked.dc.html`. Widget tests: `test/view/models_view_test.dart`.
+
+**Setup — "Download the language pack".** The three sets, what each one does,
+its size, and a tick per set: Hindi and speaker detection ticked, English off.
+A one-time total that follows the ticks and counts only what is NOT already on
+the phone, a line saying whether downloads wait for Wi-Fi, and one primary
+action. Reached from a note that cannot be transcribed, and from Recorder
+settings on a phone with no pack installed yet — there is nothing to manage
+there, only something to pick.
+
+**Downloading.** The same screen, once something is in flight: an overall line
+and bar, a row per set with its own bytes and bar, `Checking…` while a sha256
+is being read, and the downloader's own failure sentence printed as written —
+the screen never composes one. Pause stops what is running and keeps the bytes
+(the button then says Resume); Cancel stops and goes back to the picker;
+`Try again` replaces Pause when everything has stopped and something failed.
+When it all lands the screen says so and offers the way out.
+
+**Recorder settings → Speech models.** What is on the phone with its size and
+Remove (confirmed — the undo is the whole download again), what is not with
+Download, anything running with its progress and Cancel, the "Download over
+mobile data" switch, and the total space used.
+
+**A blocked note.** `NoteBlocked`: the note's transcript area when the pack is
+missing is one friendly line, the size it costs, and one action that opens the
+setup screen. The note's bottom bar becomes that action, because nothing else
+on it can do anything for a note with no words yet.
+
+Everything is live: the controller is a `Listenable`, so progress, a set that
+finishes, and a set removed on another screen all redraw where they are.
+
+### What the screens are written against
 
 `ModelsController` (`lib/controller/models_controller.dart`) is the whole
-surface. One status per **feature**, never per file:
+surface — no screen here names `AppController`. One status per **feature**,
+never per file:
 
 ```dart
 List<ModelInstallStatus> get modelStatuses;
@@ -265,4 +301,12 @@ Future<void> refreshModels();
 prints it, it does not compose one). `formatBytes` turns any of the byte counts
 into `197 MB`.
 
-There is no screen yet: the designs go to a canvas for approval first.
+### The words are the screens', not the catalogue's
+
+`ModelCatalogue` calls a set "Hindi speech" and explains it in a sentence
+written for whoever is reading the catalogue. The approved screens say "Hindi
+transcription" and "Writes down Hindi and Hinglish". `ModelsCopy` in
+`models_view.dart` holds every word a person reads, so publishing a new release
+tag never rewrites the UI, and one test asserts the sizes the artboards were
+drawn against (197 / 136 / 34 MB, 231 MB for the two that are ticked) are still
+the catalogue's.

@@ -330,7 +330,9 @@ maintained by the Flutter team, and appears only in
 ### The speech models — licensing rationale
 
 The models are not packages and are not in the repository: the app downloads
-them on demand from our own release. All four are open and redistributable —
+them on demand from our own release, from a screen in the app (Recorder
+settings → Speech models, or straight from a note that has not been written
+down yet). All four are open and redistributable —
 IndicConformer **MIT**, Parakeet **CC-BY-4.0**, pyannote segmentation **MIT**,
 CAM++ **Apache-2.0** — and the attribution each one asks for, with the
 citations, is in **[MODEL-CREDITS.md](MODEL-CREDITS.md)**. How they are hosted
@@ -362,9 +364,9 @@ signed on the phone with the owner's own free Apple ID, so no Apple Developer
 Program membership and no secret in this repo are involved anywhere.
 
 **[doc/ios-install.md](doc/ios-install.md)** is the instructions: what SideStore
-is, the 7-day expiry, the 3-app limit, and the three things the app genuinely
-cannot do on an iPhone (no background alert, transcripts finish when the app is
-opened, and no in-app model download yet).
+is, the 7-day expiry, the 3-app limit, and the two things the app genuinely
+cannot do on an iPhone (no background alert, and transcripts finish when the app
+is opened). The speech models download inside the app on both platforms.
 
 ## Application id — note
 

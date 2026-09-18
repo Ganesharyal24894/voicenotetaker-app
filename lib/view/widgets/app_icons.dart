@@ -73,6 +73,20 @@ enum AppGlyph {
   /// Diagnostics. Drawn in the same 24x24 box and the same stroke weight as the
   /// rest, so it sits at a heading's weight rather than shouting.
   info,
+
+  // ---------------------------------------------------------------------
+  // The model downloader, from `ModelsSetup.dc.html`,
+  // `ModelsDownloading.dc.html` and `NoteBlocked.dc.html`.
+  // ---------------------------------------------------------------------
+
+  /// An arrow down into an open tray - "Download".
+  download,
+
+  /// Three arcs over a dot - "Wi-Fi only".
+  wifi,
+
+  /// Two upright bars - pausing a download.
+  pause,
 }
 
 /// A stroke-based vector icon drawn with a [CustomPainter].
@@ -473,6 +487,75 @@ class _GlyphPainter extends CustomPainter {
           Path()
             ..moveTo(12, 7.6)
             ..lineTo(12, 7.7),
+        ];
+      case AppGlyph.download:
+        return <Path>[
+          // The shaft.
+          Path()
+            ..moveTo(12, 3.5)
+            ..lineTo(12, 14.5),
+          // The head.
+          Path()
+            ..moveTo(7.5, 10)
+            ..lineTo(12, 14.5)
+            ..lineTo(16.5, 10),
+          // M5 15.5 V18 a3 3 0 0 0 3 3 h8 a3 3 0 0 0 3 -3 v-2.5
+          Path()
+            ..moveTo(5, 15.5)
+            ..lineTo(5, 18)
+            ..arcToPoint(
+              const Offset(8, 21),
+              radius: const Radius.circular(3),
+              clockwise: false,
+            )
+            ..lineTo(16, 21)
+            ..arcToPoint(
+              const Offset(19, 18),
+              radius: const Radius.circular(3),
+              clockwise: false,
+            )
+            ..lineTo(19, 15.5),
+        ];
+      case AppGlyph.wifi:
+        return <Path>[
+          // M2.5 9 a14.5 14.5 0 0 1 19 0
+          Path()
+            ..moveTo(2.5, 9)
+            ..arcToPoint(
+              const Offset(21.5, 9),
+              radius: const Radius.circular(14.5),
+              clockwise: true,
+            ),
+          // M6.25 13 a9.25 9.25 0 0 1 11.5 0
+          Path()
+            ..moveTo(6.25, 13)
+            ..arcToPoint(
+              const Offset(17.75, 13),
+              radius: const Radius.circular(9.25),
+              clockwise: true,
+            ),
+          // M9.75 16.9 a4.5 4.5 0 0 1 4.5 0
+          Path()
+            ..moveTo(9.75, 16.9)
+            ..arcToPoint(
+              const Offset(14.25, 16.9),
+              radius: const Radius.circular(4.5),
+              clockwise: true,
+            ),
+          // The dot under the arcs.
+          Path()
+            ..addOval(
+              Rect.fromCircle(center: const Offset(12, 20.2), radius: 1.1),
+            ),
+        ];
+      case AppGlyph.pause:
+        return <Path>[
+          Path()
+            ..moveTo(9.5, 5)
+            ..lineTo(9.5, 19),
+          Path()
+            ..moveTo(14.5, 5)
+            ..lineTo(14.5, 19),
         ];
       case AppGlyph.play:
         return const <Path>[];

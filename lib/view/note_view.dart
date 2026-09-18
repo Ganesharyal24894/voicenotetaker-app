@@ -5,12 +5,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../controller/app_controller.dart';
+import '../controller/models_controller.dart';
 import '../controller/speakers_controller.dart';
 import '../drivers/audio_player.dart';
+import '../model/model_download.dart';
 import '../model/recording_info.dart';
 import '../model/speaker_names.dart';
 import '../model/transcript.dart';
 import '../model/transcript_paragraphs.dart';
+import 'models_view.dart';
 import 'note_audio_panel.dart';
 import 'note_list.dart';
 import 'speaker_palette.dart';
@@ -34,6 +37,7 @@ class NoteView extends StatefulWidget {
     this.onBack,
     this.onDeleted,
     this.onSummarize,
+    this.onDownloadModels,
     this.now,
     super.key,
   });
@@ -51,6 +55,10 @@ class NoteView extends StatefulWidget {
 
   /// "Summarize with your AI". Null disables the button.
   final VoidCallback? onSummarize;
+
+  /// Opens the language-pack setup screen from the blocked state. Null pushes
+  /// it from here.
+  final VoidCallback? onDownloadModels;
 
   /// "Today" and "Audio deletes in 18 h" are relative to this; the wall clock
   /// when null.
@@ -100,6 +108,36 @@ class _NoteViewState extends State<NoteView> {
   }
 
   DateTime get _now => widget.now ?? DateTime.now();
+
+  /// The pack this note is waiting on.
+  ///
+  /// THE PRIMARY MODEL, WHICH IS HINDI. A note is reported as blocked by
+  /// `_requireModel` on the way in, before any window is routed to English, so
+  /// the set that is missing is the one the router starts from - see
+  /// `transcription_service.dart`.
+  ModelInstallStatus get _blockingModel =>
+      _models.modelStatusFor(ModelFeature.hindiSpeech);
+
+  /// The note screen's one way into the downloader, written against
+  /// [ModelsController] for the same reason the Speakers sheet is written
+  /// against [SpeakersController].
+  late final ModelsController _models = AppControllerModels(_controller);
+
+  void _openModelSetup() {
+    final open = widget.onDownloadModels;
+    if (open != null) {
+      open();
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => ModelsSetupView(
+          models: _models,
+          onBack: () => Navigator.of(context).pop(),
+        ),
+      ),
+    );
+  }
 
   bool get _canPlay => _controller.canPlay && _recording.hasAudio;
 
@@ -653,9 +691,9 @@ class _NoteViewState extends State<NoteView> {
             action = ('Transcribe', _transcribe);
           }
         case TranscriptStatus.modelMissing:
-          line = "The Hindi speech model isn't on this phone.";
-          color = AppColors.warning;
-          action = ('Try again', _transcribe);
+          // Its own body, not a line: nothing is wrong with the note, the
+          // phone simply has not been given the words to write it down with.
+          return _blockedBody();
         case TranscriptStatus.unsupported:
           line = "This audio can't be transcribed.";
           color = AppColors.error;
@@ -707,7 +745,70 @@ class _NoteViewState extends State<NoteView> {
     );
   }
 
+  /// `NoteBlocked.dc.html`: the transcript area when the language pack is not
+  /// on this phone. One friendly line, the size it costs, and ONE thing to do
+  /// about it - which is the bottom action, so the button is where the screen's
+  /// primary action always is.
+  Widget _blockedBody() {
+    final status = _blockingModel;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 20, left: 12, right: 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: AppColors.card,
+                border: Border.all(color: AppColors.border),
+                borderRadius: AppShape.card,
+              ),
+              alignment: Alignment.center,
+              child: const AppIcon(
+                AppGlyph.download,
+                size: 28,
+                color: AppColors.purpleText,
+                strokeWidth: 1.6,
+              ),
+            ),
+            const SizedBox(height: 22),
+            const Text(
+              ModelsCopy.blockedTitle,
+              textAlign: TextAlign.center,
+              style: AppText.title21,
+            ),
+            const SizedBox(height: 10),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 300),
+              child: Text(
+                ModelsCopy.blockedBody,
+                textAlign: TextAlign.center,
+                style: AppText.meta14
+                    .copyWith(color: AppColors.textSecondary, height: 1.55),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(formatBytes(status.bytesTotal), style: AppText.meta13),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _bottomBar(RecordingInfo recording, Transcript? spoken) {
+    // Nothing on this bar can do anything for a note whose pack is missing,
+    // and the one thing that can is not on the bar at all. So it becomes that.
+    if (_controller.transcriptStatusFor(recording) ==
+        TranscriptStatus.modelMissing) {
+      return PrimaryButton(
+        label: ModelsCopy.blockedAction,
+        glyph: AppGlyph.download,
+        height: 48,
+        onPressed: _openModelSetup,
+      );
+    }
     return Row(
       children: <Widget>[
         Expanded(

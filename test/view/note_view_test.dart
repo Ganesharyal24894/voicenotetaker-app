@@ -5,11 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/drivers/audio_player.dart';
+import 'package:voicenotetaker_app/model/model_download.dart';
 import 'package:voicenotetaker_app/model/recording_info.dart';
 import 'package:voicenotetaker_app/model/transcript.dart';
 import 'package:voicenotetaker_app/model/transcription.dart';
 import 'package:voicenotetaker_app/services/library_service.dart';
 import 'package:voicenotetaker_app/services/transcription/transcript_store.dart';
+import 'package:voicenotetaker_app/view/models_view.dart';
 import 'package:voicenotetaker_app/view/note_audio_panel.dart';
 import 'package:voicenotetaker_app/view/note_view.dart';
 import 'package:voicenotetaker_app/view/widgets/waveform.dart';
@@ -349,7 +351,8 @@ void main() {
       expect(find.text('Delete note'), findsOneWidget);
     });
 
-    testWidgets('model missing: says so plainly', (tester) async {
+    testWidgets('model missing: offers the language pack, and the size',
+        (tester) async {
       final recognizer = ScriptedRecognizer();
       final note = await _open(
         tester,
@@ -359,9 +362,61 @@ void main() {
       await tester.tap(find.bySemanticsLabel('Transcribe'));
       await runJob(tester, note);
 
-      expect(find.text("The Hindi speech model isn't on this phone."),
-          findsOneWidget);
+      expect(find.text(ModelsCopy.blockedTitle), findsOneWidget);
+      expect(find.text(ModelsCopy.blockedBody), findsOneWidget);
+      expect(
+        find.text(formatBytes(ModelCatalogue.hindiSpeech.totalBytes)),
+        findsOneWidget,
+      );
+      // The one action replaces the bar that could do nothing for this note.
+      expect(find.text(ModelsCopy.blockedAction), findsOneWidget);
+      expect(find.text('Summarize with your AI'), findsNothing);
       expect(recognizer.calls, 0);
+      expectNoRawErrors();
+    });
+
+    testWidgets('model missing: the pack landing unblocks the note',
+        (tester) async {
+      final recognizer = ScriptedRecognizer()
+        ..texts = <int, String>{0: 'अब हुआ'};
+      final note = await _open(
+        tester,
+        recognizer: recognizer,
+        speechModelInstalled: false,
+      );
+      await tester.tap(find.bySemanticsLabel('Transcribe'));
+      await runJob(tester, note);
+      expect(find.text(ModelsCopy.blockedTitle), findsOneWidget);
+
+      // What a finished download leaves behind: the files, where the engine
+      // looks for them.
+      note.harness.installSpeechModel();
+      await tester.tap(find.bySemanticsLabel('More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Transcribe again'));
+      await runJob(tester, note);
+
+      expect(find.text(ModelsCopy.blockedTitle), findsNothing);
+      expect(find.text(ModelsCopy.blockedAction), findsNothing);
+      expect(find.text('अब हुआ'), findsOneWidget);
+      expect(find.text('Summarize with your AI'), findsOneWidget);
+    });
+
+    testWidgets('model missing: the action opens the setup screen',
+        (tester) async {
+      final note = await _open(
+        tester,
+        recognizer: ScriptedRecognizer(),
+        speechModelInstalled: false,
+      );
+      await tester.tap(find.bySemanticsLabel('Transcribe'));
+      await runJob(tester, note);
+
+      await tester.tap(find.text(ModelsCopy.blockedAction));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ModelsSetupView), findsOneWidget);
+      expect(find.text(ModelsCopy.pick.toUpperCase()), findsOneWidget);
       expectNoRawErrors();
     });
   });
