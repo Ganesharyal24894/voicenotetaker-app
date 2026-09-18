@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
@@ -220,12 +221,24 @@ class _Section extends StatelessWidget {
 /// on why - when the phone has not already granted them. Declining still turns
 /// it on: it then works while the app is open, which is better than a switch
 /// that refuses.
+///
+/// On iPhone there is nothing to grant and nothing to ask, so the dialog never
+/// appears - but the switch would then quietly promise Android's behaviour.
+/// [iosNote] is the one line that says what actually happens instead, and it
+/// shows on iOS only.
 class AlwaysListeningCard extends StatelessWidget {
   const AlwaysListeningCard({required this.controller, super.key});
 
   final AppController controller;
 
   static const String title = 'Always listening';
+
+  /// What iPhone does differently, in the two ways a person would notice:
+  /// transcripts wait, and a problem waits to be seen rather than buzzing.
+  static const String iosNote =
+      'On iPhone, notes keep saving while the recorder is linked, but '
+      'transcripts finish when you open the app - and you will see any '
+      'problem here rather than as an alert.';
 
   @override
   Widget build(BuildContext context) {
@@ -238,7 +251,7 @@ class AlwaysListeningCard extends StatelessWidget {
       storage: controller.recorderStorage,
     );
 
-    return AppCard(
+    final card = AppCard(
       padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
       child: Row(
         children: <Widget>[
@@ -281,6 +294,18 @@ class AlwaysListeningCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+
+    if (defaultTargetPlatform != TargetPlatform.iOS) return card;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        card,
+        const Padding(
+          padding: EdgeInsets.fromLTRB(4, 8, 4, 0),
+          child: Text(iosNote, style: AppText.footnote12),
+        ),
+      ],
     );
   }
 

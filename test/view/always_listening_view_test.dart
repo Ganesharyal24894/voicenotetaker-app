@@ -1,4 +1,5 @@
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
@@ -50,6 +51,30 @@ void main() {
     await harness.connect(tester);
     return harness;
   }
+
+  testWidgets('iPhone says what it does differently; Android does not',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    try {
+      final harness = await connected(tester);
+      await pumpScreen(tester, home(harness));
+      await openSheet(tester);
+
+      expect(find.text(AlwaysListeningCard.title), findsOneWidget);
+      expect(find.text(AlwaysListeningCard.iosNote), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('the iPhone line is not shown on Android', (tester) async {
+    final harness = await connected(tester);
+    await pumpScreen(tester, home(harness));
+    await openSheet(tester);
+
+    expect(find.text(AlwaysListeningCard.title), findsOneWidget);
+    expect(find.text(AlwaysListeningCard.iosNote), findsNothing);
+  });
 
   testWidgets('off, it offers itself and leaves Home as it was',
       (tester) async {

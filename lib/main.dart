@@ -47,20 +47,38 @@ Future<void> main() async {
   // One object behind both seams: the radio, and pairing on that radio.
   final ble = UniversalBleTransport();
 
+  // Asked once. Three things below hang off it, and the reasons differ - see
+  // each one.
+  final android = defaultTargetPlatform == TargetPlatform.android;
+
   final controller = AppController(
     transport: ble,
     pairing: ble,
     fileStore: fileStore,
     audioPlayer: JustAudioPlayer(),
     platformSettings: const MethodChannelPlatformSettings(),
-    backgroundMode: const MethodChannelBackgroundMode(),
-    // The not-saving alert's buzz. Android only in practice - see Haptics.
-    haptics: const MethodChannelHaptics(),
+    // ANDROID ONLY, AND SAID SO HERE RATHER THAN DISCOVERED AT RUNTIME.
+    //
+    // Both of these are the app's own method channel, answered by
+    // `EngineHolder.kt`. iOS has no handler, and both drivers swallow the
+    // MissingPluginException - so wiring them everywhere does not crash, it
+    // does something worse: the not-saving alert believes it has a way to
+    // reach the wearer, runs its 30 s timer, and then buzzes into a vibrator
+    // that is not there and writes to a notification that does not exist.
+    // Nobody is told anything, and a timer runs to say it.
+    //
+    // Passing null instead makes the controller's "nobody to tell" branch
+    // true, so on iOS no timer runs at all and the header line - which the
+    // user sees when they open the app - is the honest single surface.
+    // `AlwaysListeningCard` says as much in one line, on iOS only.
+    backgroundMode:
+        android ? const MethodChannelBackgroundMode() : null,
+    haptics: android ? const MethodChannelHaptics() : null,
     phonePower: BatteryPlusPhonePower(),
     // Android only: its foreground service keeps this isolate alive with the
     // screen off. iOS makes no such promise, so there transcription waits for
     // the app to be opened.
-    backgroundTranscription: defaultTargetPlatform == TargetPlatform.android,
+    backgroundTranscription: android,
     // App data, not the user's documents: which device to reach, and whether
     // to keep listening.
     settingsDirectory: support,

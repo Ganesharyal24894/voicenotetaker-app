@@ -62,6 +62,25 @@ jobs:
 
       - run: flutter pub get
 
+      # NO `pod install` STEP, ON PURPOSE.
+      #
+      # This project is on Swift Package Manager, not CocoaPods: there is no
+      # Podfile and no Podfile.lock in the repo, and every native plugin it
+      # uses (universal_ble, just_audio, battery_plus, share_plus, audio_session,
+      # sherpa_onnx_ios) ships a Package.swift. `flutter build ios` resolves
+      # them itself. Adding `pod install` here would fail with "no Podfile",
+      # and adding a Podfile to satisfy it would switch the build back to
+      # CocoaPods for no gain.
+      #
+      # This only holds while SPM is on, which it is by default on the stable
+      # channel from the Flutter version pinned above. If that pin ever moves
+      # backwards, the build falls back to CocoaPods with a Podfile generated
+      # on the fly - unpinned and uncommitted. The pin is load-bearing for a
+      # second reason too: AppDelegate.swift conforms to
+      # FlutterImplicitEngineDelegate and SceneDelegate.swift subclasses
+      # FlutterSceneDelegate, both recent UIScene-migration APIs, so an older
+      # Flutter is a compile error rather than a warning.
+
       # --no-codesign is what makes this possible without an Apple account:
       # it skips the signing identity that CI does not have and cannot get.
       #

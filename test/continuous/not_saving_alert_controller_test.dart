@@ -120,6 +120,34 @@ void main() {
     expect(background.running, isFalse);
   });
 
+  test('iPhone wiring - no notification, no vibrator - runs nothing at all, '
+      'and the screen still tells the truth', () async {
+    // What `main.dart` passes on iOS: both drivers null, because the app's
+    // background channel has no iOS handler. Wiring them anyway would leave
+    // this alert buzzing and notifying into nothing while a timer ran to do
+    // it.
+    final harness = ViewHarness(
+      backgroundMode: null,
+      haptics: null,
+      notSavingAlert: NotSavingAlertPolicy(grace: grace),
+    )..captureSupported = true;
+    addTearDown(harness.dispose);
+    await harness.controller.initialise();
+    await harness.controller.connect(knownDevice);
+    await harness.controller.setContinuousEnabled(true);
+    failReconnects(harness);
+
+    harness.link.add(BleConnectionStatus.disconnected);
+    await wait(grace * 3);
+
+    // Nothing was raised, because there is nobody to raise it to.
+    expect(harness.controller.notSavingAlerting, isFalse);
+
+    // But the status the screen reads is unchanged: opening the app still
+    // shows that notes are not being saved, and why.
+    expect(harness.controller.notesSaving, NotesSaving.disconnected);
+  });
+
   test('never alerts while always listening is off', () async {
     final haptics = FakeHaptics();
     final harness = ViewHarness(

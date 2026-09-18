@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:battery_plus/battery_plus.dart';
+import 'package:flutter/services.dart';
 
 import '../model/phone_power.dart';
 import 'background_mode_channel.dart';
@@ -39,7 +40,16 @@ class BatteryPlusPhonePower implements PhonePower {
       }),
       batterySaver: await _try(() => _battery.isInBatterySaveMode),
       thermal: await _try(() async {
-        final status = await MethodChannelBackgroundMode.channel.invokeMethod<int>('thermalStatus');
+        // Named, not left to [_try]: this channel has no iOS handler, so a
+        // MissingPluginException there is the ORDINARY case rather than a
+        // failure, and a later narrowing of [_try] must not turn it into one.
+        final int? status;
+        try {
+          status = await MethodChannelBackgroundMode.channel
+              .invokeMethod<int>('thermalStatus');
+        } on MissingPluginException {
+          return null;
+        }
         if (status == null ||
             status < 0 ||
             status >= ThermalState.values.length) {
