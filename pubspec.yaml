@@ -37,6 +37,15 @@ dependencies:
   # permission on iOS; the plugin's own manifest adds ACCESS_NETWORK_STATE on
   # Android, which is a normal permission with no prompt. Named in
   # lib/drivers/network_status_connectivity.dart and nowhere else.
+  #
+  # ITS iOS SIDE NEEDS A CURRENT SDK. From 7.1.0 its NWPathMonitor provider
+  # reads `NWPath.isUltraConstrained` behind `if #available(iOS 26.0, *)`.
+  # That gate is a runtime one; the symbol must still exist when the Swift is
+  # compiled, so building this app needs the iOS 26 SDK or newer. CI does -
+  # the ios job runs on macos-26 and asserts the SDK version before building.
+  # Anyone building on a Mac with Xcode 16 will see
+  # "Value of type 'NWPath' has no member 'isUltraConstrained'"; the answer is
+  # a newer Xcode, not an older plugin.
   connectivity_plus: ^7.3.1
 
   # sha256, to check a downloaded model once before it is moved into place.

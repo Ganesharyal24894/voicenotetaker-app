@@ -57,7 +57,34 @@ jobs:
     needs: test
     # Pinned rather than macos-latest so an Xcode bump is a deliberate commit
     # and not a surprise red build.
-    runs-on: macos-15
+    #
+    # WHY THIS IS macos-26 AND NOT macos-15.
+    #
+    # macos-15's DEFAULT toolchain is Xcode 16.4, whose iOS SDK is 18.5 - a
+    # year behind the phones this app installs on. That is not a neutral
+    # choice: a plugin that touches any current iOS API stops compiling, even
+    # when it has gated the call correctly. connectivity_plus does exactly
+    # that, and it is right to:
+    #
+    #     if #available(iOS 26.0, *), path.isUltraConstrained { ... }
+    #
+    # `#available` is a RUNTIME gate. The symbol still has to EXIST at compile
+    # time, so an iOS 18 SDK rejects it and the build goes red with
+    # "Value of type 'NWPath' has no member 'isUltraConstrained'".
+    #
+    # The fix that lasts is a current SDK, not an older plugin. Pinning
+    # connectivity_plus backwards would mean 7.0.0 - the symbol arrives in
+    # 7.1.0, five releases back - and would buy nothing: the next plugin to
+    # reference a current API fails the same way, and the whole plugin set
+    # ends up frozen to keep a stale compiler happy.
+    #
+    # macos-26 is generally available: it is what `macos-latest` resolves to
+    # in actions/runner-images, and it is not the image carrying a preview
+    # badge (xcode-27 is). It ships Xcode 26.6 with the iOS 26.5 SDK as the
+    # default. IPHONEOS_DEPLOYMENT_TARGET stays 15.0, which is exactly the
+    # oldest deployment target Xcode 26 still supports, so nothing about which
+    # phones can run this app changes.
+    runs-on: macos-26
     permissions:
       # Only so this job can cut a release. Everything else the built-in token
       # can reach stays read-only, and no other secret is involved anywhere in
@@ -73,6 +100,35 @@ jobs:
           cache: true
 
       - run: flutter pub get
+
+      # SAY OUT LOUD WHICH SDK THIS IS BUILT AGAINST.
+      #
+      # The failure this guards against is the one that produced this step:
+      # the runner image quietly defaults to an Xcode whose iOS SDK is older
+      # than the APIs our plugins compile against, and the first anyone hears
+      # of it is a Swift error deep inside a package in the pub cache -- which
+      # reads like a broken dependency rather than a stale toolchain.
+      #
+      # Printed so the version is in the log of every build, and asserted so a
+      # future image change fails HERE, with a sentence that names the real
+      # cause, instead of 40 lines lower with a missing-symbol error.
+      - name: Check the iOS SDK is current
+        run: |
+          set -euo pipefail
+          echo "Xcode:   $(xcodebuild -version | head -1) ($(xcode-select -p))"
+          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iOS SDK: $SDK"
+          case "${SDK%%.*}" in
+            ''|*[!0-9]*) echo "::error::could not read the iOS SDK version"; exit 1 ;;
+          esac
+          if [ "${SDK%%.*}" -lt 26 ]; then
+            echo "::error::iOS SDK $SDK is older than 26. Plugins gate current" \
+                 "APIs behind #available, which still needs the symbol at compile" \
+                 "time -- this build will fail with a missing-member error in a" \
+                 "plugin. Point runs-on at a newer macOS image, or xcode-select a" \
+                 "newer Xcode on this one."
+            exit 1
+          fi
 
       # NO `pod install` STEP, ON PURPOSE.
       #
