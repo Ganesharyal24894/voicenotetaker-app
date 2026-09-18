@@ -63,7 +63,9 @@ what makes a resumed download possible.
 
 The cost is one upload of 368 MB when the models change, and the licences
 travel with the files (IndicConformer MIT, Parakeet CC-BY-4.0, pyannote
-segmentation MIT, CAM++ Apache-2.0 — all redistributable).
+segmentation MIT, CAM++ Apache-2.0 — all redistributable). Who made each one,
+where it came from and the attribution it asks for is
+**[`MODEL-CREDITS.md`](../MODEL-CREDITS.md)**, which is also the release notes.
 
 **Assets are never replaced in place.** Different bytes mean a new tag and a
 new `ModelCatalogue.releaseTag`, so a phone half way through a download can
@@ -114,20 +116,35 @@ never be handed different bytes under the same URL.
    the asset name because a release is one flat list and two sets both carry a
    `tokens.txt`.
 
-   To do it by hand instead:
+   **The asset prefix is the set's `id`, not its directory.** They are the
+   same string for the two speech sets and they are not for the speaker one:
+   it lives in `diarization/` and its id — the one
+   `ModelCatalogue.assetName` builds the URL from — is
+   `pyannote-segmentation-3-campplus`.
+
+   **`gh release upload` cannot do this.** In `gh`, the text after `#` is a
+   display *label*; the asset is always named after the file's basename. Using
+   it here uploads `tokens.txt` twice, the second overwrites the first, and the
+   Hindi set silently gets Parakeet's tokens. The REST upload endpoint is the
+   only place `name` can be set, so the script uses that, and by hand it is:
 
    ```sh
    gh release create models-v1 --title "Speech models models-v1" \
      --notes "Model files for on-device transcription and speaker detection."
-   gh release upload models-v1 \
-     "models/indicconformer-hi-int8/model.int8.onnx#indicconformer-hi-int8--model.int8.onnx" \
-     "models/indicconformer-hi-int8/tokens.txt#indicconformer-hi-int8--tokens.txt" \
-     "models/parakeet-tdt-110m-en-int8/encoder.int8.onnx#parakeet-tdt-110m-en-int8--encoder.int8.onnx" \
-     "models/parakeet-tdt-110m-en-int8/decoder.int8.onnx#parakeet-tdt-110m-en-int8--decoder.int8.onnx" \
-     "models/parakeet-tdt-110m-en-int8/joiner.int8.onnx#parakeet-tdt-110m-en-int8--joiner.int8.onnx" \
-     "models/parakeet-tdt-110m-en-int8/tokens.txt#parakeet-tdt-110m-en-int8--tokens.txt" \
-     "models/diarization/segmentation.onnx#diarization--segmentation.onnx" \
-     "models/diarization/campplus.onnx#diarization--campplus.onnx"
+   id=$(gh api repos/Ganesharyal24894/voicenotetaker-app/releases/tags/models-v1 --jq .id)
+   upload() {  # upload <path> <asset-name>
+     gh api --method POST \
+       "https://uploads.github.com/repos/Ganesharyal24894/voicenotetaker-app/releases/$id/assets?name=$2" \
+       -H 'Content-Type: application/octet-stream' --input "$1"
+   }
+   upload models/indicconformer-hi-int8/model.int8.onnx    indicconformer-hi-int8--model.int8.onnx
+   upload models/indicconformer-hi-int8/tokens.txt         indicconformer-hi-int8--tokens.txt
+   upload models/parakeet-tdt-110m-en-int8/encoder.int8.onnx parakeet-tdt-110m-en-int8--encoder.int8.onnx
+   upload models/parakeet-tdt-110m-en-int8/decoder.int8.onnx parakeet-tdt-110m-en-int8--decoder.int8.onnx
+   upload models/parakeet-tdt-110m-en-int8/joiner.int8.onnx  parakeet-tdt-110m-en-int8--joiner.int8.onnx
+   upload models/parakeet-tdt-110m-en-int8/tokens.txt        parakeet-tdt-110m-en-int8--tokens.txt
+   upload models/diarization/segmentation.onnx pyannote-segmentation-3-campplus--segmentation.onnx
+   upload models/diarization/campplus.onnx     pyannote-segmentation-3-campplus--campplus.onnx
    ```
 
 3. Paste the printed sizes and hashes into `ModelCatalogue`, and set

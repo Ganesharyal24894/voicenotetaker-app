@@ -327,6 +327,15 @@ shelf file player handles them and no raw-PCM streaming source is needed.
 maintained by the Flutter team, and appears only in
 `lib/drivers/app_directories.dart`.
 
+### The speech models — licensing rationale
+
+The models are not packages and are not in the repository: the app downloads
+them on demand from our own release. All four are open and redistributable —
+IndicConformer **MIT**, Parakeet **CC-BY-4.0**, pyannote segmentation **MIT**,
+CAM++ **Apache-2.0** — and the attribution each one asks for, with the
+citations, is in **[MODEL-CREDITS.md](MODEL-CREDITS.md)**. How they are hosted
+and fetched is in [`doc/models.md`](doc/models.md).
+
 ## Platform status
 
 | Platform | Status |

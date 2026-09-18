@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:voicenotetaker_app/model/diarization.dart';
 import 'package:voicenotetaker_app/model/model_download.dart';
@@ -61,6 +63,53 @@ void main() {
         ModelCatalogue.assetName('parakeet-tdt-110m-en-int8', 'tokens.txt'),
         'parakeet-tdt-110m-en-int8--tokens.txt',
       );
+    });
+
+    // The uploader is a shell script and cannot import this catalogue, so it
+    // repeats the set ids - and it got them wrong once, naming the speaker
+    // assets after the DIRECTORY (`diarization`) instead of the id
+    // (`pyannote-segmentation-3-campplus`). Every URL in the app 404s when
+    // that happens, and nothing in Dart notices. So read the script.
+    test('tool/publish_models.sh uploads the names the catalogue asks for', () {
+      final script = File('tool/publish_models.sh').readAsStringSync();
+      final declared = RegExp(r'^\s*"([^":]+):([^":]+):([^"]+)"\s*$',
+              multiLine: true)
+          .allMatches(script)
+          .map((m) => (
+                directory: m.group(1)!,
+                setId: m.group(2)!,
+                files: m.group(3)!.split(RegExp(r'\s+')),
+              ))
+          .toList();
+
+      expect(declared, hasLength(ModelCatalogue.all.length),
+          reason: 'the script must declare every set, and only those');
+
+      for (final release in ModelCatalogue.all) {
+        final entry = declared.singleWhere(
+          (d) => d.setId == release.id,
+          orElse: () => fail('publish_models.sh has no set "${release.id}"'),
+        );
+        expect(entry.directory, release.directoryName,
+            reason: '${release.id} is uploaded from the wrong directory');
+        expect(entry.files, release.files.map((f) => f.name).toList(),
+            reason: '${release.id} uploads a different set of files');
+      }
+    });
+
+    // `gh release upload path#label` sets a display LABEL; the asset keeps the
+    // file's basename. Using it here would upload two `tokens.txt` and let the
+    // second win, so the Hindi set would carry Parakeet's tokens.
+    test('the uploader names assets itself, not with gh\'s `#` label', () {
+      final script = File('tool/publish_models.sh').readAsStringSync();
+      final commands = script
+          .split('\n')
+          .where((line) => !line.trimLeft().startsWith('#'))
+          .join('\n');
+      expect(commands, isNot(contains('gh release upload')),
+          reason: 'gh cannot name an asset; use the REST upload endpoint');
+      expect(commands, contains('uploads.github.com'));
+      expect(commands, contains(r'assets?name=$asset'));
     });
 
     test('every URL is this release, spelt the one way', () {

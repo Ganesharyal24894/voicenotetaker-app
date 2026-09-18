@@ -42,19 +42,26 @@ if [[ -z "$DIR" || ! -d "$DIR" ]]; then
   exit 2
 fi
 
+# `<directory>:<set id>:<files>`. THE DIRECTORY IS NOT ALWAYS THE SET ID. The
+# directory is the catalogue's `directoryName` - where the files live on the
+# phone - and the asset prefix is the catalogue's `id`, which is what
+# `ModelCatalogue.assetName` builds a URL from. They are the same string for
+# the two speech sets and they are NOT for the speaker one: it lives in
+# `diarization/` and its id is `pyannote-segmentation-3-campplus`.
 SETS=(
-  "indicconformer-hi-int8:model.int8.onnx tokens.txt"
-  "parakeet-tdt-110m-en-int8:encoder.int8.onnx decoder.int8.onnx joiner.int8.onnx tokens.txt"
-  "diarization:segmentation.onnx campplus.onnx"
+  "indicconformer-hi-int8:indicconformer-hi-int8:model.int8.onnx tokens.txt"
+  "parakeet-tdt-110m-en-int8:parakeet-tdt-110m-en-int8:encoder.int8.onnx decoder.int8.onnx joiner.int8.onnx tokens.txt"
+  "diarization:pyannote-segmentation-3-campplus:segmentation.onnx campplus.onnx"
 )
 
 # 1. Check every file is there before uploading any of them.
 missing=0
 for entry in "${SETS[@]}"; do
-  set_id=${entry%%:*}
-  for name in ${entry#*:}; do
-    if [[ ! -f "$DIR/$set_id/$name" ]]; then
-      echo "missing: $DIR/$set_id/$name" >&2
+  rest=${entry#*:}
+  dir=${entry%%:*}
+  for name in ${rest#*:}; do
+    if [[ ! -f "$DIR/$dir/$name" ]]; then
+      echo "missing: $DIR/$dir/$name" >&2
       missing=1
     fi
   done
@@ -71,24 +78,44 @@ if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
 Uncompressed, one asset per file, named <set>--<file>. See doc/models.md."
 fi
 
+release_id=$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.id')
+
 # 3. Upload, and print the catalogue as we go.
 echo
 echo "--- catalogue entries -------------------------------------------------"
 for entry in "${SETS[@]}"; do
-  set_id=${entry%%:*}
+  rest=${entry#*:}
+  dir=${entry%%:*}
+  set_id=${rest%%:*}
   total=0
   echo
   echo "// $set_id"
-  for name in ${entry#*:}; do
-    path="$DIR/$set_id/$name"
+  for name in ${rest#*:}; do
+    path="$DIR/$dir/$name"
     asset="$set_id--$name"
     size=$(stat -c '%s' "$path" 2>/dev/null || stat -f '%z' "$path")
     hash=$(sha256sum "$path" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$path" | cut -d' ' -f1)
     total=$((total + size))
 
-    # `--clobber` so re-running after a failed upload finishes the job; a
-    # DIFFERENT set of bytes still belongs in a new tag, not over these.
-    gh release upload "$TAG" "$path#$asset" --repo "$REPO" --clobber >&2
+    # NOT `gh release upload "$path#$asset"`. In `gh`, the text after `#` is a
+    # display LABEL, not the asset name - gh always names the asset after the
+    # file's basename. That silently uploads `tokens.txt` twice and the second
+    # one wins, so the Hindi tokens file would be the Parakeet one. The REST
+    # upload endpoint is the only place `name` can be set, so use it.
+    #
+    # Re-running after a failed upload finishes the job: an asset already
+    # there under this name is deleted first. A DIFFERENT set of bytes still
+    # belongs in a new tag, not over these.
+    old=$(gh api "repos/$REPO/releases/$release_id/assets" --paginate \
+      --jq ".[] | select(.name == \"$asset\") | .id" | head -1)
+    if [[ -n "$old" ]]; then
+      gh api --method DELETE "repos/$REPO/releases/assets/$old" >/dev/null
+    fi
+    gh api --method POST \
+      "https://uploads.github.com/repos/$REPO/releases/$release_id/assets?name=$asset" \
+      -H 'Content-Type: application/octet-stream' \
+      --input "$path" >/dev/null
+    echo "uploaded $asset" >&2
 
     printf "//   %-20s %12s B  %s\n" "$name" "$size" "$hash"
   done
