@@ -97,9 +97,15 @@ void main() {
     await session.start(deviceId);
     await speak(3);
 
-    harness.capture.add(
-      const CaptureFlags(muted: true, speechOpen: false, gateEnabled: true),
-    );
+    // Both the notification AND the fe08 read, because a real device answers
+    // the keep-alive with the state it just announced. Setting only the
+    // notification leaves the next keep-alive tick -- 20 ms away here --
+    // reading the old unmuted flags back over the new ones, which is a race
+    // this test loses on a busy machine and wins on an idle one.
+    const muted =
+        CaptureFlags(muted: true, speechOpen: false, gateEnabled: true);
+    harness.captureFlags = muted;
+    harness.capture.add(muted);
     await pumpEventQueue();
     await session.idle;
 
