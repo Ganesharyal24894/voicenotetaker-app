@@ -412,27 +412,19 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --pages-url "$PAGES_URL" > _site/apps.json
 
-          # Fail loudly here rather than serving a file SideStore will choke on.
-          python3 -c "
-          import json, sys
-          s = json.load(open('_site/apps.json'))
-          for k in ('name', 'identifier', 'apps', 'news'):
-              assert k in s, k
-          a = s['apps'][0]
-          for k in ('name', 'bundleIdentifier', 'developerName', 'iconURL',
-                    'localizedDescription', 'versions', 'appPermissions'):
-              assert k in a, k
-          v = a['versions'][0]
-          for k in ('version', 'buildVersion', 'date', 'downloadURL', 'size',
-                    'sha256', 'minOSVersion'):
-              assert k in v, k
-          assert len(v['sha256']) == 64, v['sha256']
-          # Position is the version ordering in AltStore -- it reads versions[0]
-          # as the latest and never sorts. Assert the newest really is first.
-          builds = [int(x['buildVersion']) for x in a['versions']]
-          assert builds == sorted(builds, reverse=True), builds
-          print('source ok:', v['version'], v['downloadURL'])
-          "
+          # THE STEP THAT CAUGHT THIS THE HARD WAY.
+          #
+          # A source SideStore cannot decode does not degrade gracefully: there
+          # is no partial load and no app-by-app skipping. One bad field throws,
+          # and the user sees "Decoding failed: Data corrupted" with nothing
+          # installable behind it. `json.load()` is perfectly happy with such a
+          # document, so a Linux runner cannot notice on its own.
+          #
+          # check_altstore_source.py is a mirror of SideStore's own Codable
+          # implementations, read out of its source rather than from the AltStore
+          # docs -- the docs describe AltStore 2.x, and SideStore forked the 1.x
+          # line, which is exactly how this source shipped broken once.
+          python3 tool/check_altstore_source.py _site/apps.json
 
           # A human landing page at the same URL, so someone who opens the link
           # in Safari gets an install button instead of a wall of JSON.

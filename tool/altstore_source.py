@@ -155,6 +155,7 @@ def main():
     versions = versions[:KEEP]
 
     icon = f"{args.pages_url}/icon.png"
+    latest = versions[0]
     source = {
         "name": "voiceNotetaker",
         # Never change this. AltStore treats a source's identifier as its
@@ -211,14 +212,44 @@ def main():
             # entertainment, games, lifestyle, other, photo-video, social,
             # utilities). Anything else silently becomes "other".
             "category": "utilities",
-            # Empty on purpose, and honestly so: taking iPhone screenshots
-            # needs the app running on a device or a simulator, and the only
-            # machine that ever runs this app is the user's own phone.
-            "screenshots": [],
+            # No `screenshots` key at all rather than an empty list. Taking
+            # iPhone screenshots needs the app running on a device or a
+            # simulator, and the only machine that ever runs this app is the
+            # user's own phone -- so there are none, and the key that says so
+            # best is the absent one.
+            #
             # Read out of the built app, never typed here -- AltStore compares
             # this against the .ipa and refuses the install if it disagrees.
             "appPermissions": newest["appPermissions"],
             "versions": versions,
+            # THE LEGACY BLOCK. Do not delete it as redundant.
+            #
+            # SideStore's StoreApp decoder (AltStore/Core/Model/StoreApp.swift)
+            # only reaches for `versions[]` after it has tried `platformURLs`
+            # and this flat `downloadURL`. With neither present it falls back to
+            # re-reading a Core Data property it set moments earlier, guarded by
+            # a comment that says out loud the field "might still be faulted by
+            # coredata" -- and when that read comes back nil it throws
+            #     DecodingError.dataCorrupted("E downloadURL:String or
+            #     downloadURLs:[[Platform:URL]] key required.")
+            # which is the whole source refusing to load, not one app being
+            # skipped. That is exactly the "decoding failed: data corrupted"
+            # this source produced on SideStore 0.7.0-alpha before these five
+            # keys existed.
+            #
+            # Every source known to work in SideStore carries them: all 23 apps
+            # in SideStore's own community source do, and AltStore's own source
+            # ships them too. They cost five lines and take the decoder down a
+            # path that thousands of installs have already walked.
+            #
+            # Mirrored from versions[0] rather than frozen at some old release
+            # (which is what AltStore's own source does), so a client that reads
+            # only these still gets the current build.
+            "version": latest["version"],
+            "versionDate": latest["date"],
+            "versionDescription": latest["localizedDescription"],
+            "downloadURL": latest["downloadURL"],
+            "size": latest["size"],
         }],
         # Required by the spec's example even when there is nothing to say.
         "news": [],
