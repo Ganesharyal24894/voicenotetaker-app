@@ -333,21 +333,29 @@ maintained by the Flutter team, and appears only in
 |---|---|
 | Android | Supported, and `flutter build apk --debug` is verified green on this host. BLE permissions are declared in `android/app/src/main/AndroidManifest.xml` (`BLUETOOTH_SCAN` with `neverForLocation`, `BLUETOOTH_CONNECT`, plus the pre-API-31 equivalents). |
 | Linux | Supported by `universal_ble` (BlueZ) and useful for desktop testing, but `flutter build linux` needs the GTK 3 development headers (`libgtk-3-dev`), which are not installed on this host. |
-| iOS | **Cannot be built here.** See below. |
+| iOS | Built in CI on a hosted Mac, and installable on a phone without one. See below. |
 
-### Known iOS constraint
+### iOS — built on CI, installed with SideStore
 
-**No iOS build is possible on this machine.** The iOS toolchain (Xcode,
-CocoaPods, the iOS SDK, code signing) is macOS-only, and this project is
+**No iOS build is possible on this machine**, and that has not changed: the iOS
+toolchain (Xcode, the iOS SDK, code signing) is macOS-only and this project is
 developed on Linux. `flutter doctor` reporting a missing iOS toolchain is
 expected and is *not* a bug to fix.
 
-The `ios/` directory is present and the required
-`NSBluetoothAlwaysUsageDescription` / `NSBluetoothPeripheralUsageDescription`
-keys are set in `ios/Runner/Info.plist`, but none of it has been compiled or run.
-Producing an iOS build requires either a Mac or a macOS CI runner
-(GitHub Actions `macos-latest`, Codemagic, or similar). Until that exists, treat
-iOS as untested rather than as supported.
+What changed is that the build happens somewhere else. `.github/workflows/build.yml`
+builds an unsigned `.ipa` on a hosted `macos-15` runner after the Linux tests
+pass, publishes it as a GitHub release, and regenerates an AltStore source at
+
+  <https://ganesharyal24894.github.io/voicenotetaker-app/apps.json>
+
+which SideStore on the phone reads to install and update the app. The app is
+signed on the phone with the owner's own free Apple ID, so no Apple Developer
+Program membership and no secret in this repo are involved anywhere.
+
+**[doc/ios-install.md](doc/ios-install.md)** is the instructions: what SideStore
+is, the 7-day expiry, the 3-app limit, and the three things the app genuinely
+cannot do on an iPhone (no background alert, transcripts finish when the app is
+opened, and no in-app model download yet).
 
 ## Application id — note
 

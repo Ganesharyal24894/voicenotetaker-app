@@ -20,6 +20,13 @@
 
 name: build
 
+# Two pushes in quick succession would otherwise race to deploy Pages, and the
+# older build can win. Queued rather than cancelled: the earlier build's release
+# is still wanted, it just must not publish the source after the newer one.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   push:
     branches: [master, main]
@@ -51,6 +58,11 @@ jobs:
     # Pinned rather than macos-latest so an Xcode bump is a deliberate commit
     # and not a surprise red build.
     runs-on: macos-15
+    permissions:
+      # Only so this job can cut a release. Everything else the built-in token
+      # can reach stays read-only, and no other secret is involved anywhere in
+      # this workflow -- which is what lets a fork run it unchanged.
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -81,16 +93,55 @@ jobs:
       # FlutterSceneDelegate, both recent UIScene-migration APIs, so an older
       # Flutter is a compile error rather than a warning.
 
+      # THE VERSION A SIDELOADER CAN TELL APART.
+      #
+      # The CI run number goes into BOTH version fields:
+      #
+      #   --build-number=25     -> CFBundleVersion, the source's `buildVersion`
+      #   --build-name=1.0.0.25 -> CFBundleShortVersionString, the `version`
+      #
+      # Without the run number in the build NUMBER, every .ipa is version 1 and
+      # "is this the one with the fix?" has no answer once the file is on a
+      # phone. Without it in the version NAME, every build calls itself 1.0.0.
+      #
+      # That second one matters more than it looks. AltStore's rule is that
+      # "each entry must have a different version or buildVersion from the
+      # previous version" (faq.altstore.io/developers/make-a-source), so
+      # buildVersion alone is enough for AltStore itself -- but SideStore is a
+      # fork, forks lag, and a client that only looks at `version` would see an
+      # unbroken run of 1.0.0 and never offer the update. Putting the build
+      # number in both costs nothing and removes that whole class of doubt.
+      # It also means the version iOS shows in Settings names the exact build.
+      #
+      # AltStore 2.0 verifies both fields against the Info.plist inside the
+      # .ipa and refuses to install on a mismatch, so these two numbers and the
+      # ones in the source JSON have to come from the same place. They do: the
+      # source JSON is generated from the plist of the bundle built right here.
+      #
+      # The marketing half comes from pubspec.yaml, so bumping the release
+      # version there is the one place that decides what the app calls itself.
+      - name: Work out the version
+        id: version
+        run: |
+          set -euo pipefail
+          MARKETING=$(sed -n 's/^version: *\([0-9][^+ ]*\).*/\1/p' pubspec.yaml)
+          test -n "$MARKETING" || { echo "::error::no version: line in pubspec.yaml"; exit 1; }
+          BUILD=${{ github.run_number }}
+          {
+            echo "marketing=$MARKETING"
+            echo "build=$BUILD"
+            echo "full=$MARKETING.$BUILD"
+            echo "tag=ios-v$MARKETING.$BUILD"
+          } >> "$GITHUB_OUTPUT"
+          echo "building $MARKETING.$BUILD (CFBundleVersion $BUILD)"
+
       # --no-codesign is what makes this possible without an Apple account:
       # it skips the signing identity that CI does not have and cannot get.
-      #
-      # The build number is the CI run number so two .ipa files are always
-      # tellable apart. Without it every build is version 1 and "is this the
-      # one with the fix?" has no answer once the file is on a phone.
       - name: Build unsigned Runner.app
         run: |
           flutter build ios --release --no-codesign \
-            --build-number=${{ github.run_number }}
+            --build-name=${{ steps.version.outputs.full }} \
+            --build-number=${{ steps.version.outputs.build }}
 
       - name: Ad-hoc sign and package as .ipa
         run: |
@@ -174,10 +225,245 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion'     "$APP/Info.plist"
           echo "ipa looks installable"
 
+      # DESCRIBE THE .ipa IN A FILE THAT TRAVELS WITH IT.
+      #
+      # Everything the source JSON needs about this build is read out of the
+      # bundle that was just zipped -- never retyped, never inferred later.
+      # AltStore 2.0 verifies `version`, `buildVersion` and `appPermissions`
+      # against the downloaded .ipa and refuses the install when any of them
+      # disagree, so the only safe place to read them is here, from the plist
+      # inside the very file being published.
+      #
+      # This lands as a second release asset next to the .ipa. That is what
+      # makes the source's whole version history rebuildable from the releases
+      # alone: no state is kept in the repo, so the JSON can never claim a
+      # build that is not actually downloadable.
+      - name: Describe the build for the source JSON
+        id: meta
+        run: |
+          set -euo pipefail
+          cd build/ios/iphoneos
+          APP=Payload/Runner.app
+          SHA=$(shasum -a 256 voicenotetaker.ipa | cut -d' ' -f1)
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+          # AltStore checks the app's declared permissions against the .ipa, so
+          # these are extracted rather than written by hand.
+          #
+          # privacy: every NS*UsageDescription in the built Info.plist, as a
+          #   key -> reason map, which is the shape make-a-source documents.
+          # entitlements: whatever is embedded in the signature. With
+          #   --no-codesign plus an ad-hoc `codesign -s -` there are none, and
+          #   an empty list is the honest answer -- the sideloader adds its own
+          #   when it re-signs with the user's Apple ID.
+          python3 - "$APP/Info.plist" "$SHA" <<'PY' > build.json
+          import json, plistlib, subprocess, sys, datetime, os
+          plist_path, sha = sys.argv[1], sys.argv[2]
+          info = plistlib.load(open(plist_path, 'rb'))
+          # The changelog SideStore shows. Trailers are for git, not for a
+          # person reading "what changed" on their phone. A manual run has no
+          # commit message at all, hence the fallback.
+          msg = os.environ.get('COMMIT_SUBJECT') or ''
+          notes = '\n'.join(
+              l for l in msg.strip().splitlines()
+              if not l.startswith(('Co-Authored-By:', 'Claude-Session:',
+                                   'Signed-off-by:'))).strip()
+          privacy = {k: v for k, v in info.items() if k.endswith('UsageDescription')}
+          ents = []
+          try:
+              raw = subprocess.run(
+                  ['codesign', '-d', '--entitlements', ':-', '--xml',
+                   os.path.dirname(plist_path)],
+                  capture_output=True).stdout
+              if raw.strip():
+                  ents = sorted(plistlib.loads(raw).keys())
+          except Exception:
+              pass
+          json.dump({
+              'bundleIdentifier': info['CFBundleIdentifier'],
+              'version': info['CFBundleShortVersionString'],
+              'buildVersion': info['CFBundleVersion'],
+              'minOSVersion': info['MinimumOSVersion'],
+              'date': datetime.datetime.now(datetime.timezone.utc)
+                       .strftime('%Y-%m-%dT%H:%M:%SZ'),
+              'sha256': sha,
+              'notes': notes,
+              'appPermissions': {'entitlements': ents, 'privacy': privacy},
+          }, sys.stdout, indent=2)
+          PY
+          cat build.json
+        env:
+          COMMIT_SUBJECT: ${{ github.event.head_commit.message }}
+
+      # Kept alongside the release. The artifact is the one thing that still
+      # exists for a pull request or a manual run, where no release is cut.
       - uses: actions/upload-artifact@v7
         with:
           name: voicenotetaker-ipa-${{ github.run_number }}-${{ github.sha }}
-          path: build/ios/iphoneos/voicenotetaker.ipa
+          path: |
+            build/ios/iphoneos/voicenotetaker.ipa
+            build/ios/iphoneos/build.json
           # A 7-day sideload certificate makes anything older than this
           # useless anyway.
           retention-days: 14
+
+      # THE STABLE DOWNLOAD URL.
+      #
+      # A workflow artifact cannot be what SideStore downloads from: fetching
+      # one needs a logged-in GitHub session, and it is deleted after a
+      # fortnight. A release asset on a PUBLIC repo is a plain, permanent,
+      # unauthenticated https URL, which is exactly what a source's
+      # `downloadURL` has to be.
+      #
+      # The tag is immutable and per-build (ios-v1.0.0.25) rather than a
+      # rolling "ios-latest" that gets re-pointed. Two reasons: SideStore shows
+      # a version history and offers older builds, so every entry in that list
+      # needs its own URL that keeps serving the same bytes; and a moving tag
+      # would make the sha256 in the source go stale the moment it moved,
+      # which AltStore reports as a failed install rather than a stale source.
+      #
+      # Only on a real push to master -- a pull request from a fork has a
+      # read-only token, and a green PR is not a build anyone should install.
+      - name: Publish the .ipa as a release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        # COMMIT_SUBJECT travels through the environment rather than being
+        # interpolated by ${{ }}: a commit message is arbitrary text, and
+        # interpolation would paste it straight into the shell.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_SUBJECT: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          cd build/ios/iphoneos
+          NOTES=$(printf '%s\n\n---\n\nUnsigned build of %s.\nInstall it with SideStore - see doc/ios-install.md.\n\nsha256 %s\n' \
+                    "$COMMIT_SUBJECT" "$GITHUB_SHA" "${{ steps.meta.outputs.sha256 }}")
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "iOS ${{ steps.version.outputs.full }}" \
+            --notes "$NOTES" \
+            voicenotetaker.ipa build.json
+  # Regenerating the source JSON is plain HTTP and JSON, so it runs on Linux:
+  # faster, and a tenth of the cost if this repo ever goes private.
+  source:
+    needs: ios
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      # Deleting the releases that fell off the end of the history.
+      contents: write
+      # Publishing to Pages, which is an OIDC-authenticated deployment rather
+      # than a commit. No secret beyond the built-in token is involved.
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # KEEP THE HISTORY BOUNDED.
+      #
+      # SideStore shows older versions and will install one, so keeping a few
+      # is genuinely useful -- but one release per push grows without limit and
+      # every one of them holds a ~50 MB .ipa forever. Ten is about a month of
+      # work, and far more than a certificate that expires in 7 days can make
+      # use of. Pruned BEFORE the JSON is generated so the two always agree.
+      #
+      # --cleanup-tag takes the tag with it; a tag left behind with no release
+      # is a dangling ref that makes `git tag` lie about what is installable.
+      - name: Keep only the last 10 iOS releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 \
+            --json tagName --jq '.[].tagName' \
+            | grep '^ios-v' \
+            | sort -Vr \
+            | tail -n +11 \
+            | while read -r tag; do
+                echo "pruning $tag"
+                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+              done
+
+      - name: Build the Pages site
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PAGES_URL="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}"
+          mkdir -p _site
+
+          # The source's icon is the app's own 1024x1024 icon, copied out of the
+          # asset catalogue rather than drawn again, so the circle in SideStore
+          # and the squircle on the home screen can never disagree. AltStore
+          # documents no size or format requirement; it masks whatever it gets,
+          # so a square PNG is the safe shape.
+          cp ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png \
+             _site/icon.png
+
+          python3 tool/altstore_source.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --pages-url "$PAGES_URL" > _site/apps.json
+
+          # Fail loudly here rather than serving a file SideStore will choke on.
+          python3 -c "
+          import json, sys
+          s = json.load(open('_site/apps.json'))
+          for k in ('name', 'identifier', 'apps', 'news'):
+              assert k in s, k
+          a = s['apps'][0]
+          for k in ('name', 'bundleIdentifier', 'developerName', 'iconURL',
+                    'localizedDescription', 'versions', 'appPermissions'):
+              assert k in a, k
+          v = a['versions'][0]
+          for k in ('version', 'buildVersion', 'date', 'downloadURL', 'size',
+                    'sha256', 'minOSVersion'):
+              assert k in v, k
+          assert len(v['sha256']) == 64, v['sha256']
+          # Position is the version ordering in AltStore -- it reads versions[0]
+          # as the latest and never sorts. Assert the newest really is first.
+          builds = [int(x['buildVersion']) for x in a['versions']]
+          assert builds == sorted(builds, reverse=True), builds
+          print('source ok:', v['version'], v['downloadURL'])
+          "
+
+          # A human landing page at the same URL, so someone who opens the link
+          # in Safari gets an install button instead of a wall of JSON.
+          SRC="$PAGES_URL/apps.json"
+          cat > _site/index.html <<HTML
+          <!doctype html><meta charset=utf-8>
+          <meta name=viewport content="width=device-width,initial-scale=1">
+          <title>voiceNotetaker for iPhone</title>
+          <style>
+          body{background:#0B0A0F;color:#F4F1FB;font:16px/1.6 -apple-system,system-ui,sans-serif;
+               margin:0;padding:48px 20px;display:flex;flex-direction:column;align-items:center}
+          main{max-width:34rem}img{width:96px;border-radius:22px}
+          a.btn{display:inline-block;background:#8B5CF6;color:#fff;text-decoration:none;
+                padding:12px 20px;border-radius:12px;font-weight:600}
+          code{background:#14121B;padding:2px 6px;border-radius:6px;word-break:break-all}
+          p{color:#9A93AC}h1{color:#F4F1FB}
+          </style>
+          <main>
+          <img src=icon.png alt="">
+          <h1>voiceNotetaker for iPhone</h1>
+          <p>This page is a SideStore source. Open it on the iPhone that has
+          SideStore installed and tap the button, or paste the address below
+          into SideStore &rarr; Browse &rarr; Sources &rarr; +.</p>
+          <p><a class=btn href="sidestore://source?url=$SRC">Add to SideStore</a></p>
+          <p><code>$SRC</code></p>
+          <p>The app is signed with your own free Apple ID and stops opening
+          after 7 days unless SideStore refreshes it.
+          <a href="https://github.com/$GITHUB_REPOSITORY/blob/master/doc/ios-install.md"
+             style="color:#A78BFA">How to install it &rarr;</a></p>
+          </main>
+          HTML
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4
