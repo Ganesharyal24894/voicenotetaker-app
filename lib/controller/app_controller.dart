@@ -26,6 +26,7 @@ import '../model/device_test_result.dart';
 import '../model/die_temperature.dart';
 import '../model/level_reading.dart';
 import '../model/link_health.dart';
+import '../model/model_download.dart';
 import '../model/not_saving_alert.dart';
 import '../model/notes_saving.dart';
 import '../model/pairing_outcome.dart';
@@ -55,6 +56,8 @@ import '../services/pairing/pairing_service.dart';
 import '../services/pairing/pairing_store.dart';
 import '../services/library_service.dart';
 import '../services/recording_service.dart';
+import '../services/transcription/model_download_service.dart';
+import '../services/transcription/model_download_settings_store.dart';
 import '../services/transcription/speaker_names_store.dart';
 import '../services/transcription/speaker_settings_store.dart';
 import '../services/transcription/transcript_store.dart';
@@ -124,6 +127,7 @@ class AppController extends ChangeNotifier {
     AudioPlayer? audioPlayer,
     PlatformSettings? platformSettings,
     TranscriptionService? transcriptionService,
+    ModelDownloadService? modelDownloads,
     TranscriptStore? transcriptStore,
     BackgroundMode? backgroundMode,
     PhonePower? phonePower,
@@ -157,6 +161,8 @@ class AppController extends ChangeNotifier {
         _player = audioPlayer,
         _settings = platformSettings,
         _transcription = transcriptionService,
+        // ignore: prefer_initializing_formals
+        _modelDownloads = modelDownloads,
         _background = backgroundMode,
         _power = phonePower,
         _savingAlert = notSavingAlert ?? NotSavingAlertPolicy(),
@@ -170,6 +176,10 @@ class AppController extends ChangeNotifier {
           directory: settingsDirectory ?? _recordingsDirectory,
         ),
         _settingsDirectory = settingsDirectory ?? _recordingsDirectory,
+        _modelDownloadSettings = ModelDownloadSettingsStore(
+          fileStore: fileStore,
+          directory: settingsDirectory ?? _recordingsDirectory,
+        ),
         _settingsStore = ContinuousSettingsStore(
           fileStore: fileStore,
           // Beside the recordings when no other place is given, as the mic
@@ -551,6 +561,9 @@ class AppController extends ChangeNotifier {
     if (_batteryHistoryDue()) await refreshBatteryHistory();
     await _sweepAudio();
     await _sweepEmptyNotesIfPending();
+    // A download that stopped when the app left the screen carries on from
+    // where it stopped. Nothing starts that the user did not start.
+    unawaited(_modelDownloads?.resumeAll());
     await _planTranscriptions();
   }
 
@@ -559,6 +572,9 @@ class AppController extends ChangeNotifier {
   Future<void> appBackgrounded() async {
     if (!_inForeground) return;
     _inForeground = false;
+    // Model downloads do not run off screen on either platform - see
+    // `ModelDownloadService.pauseAll`.
+    _modelDownloads?.pauseAll();
     final allowed = await _mayTranscribe();
     if (_inForeground) return;
     final running = _transcribingPath;
@@ -747,6 +763,105 @@ class AppController extends ChangeNotifier {
   /// Stops the running transcription. Completes once the model is released.
   Future<void> cancelTranscription() async {
     await _transcription?.cancel();
+  }
+
+  // -------------------------------------------------------------------------
+  // SPEECH MODELS: installing them on a phone nobody can reach with `adb`
+  //
+  // The engine is useless without its model files. On Android they can be
+  // pushed over a cable during development; on an iPhone there is no cable to
+  // push them down, so the downloader below is the only way transcription and
+  // speaker detection exist there at all. Everything a screen needs is here,
+  // per FEATURE - see `ModelsController`.
+  // -------------------------------------------------------------------------
+
+  /// Null in a build without downloads - every test that is not about them -
+  /// which behaves exactly as the app did when models arrived by cable.
+  final ModelDownloadService? _modelDownloads;
+
+  final ModelDownloadSettingsStore _modelDownloadSettings;
+
+  StreamSubscription<ModelInstallStatus>? _modelDownloadSubscription;
+
+  bool _downloadOnMobileData = false;
+
+  /// Every model set, in the order to list them. Empty in a build with no
+  /// downloader.
+  List<ModelInstallStatus> get modelStatuses =>
+      _modelDownloads?.statuses ?? const <ModelInstallStatus>[];
+
+  /// Where one feature's model stands. With no downloader wired in this
+  /// reports the catalogue entry as not installed, which is what a phone with
+  /// no model files is.
+  ModelInstallStatus modelStatusFor(ModelFeature feature) =>
+      _modelDownloads?.statusFor(feature) ??
+      ModelInstallStatus.unknown(ModelCatalogue.forFeature(feature));
+
+  /// Bytes the installed models take up on this phone.
+  int get installedModelBytes => _modelDownloads?.installedBytes ?? 0;
+
+  /// Whether models may download on mobile data. False until the user says
+  /// otherwise; remembered across restarts.
+  bool get downloadOnMobileData => _downloadOnMobileData;
+
+  Future<void> setDownloadOnMobileData(bool allowed) async {
+    if (_downloadOnMobileData == allowed) return;
+    _downloadOnMobileData = allowed;
+    notifyListeners();
+    try {
+      await _modelDownloadSettings.saveAllowMobileData(allowed);
+    } on Object {
+      // The choice still holds for this run; it is one flag, not a note.
+    }
+  }
+
+  /// Installs one feature's model, resuming whatever already arrived.
+  Future<void> downloadModel(ModelFeature feature) async {
+    final downloads = _modelDownloads;
+    if (downloads == null) return;
+    await downloads.download(
+      downloads.releaseFor(feature),
+      allowMobileData: _downloadOnMobileData,
+    );
+  }
+
+  Future<void> cancelModelDownload(ModelFeature feature) async {
+    final downloads = _modelDownloads;
+    if (downloads == null) return;
+    await downloads.cancel(downloads.releaseFor(feature));
+  }
+
+  /// Removes the set and frees its bytes. A feature whose model is gone goes
+  /// back to reporting "not installed", exactly as it did before it was ever
+  /// downloaded.
+  Future<void> deleteModel(ModelFeature feature) async {
+    final downloads = _modelDownloads;
+    if (downloads == null) return;
+    await downloads.remove(downloads.releaseFor(feature));
+    notifyListeners();
+  }
+
+  Future<void> refreshModels() async {
+    await _modelDownloads?.refresh();
+    notifyListeners();
+  }
+
+  /// Watches the downloader so a screen redraws, and so WORK THAT WAS BLOCKED
+  /// RESUMES: notes pile up unqueued while the speech model is missing, and
+  /// the moment it lands the queue is planned again and starts running.
+  void _watchModelDownloads() {
+    final downloads = _modelDownloads;
+    if (downloads == null || _modelDownloadSubscription != null) return;
+    _modelDownloadSubscription = downloads.changes.listen(
+      (status) {
+        notifyListeners();
+        if (status.isInstalled) {
+          debugPrint('STT model installed: ${status.id}');
+          unawaited(_planTranscriptions());
+        }
+      },
+      onError: (Object _) {},
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1284,6 +1399,9 @@ class AppController extends ChangeNotifier {
     }
     _availabilitySubscription =
         _transport.availability.listen(_onAvailabilityChanged);
+    _downloadOnMobileData = await _modelDownloadSettings.loadAllowMobileData();
+    _watchModelDownloads();
+    await _modelDownloads?.refresh();
     _initialised = true;
     _syncBackground();
     _ensureContinuousLink();
@@ -3196,6 +3314,9 @@ class AppController extends ChangeNotifier {
     _stopPowerRecheck();
     _stopWaitingForPower();
     await _transcription?.releaseEngine();
+    await _modelDownloadSubscription?.cancel();
+    _modelDownloadSubscription = null;
+    _modelDownloads?.dispose();
     await _scanSubscription?.cancel();
     _scanSubscription = null;
     await _connectionSubscription?.cancel();

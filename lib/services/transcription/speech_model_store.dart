@@ -1,5 +1,6 @@
 import '../../drivers/file_store.dart';
 import '../../model/diarization.dart';
+import '../../model/model_download.dart';
 import '../../model/transcription.dart';
 
 /// Whether a speech model can be loaded right now.
@@ -53,14 +54,19 @@ class SpeechModelStore {
   /// Parent of every model's directory.
   String get modelsDirectory => _modelsDirectory;
 
-  String directoryFor(SpeechModel model) =>
-      _fileStore.join(_modelsDirectory, model.directoryName);
+  /// Where a model whose sub-directory is called [name] keeps its files.
+  ///
+  /// The ONE place a catalogue's directory name becomes a path: the speech,
+  /// voice-activity, speaker and downloadable catalogues all come through
+  /// here, so a downloader can never write somewhere the loader does not look.
+  String directoryNamed(String name) => _fileStore.join(_modelsDirectory, name);
+
+  String directoryFor(SpeechModel model) => directoryNamed(model.directoryName);
 
   String pathOf(SpeechModel model, SpeechModelFile file) =>
       _fileStore.join(directoryFor(model), file.name);
 
-  String vadDirectoryFor(VadModel model) =>
-      _fileStore.join(_modelsDirectory, model.directoryName);
+  String vadDirectoryFor(VadModel model) => directoryNamed(model.directoryName);
 
   String vadPathOf(VadModel model) =>
       _fileStore.join(vadDirectoryFor(model), model.file.name);
@@ -79,7 +85,7 @@ class SpeechModelStore {
 
   /// Where the speaker-separation models are expected.
   String diarizationDirectoryFor(DiarizationModel model) =>
-      _fileStore.join(_modelsDirectory, model.directoryName);
+      directoryNamed(model.directoryName);
 
   String diarizationPathOf(DiarizationModel model, SpeechModelFile file) =>
       _fileStore.join(diarizationDirectoryFor(model), file.name);
@@ -153,6 +159,49 @@ class SpeechModelStore {
           : SpeechModelAvailability.incomplete,
       problems: List<String>.unmodifiable(problems),
     );
+  }
+
+  /// Where a downloadable [release] installs to.
+  String releaseDirectory(ModelRelease release) =>
+      directoryNamed(release.directoryName);
+
+  String releasePathOf(ModelRelease release, DownloadableFile file) =>
+      _fileStore.join(releaseDirectory(release), file.name);
+
+  /// Where the bytes of [file] land WHILE they are arriving.
+  ///
+  /// A `.part` suffix, in the same directory, so the rename that installs it
+  /// is a rename within one directory - and so a download the app was killed
+  /// in the middle of can never be loaded as a model: nothing looks for this
+  /// name.
+  String partPathOf(ModelRelease release, DownloadableFile file) =>
+      '${releasePathOf(release, file)}.part';
+
+  /// The files of [release] that are NOT installed - absent, or the wrong
+  /// size - in catalogue order.
+  ///
+  /// The same presence-and-exact-size check [status] runs, asked of a
+  /// downloadable set rather than a loadable model, so the downloader and the
+  /// loader can never disagree about what "installed" means.
+  Future<List<DownloadableFile>> missingFiles(ModelRelease release) async {
+    final missing = <DownloadableFile>[];
+    for (final file in release.files) {
+      final info = await _fileStore.stat(releasePathOf(release, file));
+      if (info == null || info.sizeBytes != file.sizeBytes) missing.add(file);
+    }
+    return missing;
+  }
+
+  /// Bytes of [release] already installed at their exact size.
+  Future<int> installedBytes(ModelRelease release) async {
+    var bytes = 0;
+    for (final file in release.files) {
+      final info = await _fileStore.stat(releasePathOf(release, file));
+      if (info != null && info.sizeBytes == file.sizeBytes) {
+        bytes += file.sizeBytes;
+      }
+    }
+    return bytes;
   }
 }
 

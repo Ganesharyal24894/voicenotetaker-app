@@ -10,14 +10,19 @@ import 'drivers/audio_player_just_audio.dart';
 import 'drivers/background_mode_channel.dart';
 import 'drivers/ble_transport_universal.dart';
 import 'drivers/clipboard_text.dart';
+import 'drivers/disk_space_channel.dart';
+import 'drivers/download_client.dart';
 import 'drivers/file_store.dart';
+import 'drivers/hashing_crypto.dart';
 import 'drivers/haptics_channel.dart';
+import 'drivers/network_status_connectivity.dart';
 import 'drivers/phone_power_battery_plus.dart';
 import 'drivers/platform_settings_channel.dart';
 import 'drivers/share_sheet_share_plus.dart';
 import 'drivers/speaker_diarizer_sherpa.dart';
 import 'drivers/speech_recognizer_sherpa.dart';
 import 'services/summary/day_summary_store.dart';
+import 'services/transcription/model_download_service.dart';
 import 'services/transcription/speech_model_store.dart';
 import 'services/transcription/transcription_service.dart';
 import 'view/app_root.dart';
@@ -51,6 +56,14 @@ Future<void> main() async {
   // each one.
   final android = defaultTargetPlatform == TargetPlatform.android;
 
+  // Where the models are expected, and the one object that knows how to put
+  // them there. `adb push` still works and is what development uses; this is
+  // the only way an iPhone ever gets them.
+  final modelStore = SpeechModelStore(
+    fileStore: fileStore,
+    modelsDirectory: fileStore.join(support, 'models'),
+  );
+
   final controller = AppController(
     transport: ble,
     pairing: ble,
@@ -82,12 +95,19 @@ Future<void> main() async {
     // App data, not the user's documents: which device to reach, and whether
     // to keep listening.
     settingsDirectory: support,
+    // Downloads the model files onto the phone, resumably and verified. It
+    // runs only while the app is on screen - see `ModelDownloadService`.
+    modelDownloads: ModelDownloadService(
+      fileStore: fileStore,
+      models: modelStore,
+      client: IoDownloadClient(),
+      hashing: const CryptoHashing(),
+      network: ConnectivityPlusNetworkStatus(),
+      diskSpace: const MethodChannelDiskSpace(),
+    ),
     transcriptionService: TranscriptionService(
       fileStore: fileStore,
-      models: SpeechModelStore(
-        fileStore: fileStore,
-        modelsDirectory: fileStore.join(support, 'models'),
-      ),
+      models: modelStore,
       recognizer: SherpaOnnxSpeechRecognizer(),
       // Who spoke when, before the speech model is loaded, when
       // `models/diarization/` holds both files. Absent - which is the ordinary

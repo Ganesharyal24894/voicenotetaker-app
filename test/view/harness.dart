@@ -30,6 +30,7 @@ import 'package:voicenotetaker_app/model/transcription.dart';
 import 'package:voicenotetaker_app/services/device_test_service.dart';
 import 'package:voicenotetaker_app/services/device_test_store.dart';
 import 'package:voicenotetaker_app/services/link_monitor.dart';
+import 'package:voicenotetaker_app/services/transcription/model_download_service.dart';
 import 'package:voicenotetaker_app/services/transcription/speech_model_store.dart';
 import 'package:voicenotetaker_app/services/transcription/transcription_service.dart';
 import 'package:voicenotetaker_app/services/library_service.dart';
@@ -135,6 +136,11 @@ class ViewHarness {
     NotSavingAlertPolicy? notSavingAlert,
     String? settingsDirectory,
     BlePairing? pairing,
+    // Builds the model downloader from the harness's own store, for tests
+    // about installing models. Null builds the controller without one, like a
+    // build where models only ever arrive down a cable.
+    ModelDownloadService Function(FileStore fileStore, SpeechModelStore models)?
+        modelDownloads,
   }) : transport = MockBleTransport() {
     if (recognizer != null && speechModelInstalled) installSpeechModel();
     if (diarizer != null && speakerModelsInstalled) installSpeakerModels();
@@ -233,6 +239,13 @@ class ViewHarness {
       haptics: haptics,
       notSavingAlert: notSavingAlert,
       settingsDirectory: settingsDirectory,
+      modelDownloads: modelDownloads?.call(
+        fileStore,
+        SpeechModelStore(
+          fileStore: fileStore,
+          modelsDirectory: modelsDirectory,
+        ),
+      ),
       transcriptionService: recognizer == null
           ? null
           : TranscriptionService(
@@ -599,6 +612,20 @@ class MemoryFileStore implements FileStore {
     final bytes = <int>[];
     files[path] = bytes;
     return _MemorySink(bytes);
+  }
+
+  @override
+  Future<FileSink> openAppend(String path) async {
+    if (readOnly) throw Exception('read-only filesystem: $path');
+    final bytes = files.putIfAbsent(path, () => <int>[]);
+    return _MemorySink(bytes);
+  }
+
+  @override
+  Future<void> move(String from, String to) async {
+    final bytes = files.remove(from);
+    if (bytes == null) throw Exception('no such file: $from');
+    files[to] = bytes;
   }
 
   @override

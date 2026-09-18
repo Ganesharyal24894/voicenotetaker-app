@@ -31,6 +31,20 @@ dependencies:
   # lib/drivers/speaker_diarizer_sherpa.dart, and nowhere else.
   sherpa_onnx: 1.13.8
 
+  # Which transport the phone is on - Wi-Fi or mobile data - so a 197 MB model
+  # download is not taken out of someone's data allowance without asking.
+  # BSD-3-Clause, Flutter Community, the same family as battery_plus below. No
+  # permission on iOS; the plugin's own manifest adds ACCESS_NETWORK_STATE on
+  # Android, which is a normal permission with no prompt. Named in
+  # lib/drivers/network_status_connectivity.dart and nowhere else.
+  connectivity_plus: ^7.3.1
+
+  # sha256, to check a downloaded model once before it is moved into place.
+  # The Dart team's own package (BSD-3-Clause), already in the lock file as a
+  # transitive dependency. Named in lib/drivers/hashing_crypto.dart and
+  # nowhere else.
+  crypto: ^3.0.7
+
   # Phone battery level, charger state and battery saver, on Android and iOS,
   # for the background-transcription policy. BSD-3-Clause, Flutter Community,
   # no permission, no second engine. Named in

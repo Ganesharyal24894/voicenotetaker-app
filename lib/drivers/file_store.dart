@@ -47,6 +47,21 @@ abstract class FileStore {
   /// Opens [path] for writing, truncating any existing file.
   Future<FileSink> openWrite(String path);
 
+  /// Opens [path] for APPENDING: creates it and its parents when absent, and
+  /// never truncates what is already there.
+  ///
+  /// This is what makes a model download resumable. [openWrite] cannot do it -
+  /// it truncates on open, which would throw away the 180 MB that had already
+  /// arrived.
+  Future<FileSink> openAppend(String path);
+
+  /// Renames [from] to [to], replacing anything at [to].
+  ///
+  /// Within one directory this is atomic, which is what turns a verified
+  /// `.part` file into an installed model in one step: there is no instant at
+  /// which a half file sits under the name the engine loads.
+  Future<void> move(String from, String to);
+
   Future<Uint8List> read(String path);
 
   /// Reads bytes `[start, end)` of [path], clamped to the end of the file.
@@ -90,6 +105,31 @@ class IoFileStore implements FileStore {
     await file.parent.create(recursive: true);
     final handle = await file.open(mode: FileMode.write);
     return _IoFileSink(handle);
+  }
+
+  @override
+  Future<FileSink> openAppend(String path) async {
+    final file = File(path);
+    await file.parent.create(recursive: true);
+    // `append` opens read-write without truncating and creates the file when
+    // it is absent.
+    final handle = await file.open(mode: FileMode.append);
+    return _IoFileSink(handle, bytesAlready: await handle.length());
+  }
+
+  @override
+  Future<void> move(String from, String to) async {
+    final source = File(from);
+    await File(to).parent.create(recursive: true);
+    try {
+      await source.rename(to);
+    } on FileSystemException {
+      // Across filesystems `rename` cannot work; copy and remove instead. The
+      // models directory and its `.part` files are always the same volume, so
+      // this is a safety net rather than a path the app takes.
+      await source.copy(to);
+      await source.delete();
+    }
   }
 
   @override
@@ -177,14 +217,15 @@ class IoFileStore implements FileStore {
 }
 
 class _IoFileSink implements FileSink {
-  _IoFileSink(this._handle);
+  _IoFileSink(this._handle, {int bytesAlready = 0})
+      : _bytesWritten = bytesAlready;
 
   final RandomAccessFile _handle;
 
   /// Serialises writes: `RandomAccessFile` allows only one pending operation.
   Future<void> _queue = Future.value();
 
-  int _bytesWritten = 0;
+  int _bytesWritten;
   bool _closed = false;
 
   @override

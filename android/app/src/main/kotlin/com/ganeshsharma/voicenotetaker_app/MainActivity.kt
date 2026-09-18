@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.StatFs
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -32,6 +33,7 @@ class MainActivity : FlutterActivity() {
     private companion object {
         const val CHANNEL = "com.ganeshsharma.voicenotetaker_app/settings"
         const val BLUETOOTH_CHANNEL = "com.ganeshsharma.voicenotetaker_app/bluetooth"
+        const val STORAGE_CHANNEL = "com.ganeshsharma.voicenotetaker_app/storage"
     }
 
     override fun provideFlutterEngine(context: Context): FlutterEngine =
@@ -81,6 +83,26 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // Free space, which Dart has no API for at all. Used to refuse a
+        // 197 MB model download BEFORE it starts rather than 197 MB later.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, STORAGE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "freeBytes" -> result.success(freeBytes(call.argument<String>("path")))
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    /**
+     * Bytes available to THIS APP on the filesystem holding [path], or null
+     * when the path cannot be read. `availableBytes`, not `freeBytes`: the
+     * reserve the kernel keeps back is not room this app may have.
+     */
+    private fun freeBytes(path: String?): Long? = try {
+        StatFs(path ?: filesDir.absolutePath).availableBytes
+    } catch (bad: IllegalArgumentException) {
+        null
     }
 
     /**

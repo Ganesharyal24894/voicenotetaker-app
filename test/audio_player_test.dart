@@ -163,6 +163,12 @@ class EmptyFileStore implements FileStore {
   Future<FileSink> openWrite(String path) async => throw UnimplementedError();
 
   @override
+  Future<FileSink> openAppend(String path) async => throw UnimplementedError();
+
+  @override
+  Future<void> move(String from, String to) async {}
+
+  @override
   Future<Uint8List> read(String path) async => Uint8List(0);
 
   @override

@@ -259,6 +259,10 @@ class _FailingDeleteStore implements FileStore {
   @override
   Future<FileSink> openWrite(String p) => inner.openWrite(p);
   @override
+  Future<FileSink> openAppend(String p) => inner.openAppend(p);
+  @override
+  Future<void> move(String from, String to) => inner.move(from, to);
+  @override
   Future<Uint8List> read(String p) => inner.read(p);
   @override
   Future<Uint8List> readRange(String p, int start, int end) =>

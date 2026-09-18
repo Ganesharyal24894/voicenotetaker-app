@@ -31,6 +31,14 @@ class InMemoryFileStore implements FileStore {
       throw UnimplementedError('the library never writes');
 
   @override
+  Future<FileSink> openAppend(String path) async =>
+      throw UnimplementedError('the library never writes');
+
+  @override
+  Future<void> move(String from, String to) async =>
+      throw UnimplementedError('the library never writes');
+
+  @override
   Future<Uint8List> read(String path) async {
     if (unreadable.contains(path)) throw StateError('unreadable: $path');
     final bytes = files[path];

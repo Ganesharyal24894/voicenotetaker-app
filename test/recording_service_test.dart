@@ -28,6 +28,14 @@ class InMemoryFileStore implements FileStore {
   }
 
   @override
+  Future<FileSink> openAppend(String path) async =>
+      throw UnimplementedError('the recorder never appends');
+
+  @override
+  Future<void> move(String from, String to) async =>
+      throw UnimplementedError('the recorder never moves a file');
+
+  @override
   Future<Uint8List> read(String path) async {
     final sink = sinks[path];
     if (sink != null) return sink.snapshot();

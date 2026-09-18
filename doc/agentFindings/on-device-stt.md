@@ -92,6 +92,11 @@ Design decisions:
 
 ## Model delivery (spike)
 
+> **The cable is no longer the only way.** Every `adb` recipe below still works
+> and is still the quickest thing to do at a desk, so it is kept. What it could
+> never do is reach an iPhone — see *Downloading the models* at the end and
+> `doc/models.md`.
+
 **[V]** The model is not bundled in the APK. For the spike it was streamed from
 the laptop into the app's private support directory:
 
@@ -110,10 +115,10 @@ adb shell run-as $P sh -c "'chmod 700 files/models $D && chmod 600 $D/*'"
   `/data/user/0/com.ganeshsharma.voicenotetaker_app/files/models/indicconformer-hi-int8/`,
   which is `getApplicationSupportDirectory()`. `AppDirectories` gained
   `supportDirectory()` for this.
-- **[I]** A download-on-demand path only has to fill that directory. The
-  existing `SpeechModelStore.status` reports ready, missing or incomplete. The
-  downloader should verify a sha256 once, when the download finishes. The
-  runtime check is size only.
+- **[V]** *(2026-09-18)* That is exactly what the downloader does: it fills
+  that directory, `SpeechModelStore.status` is unchanged, and the sha256 is
+  verified once, when the download finishes. The runtime check is still size
+  only.
 - **[V]** Adding the package increases the APK by roughly **27 MB per ABI**
   (onnxruntime 22 MB plus sherpa 4.9 MB on arm64). The debug APK also carries
   armeabi-v7a and x86_64 copies. **[I]** A release build with `--split-per-abi`
@@ -887,3 +892,132 @@ that matter and have not been measured.
 - `speech_recognizer_test.dart`'s "sherpa_onnx is imported by exactly one
   file" is now "by the two driver files": the diarizer is the second, and the
   rule it protects — one file per engine seam — is unchanged.
+
+## Downloading the models (2026-09-18)
+
+### The problem
+
+`adb push` is not a thing on an iPhone. Without a download there is no way for
+a user — any user, on either platform — to get the model files onto the device,
+so transcription and speaker detection existed only on a phone somebody had
+plugged into this laptop.
+
+### Where they are hosted — [V]
+
+**Our own GitHub release, one uncompressed asset per file**, at
+`releases/download/models-v1/<set>--<file>`. The full reasoning is in
+`doc/models.md`; the short version is that the upstream files are `.tar.bz2`
+archives, and unpacking a 197 MB member on the phone would cost minutes of
+pure-Dart bzip2 and a second 200 MB copy in memory — on the same device this
+document already records a 350 MB retained-memory problem on. Re-hosting per
+file removes the step entirely: stream to disk, check one sha256, rename. It
+also unifies two upstream shapes, because the Hindi model is not in a
+sherpa-onnx release at all (Hugging Face) and the embedding model is a bare
+`.onnx`.
+
+**[V] Verified against the real host on 2026-09-18** with
+`tool/verify_download.dart`, driving the real `ModelDownloadService` over the
+real internet: a GitHub release asset answers unauthenticated, the 302 to
+`release-assets.githubusercontent.com` **keeps the `Range` header**, a download
+stopped on purpose at 9,432,013 of 28,281,164 B resumed from that byte, the
+sha256 matched (`aa3cfc16…ceba2`) and the file landed under its final name with
+no `.part` left behind. 28 MB in about a second on this connection.
+
+The catalogue's hashes and sizes were all computed from the real files on this
+laptop and match the tables above, file for file.
+
+### How it is built
+
+| Layer | File | Role |
+|---|---|---|
+| model | `lib/model/model_download.dart` | the catalogue (sha256 + URL only — names and sizes come from `SpeechModels`/`DiarizationModels`), `ModelInstallStatus`, `ResumePlan`, failure copy |
+| drivers | `download_client.dart` | abstract ranged GET; `IoDownloadClient` over `dart:io`. No `http`, no `dio` |
+| drivers | `hashing.dart` / `hashing_crypto.dart` | chunked sha256; the only file naming `package:crypto` |
+| drivers | `network_status.dart` / `network_status_connectivity.dart` | Wi-Fi or mobile; the only file naming `connectivity_plus` |
+| drivers | `disk_space.dart` / `disk_space_channel.dart` | free bytes, over the app's own `…/storage` channel (`StatFs` / `attributesOfFileSystem`) |
+| services | `transcription/model_download_service.dart` | the download |
+| services | `transcription/model_download_settings_store.dart` | the mobile-data choice |
+| controller | `app_controller.dart` | per-feature status; the transcription queue is re-planned when a model lands |
+| controller | `models_controller.dart` | the seam a screen is built against |
+| tool | `tool/publish_models.sh`, `tool/verify_download.dart` | publishing a release, and checking one |
+
+Design decisions:
+
+- **A half file is never a model.** Bytes land in `<name>.part` and take the
+  engine's name only after the sha256 matches, by a rename inside one
+  directory. The `.part` file IS the resume state — there is no journal to fall
+  out of step with it — and a `.part` longer than the file it claims to be is
+  thrown away rather than resumed.
+- **A wrong hash is discarded, not resumed.** Resuming corrupt bytes only
+  wastes the rest.
+- **Free space is checked before the first byte**, counting only what is still
+  to come, with 64 MB of headroom. A platform that will not say lets the
+  download run: losing the feature on a phone that cannot answer is worse.
+- **Wi-Fi only by default**, with an explicit override the app remembers.
+- **It does not run off screen, on EITHER platform.** iOS suspends the process
+  anyway, and the Android foreground service is the recorder's, not this.
+  `appBackgrounded` pauses, `appForegrounded` resumes from the same byte. One
+  behaviour to explain rather than two.
+- **[V] The app had no `INTERNET` permission.** It was in the *debug*
+  manifest only, where the Flutter tool puts it for hot reload, so a release
+  build could not have downloaded anything. It is now in the main manifest,
+  with a comment saying the models are the only thing this app ever fetches.
+- **`SpeechModelStore` was extended, not duplicated:** `directoryNamed`,
+  `releasePathOf`, `partPathOf`, `missingFiles`, `installedBytes`. The
+  downloader and the loader run the same presence-and-exact-size check, so they
+  cannot disagree about what "installed" means.
+
+### The controller API
+
+- `modelStatuses` / `modelStatusFor(feature)` — per FEATURE, not per file:
+  `notInstalled`, `downloading` (with `progress`, `bytesDone`, `bytesTotal`,
+  `currentFileName`, `paused`), `verifying`, `installed`, or `failed` with a
+  `ModelDownloadFailure` that already carries the sentence to print.
+- `downloadModel(feature)` / `cancelModelDownload(feature)` /
+  `deleteModel(feature)` / `refreshModels()`.
+- `installedModelBytes` — what the models take up, for a Storage line.
+- `downloadOnMobileData` / `setDownloadOnMobileData(bool)` — false until the
+  user says otherwise, kept in `model-download-settings.json`.
+- `ModelsController` (`lib/controller/models_controller.dart`) is that
+  interface with nothing else on it; `AppControllerModels` is plain delegation,
+  exactly like `AppControllerSpeakers`.
+
+**Work that was blocked resumes by itself.** The controller watches the
+downloader; the moment a set reports installed it re-plans the transcription
+queue, so notes that piled up unqueued while the model was missing start
+transcribing with nothing tapped.
+
+### Tests
+
+- Before: 1553 passed, 2 skipped. After: 1619 passed, 2 skipped.
+- New: `model_catalogue_test.dart` (ids unique, one set per feature, every
+  hash a real 64-hex sha256, every URL this release, asset names unique across
+  sets, totals, the catalogue and the engine holding the SAME size objects,
+  every `ResumePlan` rule, progress clamping, the failure copy and
+  `formatBytes`); `model_download_service_test.dart` (clean install, state
+  order, monotonic progress, skipping installed files, resume from a `.part`,
+  an over-long `.part` discarded, a complete `.part` verified not re-fetched,
+  a mid-transfer break retried from the byte it stopped on, a server that
+  ignores `Range`, giving up after the attempts, a wrong sha256 and a wrong
+  length both discarded, disk-full, the disk that will not say, only the
+  remaining bytes counted, the Wi-Fi gate in all four network states, cancel
+  keeping what arrived, cancel then resume, no two jobs for one set,
+  pause/resume on leaving and returning, delete, and the refresh that finds a
+  set pushed in by cable); `model_downloads_controller_test.dart` (what the
+  screen is told, the adapter's delegation, the mobile-data choice and its
+  persistence, a note transcribing itself when the model lands, and a
+  background/foreground round trip).
+- **No network in the suite.** The one real download is
+  `tool/verify_download.dart`, run by hand.
+
+### Could not verify
+
+- **[?]** The iOS half of the storage channel (`AppDelegate.swift`) is not
+  compiled here — there is no macOS on this machine. The Android half builds.
+- **[?]** No download has been run on a phone: the release the catalogue points
+  at does not exist yet, and creating it is the owner's call (`gh release
+  create`, see `doc/models.md`). What has been proved is the scheme, against a
+  real GitHub release asset of the same size as one of the files.
+- **[?]** The VAD model (`silero-vad`, 644 kB) is NOT in the catalogue. It is
+  off unless built with `--dart-define=STT_VAD=true`, so nothing asks for it
+  yet; it wants an entry before that flag is turned on.

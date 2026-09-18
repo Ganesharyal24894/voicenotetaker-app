@@ -36,6 +36,17 @@
          permission, granted at install. -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- THE ONE THING THIS APP EVER FETCHES: the speech models, from a public
+         GitHub release, on demand and only when the user asks. Nothing else
+         here touches the network - notes, audio and transcripts never leave
+         the phone. A normal permission, granted at install.
+         Until this it was in the DEBUG manifest only, put there by the Flutter
+         tool for hot reload, so a release build could not have downloaded
+         anything. See doc/models.md.
+         ACCESS_NETWORK_STATE, which the Wi-Fi-only rule needs, comes from
+         connectivity_plus's own manifest. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- The device is a BLE peripheral; the app is useless without a radio. -->
     <uses-feature android:name="android.hardware.bluetooth_le"
         android:required="true" />
