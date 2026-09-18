@@ -21,6 +21,7 @@ class DownloadResponse {
     required this.contentLength,
     required this.body,
     required this.abort,
+    this.retryAfter,
   });
 
   final int statusCode;
@@ -31,6 +32,11 @@ class DownloadResponse {
 
   /// The bytes. Listened to once.
   final Stream<List<int>> body;
+
+  /// What the server asked to be left alone for, from its `Retry-After`
+  /// header. Null when it did not say - which is the ordinary case, and then
+  /// the backoff is the caller's own.
+  final Duration? retryAfter;
 
   /// 206: the server honoured the range and is sending the rest.
   bool get isPartial => statusCode == 206;
@@ -104,6 +110,9 @@ class IoDownloadClient implements DownloadClient {
         statusCode: response.statusCode,
         contentLength:
             response.contentLength < 0 ? null : response.contentLength,
+        retryAfter: parseRetryAfter(
+          response.headers.value(HttpHeaders.retryAfterHeader),
+        ),
         body: response,
         abort: () async {
           try {
@@ -129,4 +138,29 @@ class IoDownloadClient implements DownloadClient {
 
   @override
   void close() => _client.close(force: true);
+}
+
+/// `Retry-After`, as a wait.
+///
+/// The header is either a number of seconds or an HTTP date, and both are
+/// seen in the wild; anything else, or a date already past, reads as "the
+/// server did not say" so that a malformed header can never stall a download.
+///
+/// Pure - the clock is handed in - so every shape of the header is a unit
+/// test.
+Duration? parseRetryAfter(String? value, {DateTime? now}) {
+  final header = value?.trim();
+  if (header == null || header.isEmpty) return null;
+  final seconds = int.tryParse(header);
+  if (seconds != null) {
+    return seconds <= 0 ? Duration.zero : Duration(seconds: seconds);
+  }
+  final DateTime when;
+  try {
+    when = HttpDate.parse(header);
+  } on Object {
+    return null;
+  }
+  final wait = when.difference(now ?? DateTime.now());
+  return wait.isNegative ? Duration.zero : wait;
 }

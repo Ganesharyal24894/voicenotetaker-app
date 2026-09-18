@@ -44,6 +44,7 @@ class FakeModels extends ChangeNotifier implements ModelsController {
     int bytesDone = 0,
     ModelDownloadFailure? failure,
     bool paused = false,
+    bool retrying = false,
   }) {
     _statuses[feature] = ModelInstallStatus(
       release: ModelCatalogue.forFeature(feature),
@@ -53,6 +54,7 @@ class FakeModels extends ChangeNotifier implements ModelsController {
           : bytesDone,
       failure: failure,
       paused: paused,
+      retrying: retrying,
     );
     notifyListeners();
   }
@@ -459,6 +461,26 @@ void main() {
       await tester.pump();
 
       expect(find.textContaining('Paused'), findsOneWidget);
+    });
+
+    testWidgets('a slow server is shown as still trying, not as a failure',
+        (tester) async {
+      final models = await _setup(tester);
+      await tester.tap(find.text(ModelsCopy.download));
+      await tester.pump();
+
+      models.set(
+        ModelFeature.hindiSpeech,
+        state: ModelInstallState.downloading,
+        bytesDone: 5000000,
+        retrying: true,
+      );
+      await tester.pump();
+
+      expect(find.text(ModelsCopy.stillTrying), findsOneWidget);
+      // Still a download, so the way out is still Cancel.
+      expect(find.text(ModelsCopy.cancel), findsOneWidget);
+      expect(find.text(ModelsCopy.tryAgain), findsNothing);
     });
 
     testWidgets('Cancel stops everything and goes back to the picker',

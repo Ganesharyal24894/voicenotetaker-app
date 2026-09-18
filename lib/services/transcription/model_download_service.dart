@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import '../../drivers/disk_space.dart';
 import '../../drivers/download_client.dart';
@@ -43,7 +44,8 @@ class ModelDownloadService {
     DiskSpace diskSpace = const FixedDiskSpace(),
     List<ModelRelease>? catalogue,
     Future<void> Function(Duration)? delay,
-    int maxAttempts = 3,
+    DownloadRetryPolicy retry = DownloadRetryPolicy.standard,
+    double Function()? roll,
     int headroomBytes = defaultHeadroomBytes,
     int progressStepBytes = defaultProgressStepBytes,
     // Every one of these is a plain field behind a public name; an
@@ -63,7 +65,9 @@ class ModelDownloadService {
         _diskSpace = diskSpace,
         _catalogue = catalogue ?? ModelCatalogue.all,
         _delay = delay ?? Future<void>.delayed,
-        _maxAttempts = maxAttempts < 1 ? 1 : maxAttempts,
+        // ignore: prefer_initializing_formals
+        _retry = retry,
+        _roll = roll ?? _defaultRoll,
         // ignore: prefer_initializing_formals
         _headroomBytes = headroomBytes,
         // ignore: prefer_initializing_formals
@@ -86,6 +90,10 @@ class ModelDownloadService {
   /// reads, small enough that the phone never holds more than this.
   static const int _hashChunkBytes = 4 * 1000 * 1000;
 
+  static final Random _random = Random();
+
+  static double _defaultRoll() => _random.nextDouble();
+
   final FileStore _fileStore;
   final SpeechModelStore _models;
   final DownloadClient _client;
@@ -94,7 +102,11 @@ class ModelDownloadService {
   final DiskSpace _diskSpace;
   final List<ModelRelease> _catalogue;
   final Future<void> Function(Duration) _delay;
-  final int _maxAttempts;
+  final DownloadRetryPolicy _retry;
+
+  /// 0..1 for the backoff jitter. A field so a test gets the same sequence
+  /// every run; the app gets a real one.
+  final double Function() _roll;
   final int _headroomBytes;
   final int _progressStepBytes;
 
@@ -226,7 +238,7 @@ class ModelDownloadService {
     final job = _jobs[release.id];
     _pausedIds.remove(release.id);
     if (job == null) return;
-    job.cancelled = true;
+    job.stop();
     await job.stopped;
   }
 
@@ -257,7 +269,7 @@ class ModelDownloadService {
   void pauseAll() {
     for (final job in _jobs.values) {
       job.paused = true;
-      job.cancelled = true;
+      job.stop();
       _pausedIds[job.release.id] = job.allowMobileData;
     }
   }
@@ -279,7 +291,7 @@ class ModelDownloadService {
   void dispose() {
     _disposed = true;
     for (final job in _jobs.values) {
-      job.cancelled = true;
+      job.stop();
     }
     _pausedIds.clear();
     unawaited(_changes.close());
@@ -438,25 +450,54 @@ class ModelDownloadService {
       if (plan.action != ResumeAction.complete) {
         job.bytesInFlight = plan.startAt;
         _emitProgress(job, force: true);
-        final error = await _transfer(job, file, partPath, plan.startAt);
+        final fault = await _transfer(job, file, partPath, plan.startAt);
         if (job.cancelled) return _FileOutcome.stopped;
-        switch (error) {
+        switch (fault?.kind) {
           case null:
             break;
-          case _TransferError.storage:
+          case _FaultKind.storage:
             job.failure = ModelDownloadFailure.storage(partPath);
             return _FileOutcome.stopped;
-          case _TransferError.network:
+          case _FaultKind.refused:
+            // The server answered, and its answer will be the same in twenty
+            // seconds: 403, 404, a tag that was deleted. Retrying that is
+            // only a slower way to say the same thing.
+            //
+            // 416 IS THE ONE EXCEPTION: it means the range asked for is not
+            // there, so what is on disk is not the start of this file.
+            // Throwing it away and asking for the whole thing is the fix, and
+            // `discarded` keeps that to once.
+            if (fault!.statusCode == 416 && plan.startAt > 0 && !discarded) {
+              discarded = true;
+              await _safeDelete(partPath);
+              continue;
+            }
+            job.failure = ModelDownloadFailure.network(
+              '${file.name}: the server answered ${fault.statusCode}',
+            );
+            return _FileOutcome.stopped;
+          case _FaultKind.retry:
             attempt++;
-            if (attempt >= _maxAttempts) {
+            if (!_retry.canRetry(attempt)) {
               job.failure = ModelDownloadFailure.network(
                 '${file.name} after $attempt attempts',
               );
               return _FileOutcome.stopped;
             }
-            // 1 s, then 2 s, then 4 s: long enough for a lift or a lost
-            // handover, short enough that nobody thinks it has given up.
-            await _delay(Duration(seconds: 1 << (attempt - 1)));
+            // A cold CDN takes about a minute to wake up, so this waits it
+            // out rather than giving up inside it - see [DownloadRetryPolicy]
+            // for the numbers. The screen says "Still trying…" meanwhile, and
+            // the wait ends the moment the user cancels.
+            _emitRetrying(job);
+            await _wait(
+              job,
+              _retry.delayFor(
+                attempt,
+                roll: _roll(),
+                retryAfter: fault!.retryAfter,
+              ),
+            );
+            if (job.cancelled) return _FileOutcome.stopped;
             continue;
         }
       }
@@ -494,7 +535,7 @@ class ModelDownloadService {
   }
 
   /// One HTTP transfer into the `.part` file. Null when it ran to the end.
-  Future<_TransferError?> _transfer(
+  Future<_Fault?> _transfer(
     _Job job,
     DownloadableFile file,
     String partPath,
@@ -504,9 +545,11 @@ class ModelDownloadService {
     try {
       response = await _client.get(file.url, from: startAt);
     } on DownloadException {
-      return _TransferError.network;
+      // Never a status: the socket, the DNS, the handshake or the clock.
+      // Worth another go.
+      return const _Fault(_FaultKind.retry);
     } on Object {
-      return _TransferError.network;
+      return const _Fault(_FaultKind.retry);
     }
 
     var from = startAt;
@@ -518,10 +561,10 @@ class ModelDownloadService {
       job.bytesInFlight = 0;
     } else if (startAt > 0 && !response.isPartial) {
       await response.abort();
-      return _TransferError.network;
+      return _faultFor(response);
     } else if (startAt == 0 && !response.isWholeFile) {
       await response.abort();
-      return _TransferError.network;
+      return _faultFor(response);
     }
 
     FileSink sink;
@@ -529,7 +572,7 @@ class ModelDownloadService {
       sink = await _fileStore.openAppend(partPath);
     } on Object {
       await response.abort();
-      return _TransferError.storage;
+      return const _Fault(_FaultKind.storage);
     }
 
     var written = from;
@@ -551,14 +594,48 @@ class ModelDownloadService {
       // The connection broke part way. What arrived is on disk and is
       // resumable; say so by asking for a retry.
       await _closeQuietly(sink);
-      return _TransferError.network;
+      return const _Fault(_FaultKind.retry);
     }
     await _closeQuietly(sink);
 
-    if (storageError != null) return _TransferError.storage;
+    if (storageError != null) return const _Fault(_FaultKind.storage);
     if (job.cancelled) return null;
-    if (written < file.sizeBytes) return _TransferError.network;
+    // The body ended early. What arrived is on disk and resumable.
+    if (written < file.sizeBytes) return const _Fault(_FaultKind.retry);
     return null;
+  }
+
+  /// What a status that is not the one asked for means: wait and ask again,
+  /// or stop and say so.
+  _Fault _faultFor(DownloadResponse response) =>
+      _retry.shouldRetryStatus(response.statusCode)
+          ? _Fault(
+              _FaultKind.retry,
+              statusCode: response.statusCode,
+              retryAfter: response.retryAfter,
+            )
+          : _Fault(_FaultKind.refused, statusCode: response.statusCode);
+
+  /// Waits [duration], unless the user cancels first.
+  ///
+  /// NO UN-CANCELLABLE SLEEP. A backoff can be twenty seconds long, and a
+  /// Cancel that does nothing for twenty seconds is a broken button.
+  Future<void> _wait(_Job job, Duration duration) async {
+    if (job.cancelled || duration <= Duration.zero) return;
+    await Future.any<void>(<Future<void>>[_delay(duration), job.woken]);
+  }
+
+  /// Says, on the screen, that the bar has not stalled.
+  void _emitRetrying(_Job job) {
+    _emit(
+      ModelInstallStatus(
+        release: job.release,
+        state: ModelInstallState.downloading,
+        bytesDone: job.bytesDone,
+        currentFileName: job.currentFileName,
+        retrying: true,
+      ),
+    );
   }
 
   /// sha256 of [path], read a few megabytes at a time.
@@ -627,6 +704,19 @@ class _Job {
   bool cancelled = false;
   bool paused = false;
 
+  final Completer<void> _woken = Completer<void>();
+
+  /// Completes the moment this job is stopped. A backoff waits on it, so a
+  /// Cancel during one is felt at once rather than up to twenty seconds
+  /// later.
+  Future<void> get woken => _woken.future;
+
+  /// Stops the job: the transfer loop sees [cancelled] and any wait ends now.
+  void stop() {
+    cancelled = true;
+    if (!_woken.isCompleted) _woken.complete();
+  }
+
   ModelDownloadFailure? failure;
 
   /// Bytes of files that are fully installed.
@@ -654,4 +744,26 @@ class _Job {
 
 enum _FileOutcome { installed, stopped }
 
-enum _TransferError { network, storage }
+/// Why one transfer stopped short.
+enum _FaultKind {
+  /// Worth asking again: the wire broke, or the server said "not now".
+  retry,
+
+  /// The server answered, and it will answer the same next time.
+  refused,
+
+  /// The phone would not take the bytes.
+  storage,
+}
+
+class _Fault {
+  const _Fault(this.kind, {this.statusCode, this.retryAfter});
+
+  final _FaultKind kind;
+
+  /// The status behind it, when there was one.
+  final int? statusCode;
+
+  /// What the server asked to be left alone for.
+  final Duration? retryAfter;
+}

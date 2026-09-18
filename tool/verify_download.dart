@@ -27,6 +27,7 @@
 // name the engine loads with nothing left under `.part`.
 
 import 'dart:io';
+import 'dart:math';
 
 import 'package:voicenotetaker_app/drivers/download_client.dart';
 import 'package:voicenotetaker_app/drivers/file_store.dart';
@@ -76,18 +77,47 @@ Future<bool> _head(
   DownloadableFile file,
 ) async {
   stdout.write('${release.id}/${file.name} ... ');
-  try {
-    final response = await client.get(file.url, from: file.sizeBytes - 1);
-    await response.abort();
-    final ranged = response.isPartial;
-    stdout.writeln(
-      'HTTP ${response.statusCode}'
-      '${ranged ? ', ranges honoured' : ', NO range support'}',
-    );
-    return ranged;
-  } on DownloadException catch (error) {
-    stdout.writeln('FAILED: ${error.message}');
-    return false;
+  // THE SAME BACKOFF THE APP USES. A release asset nobody has fetched yet is
+  // cold on the CDN and answers 504 for about a minute; a probe that gives up
+  // on the first one reports a healthy release as broken.
+  const policy = DownloadRetryPolicy.standard;
+  final roll = Random();
+  var attempt = 0;
+  while (true) {
+    attempt++;
+    try {
+      final response = await client.get(file.url, from: file.sizeBytes - 1);
+      await response.abort();
+      final ranged = response.isPartial;
+      if (!ranged &&
+          policy.shouldRetryStatus(response.statusCode) &&
+          policy.canRetry(attempt)) {
+        final wait = policy.delayFor(
+          attempt,
+          roll: roll.nextDouble(),
+          retryAfter: response.retryAfter,
+        );
+        stdout.write(
+          'HTTP ${response.statusCode}, again in ${wait.inSeconds}s ... ',
+        );
+        await Future<void>.delayed(wait);
+        continue;
+      }
+      stdout.writeln(
+        'HTTP ${response.statusCode}'
+        '${ranged ? ', ranges honoured' : ', NO range support'}',
+      );
+      return ranged;
+    } on DownloadException catch (error) {
+      if (policy.canRetry(attempt)) {
+        final wait = policy.delayFor(attempt, roll: roll.nextDouble());
+        stdout.write('${error.message}, again in ${wait.inSeconds}s ... ');
+        await Future<void>.delayed(wait);
+        continue;
+      }
+      stdout.writeln('FAILED: ${error.message}');
+      return false;
+    }
   }
 }
 

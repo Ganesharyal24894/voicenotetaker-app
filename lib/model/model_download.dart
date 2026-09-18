@@ -359,6 +359,7 @@ class ModelInstallStatus {
     this.currentFileName,
     this.failure,
     this.paused = false,
+    this.retrying = false,
   });
 
   /// Nothing has happened yet: the presence check has not run.
@@ -389,6 +390,12 @@ class ModelInstallStatus {
   /// Downloading, but stopped for now because the app went off screen. It
   /// starts again by itself when the app is opened.
   final bool paused;
+
+  /// Downloading, and waiting out a backoff before asking the server again.
+  /// The screen says so - a bar that has not moved for half a minute with no
+  /// word about why reads as broken, and the honest word is that it is still
+  /// trying. See [DownloadRetryPolicy].
+  final bool retrying;
 
   ModelFeature get feature => release.feature;
 
@@ -421,6 +428,7 @@ class ModelInstallStatus {
     String? currentFileName,
     ModelDownloadFailure? failure,
     bool? paused,
+    bool? retrying,
     bool clearFile = false,
     bool clearFailure = false,
   }) =>
@@ -432,6 +440,7 @@ class ModelInstallStatus {
             clearFile ? null : (currentFileName ?? this.currentFileName),
         failure: clearFailure ? null : (failure ?? this.failure),
         paused: paused ?? this.paused,
+        retrying: retrying ?? this.retrying,
       );
 
   @override
@@ -442,7 +451,8 @@ class ModelInstallStatus {
       other.bytesDone == bytesDone &&
       other.currentFileName == currentFileName &&
       other.failure == failure &&
-      other.paused == paused;
+      other.paused == paused &&
+      other.retrying == retrying;
 
   @override
   int get hashCode => Object.hash(
@@ -452,12 +462,13 @@ class ModelInstallStatus {
         currentFileName,
         failure,
         paused,
+        retrying,
       );
 
   @override
   String toString() =>
       'ModelInstallStatus(${release.id}, ${state.name}, $bytesDone/$bytesTotal'
-      '${paused ? ', paused' : ''})';
+      '${paused ? ', paused' : ''}${retrying ? ', retrying' : ''})';
 }
 
 /// What to do with the bytes already on disk for one file.
@@ -514,6 +525,133 @@ class ResumePlan {
 
   @override
   String toString() => 'ResumePlan(${action.name}, from $startAt)';
+}
+
+/// When asking the server again is worth anything, and how long to wait
+/// before doing it.
+///
+/// WHY THESE NUMBERS. A release asset nobody has fetched yet is cold on the
+/// CDN. On a real phone the first request for the speaker-detection
+/// segmentation file answered `504 Gateway Time-out` over and over and only
+/// started serving bytes after about SIXTY SECONDS of warming up. Three tries
+/// over seven seconds - what this used to do - turns that minute into "The
+/// download stopped", which is both wrong and something the user can do
+/// nothing about. So: nine tries, 1 s doubling to a 20 s ceiling, which is
+/// 1+2+4+8+16+20+20+20 = 91 s of waiting, about 109 s with the jitter at its
+/// worst. Comfortably past the warm-up that was measured, and still under the
+/// two minutes past which a person would rather be told than left watching.
+///
+/// THE CEILING MATTERS AS MUCH AS THE COUNT: doubling all the way to the
+/// ninth try would be a four-minute wait between two requests, which looks
+/// exactly like a hang.
+///
+/// THE JITTER IS NOT DECORATION. Every phone that opened the app after a
+/// release retries on the same schedule otherwise, and a cold CDN is the one
+/// moment that happens at once.
+///
+/// PURE: attempt in, delay out; status in, verdict out. It does not sleep, it
+/// does not read a clock and it holds no random source of its own - the roll
+/// is handed in - so the sequence, the ceiling and the jitter bounds are unit
+/// tests rather than a stopwatch.
+class DownloadRetryPolicy {
+  const DownloadRetryPolicy({
+    this.maxAttempts = 9,
+    this.firstDelay = const Duration(seconds: 1),
+    this.maxDelay = const Duration(seconds: 20),
+    this.jitterFraction = 0.2,
+    this.maxServerDelay = const Duration(seconds: 30),
+  });
+
+  /// What the app ships with, and what the numbers above describe.
+  static const DownloadRetryPolicy standard = DownloadRetryPolicy();
+
+  /// Transfers of one file, the first one included. Nine.
+  final int maxAttempts;
+
+  /// The wait after the first failure.
+  final Duration firstDelay;
+
+  /// The longest wait between two tries, however many have failed.
+  final Duration maxDelay;
+
+  /// How far either side of the nominal wait the jitter can land: 0.2 means
+  /// 80 % to 120 % of it.
+  final double jitterFraction;
+
+  /// The longest a server's own `Retry-After` is honoured for. A CDN that
+  /// asks for an hour is not worth waiting for with a progress bar on screen;
+  /// the download stops instead and the user can start it again.
+  final Duration maxServerDelay;
+
+  /// HTTP statuses worth asking again about: the request timed out, came too
+  /// early, was rate-limited, or the origin is having a moment. Everything
+  /// else - 401, 403, 404, 410 - means this URL will answer the same way in
+  /// twenty seconds, so the download fails at once and says so.
+  static const Set<int> transientStatuses = <int>{
+    408, // Request Time-out
+    425, // Too Early
+    429, // Too Many Requests
+    500, // Internal Server Error
+    502, // Bad Gateway
+    503, // Service Unavailable
+    504, // Gateway Time-out - the one that was actually seen.
+  };
+
+  /// Whether there is another go after [attempt] transfers have failed.
+  bool canRetry(int attempt) => attempt < maxAttempts;
+
+  bool shouldRetryStatus(int statusCode) =>
+      transientStatuses.contains(statusCode);
+
+  /// Whether [statusOrError] is worth another go.
+  ///
+  /// An `int` is an HTTP status and is judged on its own. ANYTHING ELSE is a
+  /// connection that never became a status - a dropped socket, a timeout, a
+  /// handshake that failed - which is the wire rather than the file, and the
+  /// wire is exactly what retrying is for.
+  bool shouldRetry(Object statusOrError) =>
+      statusOrError is int ? shouldRetryStatus(statusOrError) : true;
+
+  /// How long to wait before transfer number `attempt + 1`.
+  ///
+  /// [attempt] is how many have failed, counting from one. [roll] is a random
+  /// number in 0..1 for the jitter, handed in so the caller owns the
+  /// randomness: 0.5 is the nominal wait, 0 the shortest, 1 the longest.
+  /// [retryAfter] is what the server asked for, and a server that names a
+  /// number beats any guess - clamped to [maxServerDelay] and never jittered,
+  /// because it is an instruction and not an estimate.
+  Duration delayFor(int attempt, {double roll = 0.5, Duration? retryAfter}) {
+    if (attempt < 1) return Duration.zero;
+    if (retryAfter != null) {
+      if (retryAfter <= Duration.zero) return Duration.zero;
+      return retryAfter > maxServerDelay ? maxServerDelay : retryAfter;
+    }
+    final ceiling = maxDelay.inMicroseconds;
+    var micros = firstDelay.inMicroseconds;
+    for (var i = 1; i < attempt && micros < ceiling; i++) {
+      micros *= 2;
+    }
+    if (micros > ceiling) micros = ceiling;
+    final clamped = roll < 0 ? 0.0 : (roll > 1 ? 1.0 : roll);
+    final factor = 1 + jitterFraction * (2 * clamped - 1);
+    return Duration(microseconds: (micros * factor).round());
+  }
+
+  /// Every wait of a run that uses all its tries, with the jitter at its
+  /// worst. The bound the comment above claims, as a number anything can
+  /// check.
+  Duration get longestTotalWait {
+    var micros = 0;
+    for (var attempt = 1; attempt < maxAttempts; attempt++) {
+      micros += delayFor(attempt, roll: 1).inMicroseconds;
+    }
+    return Duration(microseconds: micros);
+  }
+
+  @override
+  String toString() =>
+      'DownloadRetryPolicy($maxAttempts tries, ${firstDelay.inSeconds}s to '
+      '${maxDelay.inSeconds}s)';
 }
 
 /// `197 MB`, `34 MB`, `9.7 kB` - for a screen and for a failure message.

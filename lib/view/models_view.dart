@@ -89,6 +89,12 @@ abstract final class ModelsCopy {
   static const String remove = 'Remove';
   static const String installedNote = 'On this phone';
   static const String checking = 'Checking…';
+
+  /// Shown while the downloader is waiting out a backoff. HONEST, AND NOT AN
+  /// ERROR: the server is busy or cold - the first fetch of a new release can
+  /// take a minute to wake up - and the app has not given up, so the bar
+  /// standing still gets a sentence rather than silence.
+  static const String stillTrying = 'Still trying…';
   static const String doneLabel = 'Done';
 
   /// The note screen when the pack it needs is not here.
@@ -843,6 +849,9 @@ class _ProgressRow extends StatelessWidget {
             const SizedBox(height: 8),
             const Text('Paused. It carries on when you come back.',
                 style: AppText.footnote12),
+          ] else if (status.retrying) ...<Widget>[
+            const SizedBox(height: 8),
+            const Text(ModelsCopy.stillTrying, style: AppText.footnote12),
           ],
         ],
       ),
@@ -1044,9 +1053,14 @@ class _BusySettingsRow extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            status.state == ModelInstallState.verifying
-                ? ModelsCopy.checking
-                : ModelsCopy.progressLabel(status.bytesDone, status.bytesTotal),
+            switch (status.state) {
+              ModelInstallState.verifying => ModelsCopy.checking,
+              _ when status.retrying => ModelsCopy.stillTrying,
+              _ => ModelsCopy.progressLabel(
+                  status.bytesDone,
+                  status.bytesTotal,
+                ),
+            },
             style: AppText.rowMeta,
           ),
           const SizedBox(height: 8),
