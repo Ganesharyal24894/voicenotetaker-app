@@ -346,8 +346,21 @@ jobs:
   # Regenerating the source JSON is plain HTTP and JSON, so it runs on Linux:
   # faster, and a tenth of the cost if this repo ever goes private.
   source:
-    needs: ios
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [test, ios]
+    # `always()` so a broken iOS build does not also take the source down with
+    # it. This job does not publish the build that just ran -- it describes the
+    # releases that EXIST, which is a different question. When the macOS build
+    # fails there is simply no new release to find, the same JSON is republished,
+    # and the phone keeps being able to install the last good build. Holding the
+    # source hostage to the newest build would turn one red build into "nobody
+    # can install anything".
+    #
+    # The Linux tests stay a hard gate: nothing is published off a red test run.
+    if: >-
+      always()
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/master'
+      && needs.test.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       # Deleting the releases that fell off the end of the history.
