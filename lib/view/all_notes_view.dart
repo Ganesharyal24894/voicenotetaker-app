@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../controller/assistant_controller.dart';
 import '../model/recording_info.dart';
 import 'note_list.dart';
 import 'theme.dart';
@@ -19,12 +20,17 @@ class AllNotesView extends StatefulWidget {
   const AllNotesView({
     required this.controller,
     required this.onOpen,
+    this.assistant,
     this.onBack,
     this.now,
     super.key,
   });
 
   final AppController controller;
+
+  /// Only so a row that was an instruction is quoted without the wake phrase
+  /// in front of it. Null lists every note exactly as it was transcribed.
+  final AssistantController? assistant;
   final ValueChanged<RecordingInfo> onOpen;
   final VoidCallback? onBack;
 
@@ -91,6 +97,7 @@ class _AllNotesViewState extends State<AllNotesView> {
           isWriting: recording.path == writing,
           progress: progress,
           autoDeleteAudio: controller.autoDeleteAudio,
+          quoteAs: widget.assistant?.titleFor,
         ),
     ];
   }

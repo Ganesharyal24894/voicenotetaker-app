@@ -84,6 +84,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- The Undo button on the "Sending to Instinct" notification. Not
+             exported: only this app's own PendingIntent ever fires it. -->
+        <receiver
+            android:name=".UndoReceiver"
+            android:exported="false" />
+
         <service
             android:name=".ListeningService"
             android:exported="false"

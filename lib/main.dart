@@ -25,6 +25,8 @@ import 'drivers/platform_settings_channel.dart';
 import 'drivers/share_sheet_share_plus.dart';
 import 'drivers/speaker_diarizer_sherpa.dart';
 import 'drivers/speech_recognizer_sherpa.dart';
+import 'drivers/undo_notification_channel.dart';
+import 'services/assistant/undo_notifier.dart';
 import 'services/export/note_export_service.dart';
 import 'services/summary/day_summary_store.dart';
 import 'services/transcription/model_download_service.dart';
@@ -169,6 +171,17 @@ Future<void> main() async {
   );
   unawaited(assistant.initialise());
 
+  // The Undo notification, for the five seconds before an instruction goes
+  // when the app is not on screen. ANDROID ONLY: an iPhone gets the in-app
+  // banner on the next glance and nothing else, for the same reason it gets
+  // no buzz - see `doc/assistant-instructions.md`.
+  final undoNotifier = android
+      ? AssistantUndoNotifier(
+          assistant: assistant,
+          notifications: MethodChannelUndoNotifications(),
+        )
+      : null;
+
   // The Today tab: summaries pasted from the user's AI app, kept in the
   // support directory beside the other app data.
   final summaries = SummaryController(
@@ -199,6 +212,7 @@ Future<void> main() async {
     controller: controller,
     summaries: summaries,
     assistant: assistant,
+    undoNotifier: undoNotifier,
     newExportController: () => ExportController(
       exports: exports,
       shareSheet: const SharePlusShareSheet(),
@@ -211,6 +225,7 @@ class VoiceNotetakerApp extends StatefulWidget {
     required this.controller,
     this.summaries,
     this.assistant,
+    this.undoNotifier,
     this.newExportController,
     super.key,
   });
@@ -221,6 +236,9 @@ class VoiceNotetakerApp extends StatefulWidget {
   /// "Speak to your assistant". Null on a build with the feature left out; the
   /// settings screen and the Undo banner read everything they need from it.
   final AssistantController? assistant;
+
+  /// Posts the Undo notification while the app is away. Android only.
+  final AssistantUndoNotifier? undoNotifier;
 
   /// Makes the controller behind "Export notes", one per opening of the sheet.
   final ExportController Function()? newExportController;
@@ -251,6 +269,7 @@ class _VoiceNotetakerAppState extends State<VoiceNotetakerApp> {
 
   @override
   void dispose() {
+    widget.undoNotifier?.dispose();
     widget.summaries?.dispose();
     widget.controller.dispose();
     super.dispose();
@@ -265,6 +284,8 @@ class _VoiceNotetakerAppState extends State<VoiceNotetakerApp> {
       home: AppRoot(
         controller: widget.controller,
         summaries: widget.summaries,
+        assistant: widget.assistant,
+        undoNotifier: widget.undoNotifier,
         newExportController: widget.newExportController,
       ),
     );

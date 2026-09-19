@@ -4,10 +4,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../controller/assistant_controller.dart';
 import '../controller/models_controller.dart';
 import '../model/auto_sleep.dart';
 import '../model/home_status.dart';
 import '../model/model_download.dart';
+import 'assistant_view.dart';
 import 'format.dart';
 import 'models_view.dart';
 import 'pair_new_phone_view.dart';
@@ -33,16 +35,22 @@ import 'widgets/motion.dart';
 class SettingsView extends StatelessWidget {
   const SettingsView({
     required this.controller,
+    this.assistant,
     this.onBack,
     this.onOpenDiagnostics,
     this.onConnect,
     this.onPairNewPhone,
     this.onOpenModels,
+    this.onOpenInstinct,
     this.onExportNotes,
     super.key,
   });
 
   final AppController controller;
+
+  /// "Send to Instinct". Null hides the row, which is the honest state for a
+  /// build without the feature and for a screen pumped on its own in a test.
+  final AssistantController? assistant;
   final VoidCallback? onBack;
   final VoidCallback? onOpenDiagnostics;
 
@@ -55,6 +63,9 @@ class SettingsView extends StatelessWidget {
 
   /// Opens "Speech models". Null pushes it from here.
   final VoidCallback? onOpenModels;
+
+  /// Opens "Send to Instinct". Null pushes it from here.
+  final VoidCallback? onOpenInstinct;
 
   /// Opens "Export notes" - one zip of the recordings and transcripts, handed
   /// to the share sheet. Null hides the row, which is what a build with no
@@ -121,11 +132,18 @@ class SettingsView extends StatelessWidget {
                               ),
                     ),
                   ],
-                  // Two plain rows at the bottom, no section caption between
-                  // them: both are doors out of Settings rather than settings,
-                  // and each draws its own hairline so they stack.
-                  if (onExportNotes != null || onOpenDiagnostics != null)
+                  // Three plain rows at the bottom, no section caption
+                  // between them: each is a door out of Settings rather than a
+                  // setting, and each draws its own hairline so they stack.
+                  if (assistant != null ||
+                      onExportNotes != null ||
+                      onOpenDiagnostics != null)
                     const SizedBox(height: 16),
+                  if (assistant != null)
+                    _InstinctRow(
+                      assistant: assistant!,
+                      onTap: onOpenInstinct ?? () => _openInstinct(context),
+                    ),
                   if (onExportNotes != null)
                     _EndRow(
                       title: 'Export notes',
@@ -173,6 +191,20 @@ class SettingsView extends StatelessWidget {
                 models: models,
                 onBack: () => Navigator.of(context).pop(),
               ),
+      ),
+    );
+  }
+
+  /// "Send to Instinct" is a page under this screen, the way Diagnostics is.
+  void _openInstinct(BuildContext context) {
+    final assistant = this.assistant;
+    if (assistant == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => AssistantView(
+          assistant: assistant,
+          onBack: () => Navigator.of(context).pop(),
+        ),
       ),
     );
   }
@@ -605,6 +637,35 @@ class _AudioCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// "Send to Instinct", as a row at the foot of Recorder settings: not set up,
+/// off, or on.
+///
+/// It follows the controller, because turning the feature on lives one screen
+/// further in and the row must not still say "Not set up" when the user comes
+/// back.
+class _InstinctRow extends StatelessWidget {
+  const _InstinctRow({required this.assistant, required this.onTap});
+
+  final AssistantController assistant;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: assistant,
+      builder: (context, _) => _EndRow(
+        title: AssistantCopy.title,
+        meta: !assistant.hasAccount
+            ? AssistantCopy.rowNotSetUp
+            : assistant.enabled
+                ? AssistantCopy.rowOn
+                : AssistantCopy.rowOff,
+        onTap: onTap,
       ),
     );
   }

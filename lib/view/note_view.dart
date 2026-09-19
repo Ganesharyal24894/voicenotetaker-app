@@ -5,14 +5,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../controller/app_controller.dart';
+import '../controller/assistant_controller.dart';
 import '../controller/models_controller.dart';
 import '../controller/speakers_controller.dart';
 import '../drivers/audio_player.dart';
+import '../model/assistant/assistant_send.dart';
 import '../model/model_download.dart';
 import '../model/recording_info.dart';
 import '../model/speaker_names.dart';
 import '../model/transcript.dart';
 import '../model/transcript_paragraphs.dart';
+import 'assistant_view.dart';
 import 'models_view.dart';
 import 'note_audio_panel.dart';
 import 'note_list.dart';
@@ -34,6 +37,7 @@ class NoteView extends StatefulWidget {
   const NoteView({
     required this.controller,
     required this.recording,
+    this.assistant,
     this.onBack,
     this.onDeleted,
     this.onSummarize,
@@ -43,6 +47,10 @@ class NoteView extends StatefulWidget {
   });
 
   final AppController controller;
+
+  /// "Send to Instinct": the mark above the title, and Send again in the
+  /// menu. Null on a build without the feature, which shows neither.
+  final AssistantController? assistant;
 
   /// The note as it was when opened. The screen follows the library's newer
   /// copy of it (kept, audio removed) by path.
@@ -406,6 +414,11 @@ class _NoteViewState extends State<NoteView> {
                         children: <Widget>[
                           _header(recording, canTranscribeAgain),
                           const SizedBox(height: 18),
+                          if (widget.assistant != null)
+                            AssistantNoteMark(
+                              assistant: widget.assistant!,
+                              noteId: recording.path,
+                            ),
                           Text(
                             NoteLabels.title(recording),
                             style: AppText.title24,
@@ -473,6 +486,12 @@ class _NoteViewState extends State<NoteView> {
     );
   }
 
+  /// Whether this note's instruction failed to reach the assistant, which is
+  /// the one state "Send again" can do anything about.
+  bool _sendFailed(RecordingInfo recording) =>
+      widget.assistant?.statusFor(recording.path) ==
+      AssistantSendStatus.failed;
+
   Widget _header(RecordingInfo recording, bool canTranscribeAgain) {
     return Row(
       children: <Widget>[
@@ -513,11 +532,22 @@ class _NoteViewState extends State<NoteView> {
               switch (action) {
                 case _NoteAction.transcribe:
                   _transcribe();
+                case _NoteAction.sendAgain:
+                  unawaited(widget.assistant!.retry(recording.path));
                 case _NoteAction.delete:
                   unawaited(_delete());
               }
             },
             itemBuilder: (context) => <PopupMenuEntry<_NoteAction>>[
+              // ONLY WHEN IT FAILED. One note is one send for the life of the
+              // outbox - the dedupe key is this path - so there is no such
+              // thing as sending a note that already went a second time, and
+              // an item that could only ever do nothing is not offered.
+              if (_sendFailed(recording))
+                const PopupMenuItem<_NoteAction>(
+                  value: _NoteAction.sendAgain,
+                  child: Text(AssistantCopy.sendAgain, style: AppText.label13),
+                ),
               if (canTranscribeAgain)
                 const PopupMenuItem<_NoteAction>(
                   value: _NoteAction.transcribe,
@@ -878,7 +908,7 @@ class _NoteViewState extends State<NoteView> {
   }
 }
 
-enum _NoteAction { transcribe, delete }
+enum _NoteAction { transcribe, sendAgain, delete }
 
 class _SpeakerChips extends StatelessWidget {
   const _SpeakerChips({

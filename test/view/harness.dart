@@ -26,6 +26,7 @@ import 'package:voicenotetaker_app/model/not_saving_alert.dart';
 import 'package:voicenotetaker_app/model/pairing_outcome.dart';
 import 'package:voicenotetaker_app/model/phone_power.dart';
 import 'package:voicenotetaker_app/model/stream_info.dart';
+import 'package:voicenotetaker_app/model/transcript.dart';
 import 'package:voicenotetaker_app/model/transcription.dart';
 import 'package:voicenotetaker_app/services/device_test_service.dart';
 import 'package:voicenotetaker_app/services/device_test_store.dart';
@@ -141,6 +142,10 @@ class ViewHarness {
     // build where models only ever arrive down a cable.
     ModelDownloadService Function(FileStore fileStore, SpeechModelStore models)?
         modelDownloads,
+    // The one hook `AppController` offers on a finished transcript, and the
+    // only place the assistant feature touches the recorder. `main.dart`
+    // passes `AssistantController.noteTranscribed` here.
+    this.onTranscriptSaved,
   }) : transport = MockBleTransport() {
     if (recognizer != null && speechModelInstalled) installSpeechModel();
     if (diarizer != null && speakerModelsInstalled) installSpeakerModels();
@@ -281,8 +286,14 @@ class ViewHarness {
               transport: transport,
               pollInterval: const Duration(milliseconds: 20),
             ),
+      onTranscriptSaved: onTranscriptSaved,
     );
   }
+
+  /// Told about every transcript the moment it is saved, exactly as
+  /// `main.dart` tells the assistant.
+  final void Function(String path, DateTime recordedAt, Transcript transcript)?
+      onTranscriptSaved;
 
   /// Where the controller writes captures, and where the library reads them.
   static const String recordingsDirectory = '/tmp/voicenotetaker-test';

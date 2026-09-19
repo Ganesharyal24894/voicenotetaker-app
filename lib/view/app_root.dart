@@ -4,9 +4,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../controller/assistant_controller.dart';
 import '../controller/export_controller.dart';
 import '../controller/summary_controller.dart';
 import '../model/device_state.dart';
+import '../services/assistant/undo_notifier.dart';
 import '../model/recording_info.dart';
 import 'connection_lost_view.dart';
 import 'developer_view.dart';
@@ -42,11 +44,23 @@ class AppRoot extends StatefulWidget {
   const AppRoot({
     required this.controller,
     this.summaries,
+    this.assistant,
+    this.undoNotifier,
     this.newExportController,
     super.key,
   });
 
   final AppController controller;
+
+  /// "Send to Instinct". Null leaves the feature out of every screen below -
+  /// no row in Settings, no Undo banner, no mark on a note - which is what a
+  /// test that is not about it wants.
+  final AssistantController? assistant;
+
+  /// Told when the app leaves and comes back, so the Undo notification is
+  /// posted only while there is no banner on screen to do the job. Null on
+  /// iOS and in tests, where there is no notification to post.
+  final AssistantUndoNotifier? undoNotifier;
 
   /// The Today tab's controller. Null builds one that reads transcripts
   /// through [controller] and keeps nothing between launches - what a test
@@ -128,11 +142,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.resumed:
+        widget.undoNotifier?.setForeground(true);
         // `appForegrounded` re-reads the adapter first, as this used to.
         unawaited(widget.controller.appForegrounded());
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
+        widget.undoNotifier?.setForeground(false);
         unawaited(widget.controller.appBackgrounded());
       case AppLifecycleState.inactive:
         break;
@@ -170,6 +186,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         listenable: widget.controller,
         builder: (context, _) => AllNotesView(
           controller: widget.controller,
+          assistant: widget.assistant,
           onBack: () => Navigator.of(context).pop(),
           onOpen: (recording) => _openNote(context, recording),
         ),
@@ -206,6 +223,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       context,
       (context) => NoteView(
         controller: widget.controller,
+        assistant: widget.assistant,
         recording: recording,
         // The screen is showing a note that no longer exists, so it leaves.
         onDeleted: () => Navigator.of(context).pop(),
@@ -231,6 +249,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       context,
       (context) => SettingsView(
         controller: widget.controller,
+        assistant: widget.assistant,
         onBack: () => Navigator.of(context).pop(),
         onOpenDiagnostics: () => _openDiagnostics(context),
         onPairNewPhone: () => _push(
@@ -364,6 +383,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                 builder: (context) => HomeView(
                   controller: controller,
                   summaries: _summaries,
+                  assistant: widget.assistant,
                   onOpenLibrary: () => _openAllNotes(context),
                   onOpenRecording: (entry) => _openEntry(context, entry),
                   // Always offered, in release builds too. Diagnostics is a row

@@ -3,12 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
+import '../controller/assistant_controller.dart';
 import '../controller/summary_controller.dart';
 import '../model/battery_bars.dart';
 import '../model/device_profile.dart';
 import '../model/home_status.dart';
 import '../model/notes_overview.dart';
 import '../model/recording_info.dart';
+import 'assistant_view.dart';
 import 'home/notes_tab.dart';
 import 'home/summarize_sheet.dart';
 import 'home/today_tab.dart';
@@ -31,12 +33,17 @@ class HomeView extends StatefulWidget {
     required this.summaries,
     required this.onOpenLibrary,
     required this.onOpenRecording,
+    this.assistant,
     this.onOpenSettings,
     super.key,
   });
 
   final AppController controller;
   final SummaryController summaries;
+
+  /// Only for the Undo banner above the tab bar. Null shows no banner, which
+  /// is right for a build without the feature.
+  final AssistantController? assistant;
 
   final VoidCallback onOpenLibrary;
   final ValueChanged<RecordingEntry> onOpenRecording;
@@ -160,6 +167,10 @@ class _HomeViewState extends State<HomeView> {
                 ],
               ),
             ),
+            // Above the tab bar, below whichever tab is up: an instruction
+            // can be stopped from either one.
+            if (widget.assistant != null)
+              AssistantUndoBanner(assistant: widget.assistant!),
             HomeTabBar(index: _tab, onSelect: (index) => setState(() => _tab = index)),
           ],
         ),

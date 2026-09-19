@@ -129,17 +129,25 @@ deleted from the keystore, outbox emptied.
 
 ## What the screens have to do
 
-The controller is finished and wired; **no screen reads it yet**. Everything a
-screen needs is on `AssistantController`, and nothing a screen needs is
-anywhere else - no store, no service and no `AppController` field has to be
-touched to build the UI.
+The screens are built. They are all in `lib/view/assistant_view.dart`, and
+every one of them reads `AssistantController` and nothing else - no store, no
+service and no `AppController` field is touched.
+
+| Screen | Where it is | What it is |
+|---|---|---|
+| The row into it | `settings_view.dart`, foot of Recorder settings | Not set up / On / Off |
+| Setup, and the settled state | `AssistantView` | One screen: the form until there is an account, the switch and the history after |
+| The Undo banner | `AssistantUndoBanner`, above Home's tab bar | The instruction, a countdown, Undo |
+| The same thing with the app closed | `AssistantUndoNotifier` over `drivers/undo_notification.dart`, drawn by `android/.../UndoNotification.kt` | Android only |
+| The mark on a note | `AssistantNoteMark`, above the note's title | Sent to Instinct / Couldn't send - Try again |
+| The title in the notes list | `note_list.dart`, `quoteAs:` | `titleFor`, so the wake phrase is not the headline |
 
 `main.dart` already builds the controller and hands it to `VoiceNotetakerApp`
 as `assistant:`; it is a `ChangeNotifier`, so an
 `AnimatedBuilder`/`ListenableBuilder` on it is enough.
 
-**Setup, in Recorder settings.** Show nothing but a placeholder until
-`isLoaded`. Then:
+**Setup, in Recorder settings.** Nothing but a placeholder until `isLoaded`.
+Then:
 
 | The screen shows | It reads | It calls |
 |---|---|---|

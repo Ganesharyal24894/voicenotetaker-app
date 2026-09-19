@@ -113,6 +113,11 @@ class NoteListItem {
   ///
   /// [status] is null in a build without speech-to-text. [progress] is the
   /// running job's fraction, used only when this note is the one running.
+  /// [quoteAs] is how a quoted transcript is turned into a row's title.
+  /// `AssistantController.titleFor` is passed here, so a note that begins
+  /// "Instinct," is listed by what was asked for rather than by who was being
+  /// addressed. THE TRANSCRIPT ITSELF IS NOT TOUCHED - [transcriptText] below
+  /// still holds every word, and so does the file on disk.
   factory NoteListItem.from(
     RecordingInfo recording, {
     required TranscriptStatus? status,
@@ -120,6 +125,7 @@ class NoteListItem {
     bool isWriting = false,
     double progress = 0,
     bool autoDeleteAudio = false,
+    String Function(String)? quoteAs,
   }) {
     final time = Fmt.timeOfDay(recording.recordedAt);
     final spoken = transcript != null && transcript.hasSpeech;
@@ -140,7 +146,9 @@ class NoteListItem {
     switch (status) {
       case TranscriptStatus.done when spoken:
         final paragraphs = TranscriptLayout.paragraphs(transcript);
-        title = paragraphs.isEmpty ? transcript.text : paragraphs.first.text;
+        final quoted =
+            paragraphs.isEmpty ? transcript.text : paragraphs.first.text;
+        title = quoteAs == null ? quoted : quoteAs(quoted);
         isState = false;
       case TranscriptStatus.done:
         // Listed as transcribed, not read yet.
