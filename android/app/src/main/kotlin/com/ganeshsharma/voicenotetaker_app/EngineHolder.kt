@@ -165,7 +165,15 @@ object EngineHolder {
      */
     @Suppress("DEPRECATION")
     private fun vibrate(app: Context, pattern: String?) {
-        val millis = if (pattern == "resumed") 60L else 400L
+        val millis = when (pattern) {
+            // A tick: notes are saving again.
+            "resumed" -> 60L
+            // A short double-tap's worth: the assistant heard its name. Short
+            // on purpose - it is a confirmation, not an alarm.
+            "assistantHeard" -> 120L
+            // A firm buzz: notes have stopped saving.
+            else -> 400L
+        }
         val audio = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         if (audio.ringerMode == AudioManager.RINGER_MODE_SILENT) return
         val notifications = app.getSystemService(NotificationManager::class.java)

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'controller/app_controller.dart';
+import 'controller/assistant_controller.dart';
 import 'controller/export_controller.dart';
 import 'controller/summary_controller.dart';
 import 'drivers/app_directories.dart';
@@ -13,11 +14,13 @@ import 'drivers/ble_transport_universal.dart';
 import 'drivers/clipboard_text.dart';
 import 'drivers/disk_space_channel.dart';
 import 'drivers/download_client.dart';
+import 'drivers/email_sender_mailer.dart';
 import 'drivers/file_store.dart';
 import 'drivers/hashing_crypto.dart';
 import 'drivers/haptics_channel.dart';
 import 'drivers/network_status_connectivity.dart';
 import 'drivers/phone_power_battery_plus.dart';
+import 'drivers/secret_store_secure.dart';
 import 'drivers/platform_settings_channel.dart';
 import 'drivers/share_sheet_share_plus.dart';
 import 'drivers/speaker_diarizer_sherpa.dart';
@@ -65,6 +68,12 @@ Future<void> main() async {
     fileStore: fileStore,
     modelsDirectory: fileStore.join(support, 'models'),
   );
+
+  // Speaking to the assistant. Declared before the recorder controller
+  // because the recorder hands it every finished transcript, and filled in
+  // just below - the closure does not run until a note is transcribed, by
+  // which time this is set.
+  late final AssistantController assistant;
 
   final controller = AppController(
     transport: ble,
@@ -123,7 +132,42 @@ Future<void> main() async {
       useVoiceActivitySegmentation: const bool.fromEnvironment('STT_VAD'),
     ),
     recordingsDirectory: fileStore.join(documents, 'recordings'),
+    // THE APP'S ONLY OUTBOUND PATH STARTS HERE, and only when the user has
+    // turned it on and set up a sending account. Everything about whether a
+    // note is an instruction, and whether anything is sent, is behind this
+    // one call - see `doc/assistant-instructions.md`.
+    onTranscriptSaved: (path, recordedAt, transcript) => unawaited(
+      assistant.noteTranscribed(
+        noteId: path,
+        // The words, not the audio and not the file.
+        transcript: transcript.text,
+        spokenAt: recordedAt,
+      ),
+    ),
   );
+
+  // "Instinct, ...": a note that begins with the wake phrase is emailed to the
+  // user's assistant. OFF until the user turns it on and puts in a sending
+  // account; with it off, nothing here opens a socket.
+  assistant = AssistantController(
+    fileStore: fileStore,
+    // App data, beside the other settings - and the outbox, which must
+    // survive the app being killed.
+    directory: support,
+    // The one thing in this app that sends. See `MailerEmailSender` for why
+    // SMTP and not a provider's API.
+    sender: const MailerEmailSender(),
+    // Keychain on iOS, hardware-backed keystore on Android. The app password
+    // never goes in a settings file.
+    secrets: const SecureSecretStore(),
+    // So an instruction spoken underground goes out when the phone surfaces,
+    // instead of failing to the user.
+    network: ConnectivityPlusNetworkStatus(),
+    // Android only, for the same reason as above: iOS cannot vibrate from the
+    // background, and the settings screen says so rather than pretending.
+    haptics: android ? const MethodChannelHaptics() : null,
+  );
+  unawaited(assistant.initialise());
 
   // The Today tab: summaries pasted from the user's AI app, kept in the
   // support directory beside the other app data.
@@ -154,6 +198,7 @@ Future<void> main() async {
   runApp(VoiceNotetakerApp(
     controller: controller,
     summaries: summaries,
+    assistant: assistant,
     newExportController: () => ExportController(
       exports: exports,
       shareSheet: const SharePlusShareSheet(),
@@ -165,12 +210,17 @@ class VoiceNotetakerApp extends StatefulWidget {
   const VoiceNotetakerApp({
     required this.controller,
     this.summaries,
+    this.assistant,
     this.newExportController,
     super.key,
   });
 
   final AppController controller;
   final SummaryController? summaries;
+
+  /// "Speak to your assistant". Null on a build with the feature left out; the
+  /// settings screen and the Undo banner read everything they need from it.
+  final AssistantController? assistant;
 
   /// Makes the controller behind "Export notes", one per opening of the sheet.
   final ExportController Function()? newExportController;

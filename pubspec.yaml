@@ -67,6 +67,28 @@ dependencies:
   # UIActivityViewController) with iPad popover anchoring to get right.
   # Named in lib/drivers/share_sheet_share_plus.dart and nowhere else.
   share_plus: ^13.3.0
+  # SMTP, for the one thing this app sends: a spoken instruction, by email, to
+  # the user's AI assistant. MIT, pure Dart - no platform channel and no native
+  # dependency, so it behaves the same on both phones and can be exercised in a
+  # unit test behind the `EmailSender` seam.
+  #
+  # The alternatives and why not: a provider API (SendGrid, Mailgun, Gmail's
+  # REST) puts a third party and an API key between a voice note and the person
+  # it was for, and Gmail's own API needs an OAuth consent screen and a Google
+  # verification review for a restricted scope; a share intent is not
+  # hands-free, which is the whole point; hand-rolled SMTP means writing
+  # STARTTLS, AUTH and MIME encoding ourselves. Named in
+  # lib/drivers/email_sender_mailer.dart and nowhere else.
+  mailer: ^7.2.0
+
+  # The Keychain (iOS) and a hardware-backed AndroidKeyStore key (Android), for
+  # the sending account's app password. BSD-3-Clause. The app's other settings
+  # are small JSON files in its own directory, which is the wrong place for a
+  # password: readable on a rooted phone, and present in a device dump.
+  # SharedPreferences is worse - plain XML. Named in
+  # lib/drivers/secret_store_secure.dart and nowhere else, behind the
+  # `SecretStore` seam so no test ever touches a keystore.
+  flutter_secure_storage: ^11.2.0
 
 dev_dependencies:
   flutter_test:

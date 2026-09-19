@@ -132,6 +132,7 @@ class AppController extends ChangeNotifier {
     BackgroundMode? backgroundMode,
     PhonePower? phonePower,
     this._haptics,
+    this._onTranscriptSaved,
     NotSavingAlertPolicy? notSavingAlert,
     this._backgroundTranscription = false,
     this._powerRecheckInterval = BackgroundTranscriptionPolicy.recheckInterval,
@@ -196,6 +197,13 @@ class AppController extends ChangeNotifier {
             ),
         _recorder = recordingService ??
             RecordingService(transport: transport, fileStore: fileStore);
+
+  /// Told about a transcript the moment it is saved: the path, when the note
+  /// was recorded, and the words. The ONLY way anything in this app learns
+  /// that a note is finished, and the only reason `AppController` and the
+  /// assistant feature touch at all.
+  final void Function(String path, DateTime recordedAt, Transcript transcript)?
+      _onTranscriptSaved;
 
   final BleTransport _transport;
   final FileStore _fileStore;
@@ -418,6 +426,12 @@ class AppController extends ChangeNotifier {
         await _transcripts.save(path, transcript);
         succeeded = true;
         await _transcripts.clearFailure(path);
+        // One hook, for the one feature that reads a finished note: speaking
+        // to the assistant. This controller knows nothing about what happens
+        // next - whether a note is an instruction, and whether anything is
+        // sent, is entirely `AssistantController`'s business, and on a build
+        // where `main.dart` passes nothing this line does nothing.
+        _onTranscriptSaved?.call(path, recording.recordedAt, transcript);
         // Nothing said in any window: the note goes, once nothing uses it.
         if (!transcript.hasSpeech) await _markEmptyNote(path);
       } on Object catch (error) {

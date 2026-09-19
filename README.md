@@ -92,6 +92,15 @@ lib/
                  background_mode.dart          abstract keep-alive while always
                                                listening + MethodChannel impl
                                                (Android foreground service)
+                 email_sender.dart             abstract "send one email":
+                                               THE ONLY OUTBOUND PATH
+                 email_sender_mailer.dart      mailer/SMTP implementation -
+                                               the only file that opens a
+                                               socket to say something
+                 secret_store.dart             abstract "where a password may
+                                               live"
+                 secret_store_secure.dart      Keychain / AndroidKeyStore
+                                               implementation
 
   services/    Domain logic on top of the driver interfaces. No package
                imports, no dart:io.
@@ -120,8 +129,15 @@ lib/
                                            check, the transcription service.
                                            SPIKE - see doc/agentFindings/
                                            on-device-stt.md
+                 assistant/                the outbox behind "Instinct,
+                                           ...": undo window, one send per
+                                           note, retry ladder, the settings
+                                           and the keystore account. See
+                                           doc/assistant-instructions.md
 
   controller/  app_controller.dart — orchestration and app state.
+               assistant_controller.dart — everything the assistant screens
+               touch; joined to app_controller by one hook, onTranscriptSaved.
   view/        THE UI, built to `design/Main.dc.html`. May use controller/
                and model/, and drivers/ only through their abstract
                interfaces - it never imports universal_ble or any other
@@ -195,6 +211,7 @@ flutter test        # must be all green
 | `test/view/theme_test.dart` | every design token, and the measured contrast ratios the palette rests on |
 | `test/view/*_view_test.dart` | each screen in its main states, against a `mocktail` fake transport |
 | `test/view/app_root_test.dart` | which screen the device state selects, and navigation between them |
+| `test/assistant/*_test.dart` | the wake phrase against real ASR spellings and its near misses, the retry ladder rung by rung, the outbox's undo / dedupe / persistence / offline behaviour, and the privacy assertions (one keystore entry, no password in any file, the body is the instruction and nothing else) |
 
 ### The cross-language golden test
 
@@ -278,6 +295,39 @@ peak readout on the recording screen comes from `LevelMeter` through
 `AppController.peakDbfs`. The note screen's audio panel is bound to the real
 player through `AppController.playbackState`.
 
+## Speaking to your assistant - the one thing this app sends
+
+Say **"Instinct, remind me to call the bank at six"** into the recorder. The
+note is recorded, saved and transcribed offline exactly as any other note is;
+because the transcript *begins* with the wake phrase, the instruction alone is
+emailed to the user's own AI assistant, over SMTP from the user's own Gmail
+account, five seconds later unless they tap **Undo**.
+
+**It is off on a fresh install and stays off until the user turns it on and
+puts in a sending account.** In that state nothing in the feature opens a
+socket. Everything else in the app remains offline (transcription,
+diarization) or user-driven (the export zip goes to the share sheet, the
+summary prompt through the clipboard, the model download pulls files *in*).
+
+What leaves is one plain-text email per instruction: the transcript with the
+wake phrase stripped, and nothing else - no audio, no raw transcript, no other
+note, no note id, no device name, no attachment and no HTML part. The subject
+is the note's time, deliberately without any of the instruction's words. The
+Gmail app password is typed in by the user, is written only to the platform
+keystore (Keychain / hardware-backed `AndroidKeyStore`) under one key, and is
+never logged, never put in a `toString`, and never written to a settings file.
+
+`lib/drivers/email_sender_mailer.dart` is the only file that opens the socket
+and `AssistantOutbox._deliver` is its only caller, so "here is every byte that
+leaves the phone" is something one file answers. The queue survives the app
+being killed, sends each note exactly once, retries a transient failure on a
+backoff ladder and gives up with a sentence a screen can show.
+
+The whole design - the fuzzy wake-phrase match against what the ASR models
+actually write in Latin and Devanagari, the undo window, the retry ladder,
+where each thing is stored, and exactly what the screens have to provide - is
+**[doc/assistant-instructions.md](doc/assistant-instructions.md)**.
+
 ## Package choices
 
 ### `universal_ble` — licensing rationale
@@ -326,6 +376,37 @@ shelf file player handles them and no raw-PCM streaming source is needed.
 [`path_provider`](https://pub.dev/packages/path_provider) is **BSD-3-Clause**,
 maintained by the Flutter team, and appears only in
 `lib/drivers/app_directories.dart`.
+
+### `mailer` — licensing rationale
+
+SMTP is [`mailer`](https://pub.dev/packages/mailer), which is **MIT** and pure
+Dart: no platform channel and no native dependency, so it behaves the same on
+both phones and can be exercised behind the `EmailSender` seam without a
+socket.
+
+The alternatives were weighed and rejected: a provider API (SendGrid, Mailgun,
+Gmail's REST) puts a third party and a key that can send as the user between a
+voice note and the person it was for, and Gmail's own API needs an OAuth
+consent screen and a Google verification review for a restricted scope; a share
+intent is not hands-free, which is the entire point of speaking an instruction;
+hand-rolled SMTP means writing STARTTLS, AUTH, dot stuffing and MIME encoding
+ourselves.
+
+It appears in exactly one file, `lib/drivers/email_sender_mailer.dart`.
+
+### `flutter_secure_storage` — licensing rationale
+
+[`flutter_secure_storage`](https://pub.dev/packages/flutter_secure_storage) is
+**BSD-3-Clause** and holds one value: the sending account. On iOS that is the
+Keychain (`first_unlock`, not iCloud-synced); on Android an AES key in the
+hardware-backed `AndroidKeyStore`. The app's other settings are small JSON
+files in its own directory, which is the wrong place for a password - readable
+on a rooted phone and present in a device dump - and `SharedPreferences` is
+worse, being plain XML.
+
+It appears in exactly one file, `lib/drivers/secret_store_secure.dart`, behind
+the `SecretStore` seam, so no test outside
+`test/assistant/secret_store_secure_test.dart` ever goes near a keystore.
 
 ### The speech models — licensing rationale
 

@@ -22,4 +22,13 @@ enum BuzzPattern {
 
   /// Saving again: one short tick.
   resumed,
+
+  /// The assistant heard its name in a note: one short buzz, so the user knows
+  /// the instruction was recognised without looking at the phone.
+  ///
+  /// iOS gets nothing, for the reason in the class comment above: an app in
+  /// the background cannot vibrate on its own. There the Undo banner on the
+  /// next glance at the screen is the whole feedback, and the settings screen
+  /// says so rather than pretending.
+  assistantHeard,
 }

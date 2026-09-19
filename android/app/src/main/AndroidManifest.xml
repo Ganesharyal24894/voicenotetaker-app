@@ -36,15 +36,22 @@
          permission, granted at install. -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- THE ONE THING THIS APP EVER FETCHES: the speech models, from a public
-         GitHub release, on demand and only when the user asks. Nothing else
-         here touches the network - notes, audio and transcripts never leave
-         the phone. A normal permission, granted at install.
-         Until this it was in the DEBUG manifest only, put there by the Flutter
-         tool for hot reload, so a release build could not have downloaded
-         anything. See doc/models.md.
-         ACCESS_NETWORK_STATE, which the Wi-Fi-only rule needs, comes from
-         connectivity_plus's own manifest. -->
+    <!-- TWO THINGS, AND THEY ARE THE ONLY TWO.
+         IN: the speech models, from a public GitHub release, on demand and
+         only when the user asks. See doc/models.md.
+         OUT: one plain-text email per note that the user began with the wake
+         phrase, sent by SMTP to their own AI assistant - the instruction text
+         and nothing else, and only once the user has turned the feature on and
+         put in a sending account. It is off on a fresh install. See
+         doc/assistant-instructions.md.
+         Nothing else here touches the network: audio, raw transcripts and
+         every other note never leave the phone.
+         A normal permission, granted at install. Until the model download it
+         was in the DEBUG manifest only, put there by the Flutter tool for hot
+         reload, so a release build could not have sent or fetched anything.
+         ACCESS_NETWORK_STATE, which the Wi-Fi-only rule and the outbox's
+         "wait for a connection" both need, comes from connectivity_plus's own
+         manifest. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- The device is a BLE peripheral; the app is useless without a radio. -->
