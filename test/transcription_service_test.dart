@@ -138,9 +138,9 @@ void main() {
   });
 
   group('transcribe', () {
-    test('plans 8 s windows and hands the engine the model config', () async {
+    test('plans 16 s windows and hands the engine the model config', () async {
       installModel(store);
-      store.put(wavPath, wav(samples: 20 * 16000));
+      store.put(wavPath, wav(samples: 40 * 16000));
       engine.texts = <int, String>{0: 'नमस्ते', 1: ' दोस्त ', 2: 'कहानी'};
 
       final progress = <String>[];
@@ -161,27 +161,83 @@ void main() {
       expect(job.numThreads, 4);
       expect(job.dataOffset, WavWriter.headerLength);
       expect(job.windows, const <SampleRange>[
-        SampleRange(0, 128000),
-        SampleRange(128000, 256000),
-        SampleRange(256000, 320000),
+        SampleRange(0, 256000),
+        SampleRange(256000, 512000),
+        SampleRange(512000, 640000),
       ]);
 
       // 0/3 first: the total is known before the model loads, so a progress
       // bar can show a real "0 of 3" rather than spinning.
       expect(progress, <String>['0/3', '1/3', '2/3', '3/3']);
       expect(result.text, 'नमस्ते दोस्त कहानी');
-      expect(result.segments[1].start, const Duration(seconds: 8));
-      expect(result.segments[2].end, const Duration(seconds: 20));
-      expect(result.audioDuration, const Duration(seconds: 20));
+      expect(result.segments[1].start, const Duration(seconds: 16));
+      expect(result.segments[2].end, const Duration(seconds: 40));
+      expect(result.audioDuration, const Duration(seconds: 40));
       expect(result.loadTime, const Duration(milliseconds: 1200));
       expect(result.decodeTime, const Duration(milliseconds: 300));
-      expect(result.realTimeFactor, closeTo(0.015, 1e-9));
+      expect(result.realTimeFactor, closeTo(0.0075, 1e-9));
       expect(result.peakRssKb, 500);
+    });
+
+    // THE MEMORY GUARD. A 16 s window buys accuracy and costs about 77 MB of
+    // peak RSS; a phone with little memory left gets the old 8 s one instead,
+    // because a worse transcript beats a job the system kills.
+    group('a phone short of memory', () {
+      TranscriptionService withMemory(int? availableKb) => TranscriptionService(
+            fileStore: store,
+            models:
+                SpeechModelStore(fileStore: store, modelsDirectory: modelsDir),
+            recognizer: engine,
+            availableMemoryKb: () => availableKb,
+          );
+
+      test('decodes in the shorter window', () async {
+        installModel(store);
+        store.put(wavPath, wav(samples: 40 * 16000));
+
+        await withMemory(200 * 1024).transcribe(wavPath);
+
+        expect(engine.job!.windows, hasLength(5));
+        expect(engine.job!.windows.first, const SampleRange(0, 128000));
+      });
+
+      test('room to spare: the measured window', () async {
+        installModel(store);
+        store.put(wavPath, wav(samples: 40 * 16000));
+
+        await withMemory(3 * 1024 * 1024).transcribe(wavPath);
+
+        expect(engine.job!.windows, hasLength(3));
+        expect(engine.job!.windows.first, const SampleRange(0, 256000));
+      });
+
+      test('a phone that will not say keeps the measured window', () async {
+        installModel(store);
+        store.put(wavPath, wav(samples: 40 * 16000));
+
+        await withMemory(null).transcribe(wavPath);
+
+        expect(engine.job!.windows, hasLength(3));
+      });
+
+      test('the progress total counts the windows actually planned', () async {
+        installModel(store);
+        store.put(wavPath, wav(samples: 40 * 16000));
+        final progress = <String>[];
+
+        await withMemory(200 * 1024).transcribe(
+          wavPath,
+          onProgress: (done, total) => progress.add('$done/$total'),
+        );
+
+        expect(progress.first, '0/5');
+        expect(progress.last, '5/5');
+      });
     });
 
     test('empty windows are skipped when joining the text', () async {
       installModel(store);
-      store.put(wavPath, wav(samples: 17 * 16000));
+      store.put(wavPath, wav(samples: 33 * 16000));
       engine.texts = <int, String>{0: 'एक', 2: 'तीन'};
       final result = await service.transcribe(wavPath);
       expect(result.text, 'एक तीन');
@@ -404,8 +460,8 @@ void main() {
       final job = engine.job!;
       expect(job.vad!.modelPath,
           '$modelsDir/${vad.directoryName}/silero_vad.onnx');
-      expect(job.vad!.maxWindowSamples, 8 * 16000);
-      expect(job.windows, hasLength(3), reason: 'fixed grid still carried');
+      expect(job.vad!.maxWindowSamples, 16 * 16000);
+      expect(job.windows, hasLength(2), reason: 'fixed grid still carried');
     });
 
     test('planned windows replace the grid: progress, text and timings follow',
@@ -426,7 +482,7 @@ void main() {
         onProgress: (done, total) => progress.add('$done/$total'),
       );
 
-      expect(progress, <String>['0/3', '0/2', '1/2', '2/2']);
+      expect(progress, <String>['0/2', '0/2', '1/2', '2/2']);
       expect(result.text, 'पहला दूसरा');
       expect(result.segments, hasLength(2));
       expect(result.segments[0].start, const Duration(seconds: 1));

@@ -17,6 +17,15 @@ abstract final class ProcessMemory {
   /// per-job peak has to be found by sampling [residentKb] instead.
   static int? peakResidentKb() => _field('VmHWM');
 
+  /// Memory the kernel believes can still be handed out without swapping,
+  /// in kB (`MemAvailable` from `/proc/meminfo`).
+  ///
+  /// SYSTEM-WIDE, not this app's: it is what decides whether a background
+  /// isolate holding 500 MB gets killed. Read once before a transcription
+  /// plans its windows - see `model/decode_window.dart` - and `null`
+  /// everywhere `/proc` is not there.
+  static int? availableKb() => _field('MemAvailable', '/proc/meminfo');
+
   /// Asks the native allocator to return freed memory to the operating
   /// system. Android only; true when the allocator accepted the request.
   ///
@@ -41,10 +50,10 @@ abstract final class ProcessMemory {
   /// `M_PURGE` from bionic's `<malloc.h>`.
   static const int _mPurge = -101;
 
-  static int? _field(String name) {
+  static int? _field(String name, [String path = '/proc/self/status']) {
     if (!(Platform.isAndroid || Platform.isLinux)) return null;
     try {
-      for (final line in File('/proc/self/status').readAsLinesSync()) {
+      for (final line in File(path).readAsLinesSync()) {
         if (line.startsWith('$name:')) {
           return int.tryParse(
             line.substring(name.length + 1).trim().split(RegExp(r'\s+')).first,

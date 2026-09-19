@@ -1,10 +1,13 @@
+import '../../model/decode_window.dart';
 import '../../model/transcription.dart';
 
 /// Splits a recording into the windows a speech model decodes one at a time.
 ///
 /// WHY WINDOWS AT ALL. The IndicConformer export silently drops the middle of
 /// a long clip decoded in one call, so audio is never handed to it in pieces
-/// longer than [SpeechModel.maxWindow].
+/// longer than [SpeechModel.maxWindow], which is [DecodeWindow.standard] -
+/// the one place the length is decided, and where the measurement that chose
+/// it is written down.
 ///
 /// WHY FIXED WINDOWS BY DEFAULT. They are what the prior research measured, and
 /// they need nothing but arithmetic. Their known cost is that a boundary can
@@ -38,10 +41,19 @@ abstract final class WindowPlanner {
   }
 
   /// [fixed], sized from a model's own window and sample rate.
-  static List<SampleRange> forModel(SpeechModel model, int totalSamples) =>
+  ///
+  /// [window] overrides [SpeechModel.maxWindow] for one job - the low-memory
+  /// fallback of [DecodeWindow.forAvailableMemory] is the only caller that
+  /// passes it.
+  static List<SampleRange> forModel(
+    SpeechModel model,
+    int totalSamples, {
+    Duration? window,
+  }) =>
       fixed(
         totalSamples: totalSamples,
-        windowSamples:
-            model.maxWindow.inMicroseconds * model.sampleRateHz ~/ 1000000,
+        windowSamples: (window ?? model.maxWindow).inMicroseconds *
+            model.sampleRateHz ~/
+            1000000,
       );
 }

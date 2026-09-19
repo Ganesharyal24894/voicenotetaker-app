@@ -15,7 +15,8 @@ void main() {
   Future<(ViewHarness, RecordingInfo)> seeded({
     ScriptedRecognizer? recognizer,
     bool modelInstalled = true,
-    Duration length = const Duration(seconds: 20),
+    // Three decode windows of DecodeWindow.standard.
+    Duration length = const Duration(seconds: 40),
   }) async {
     final harness = ViewHarness(
       recognizer: recognizer ?? ScriptedRecognizer(),

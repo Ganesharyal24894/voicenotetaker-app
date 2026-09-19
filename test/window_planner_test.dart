@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:voicenotetaker_app/model/decode_window.dart';
 import 'package:voicenotetaker_app/model/transcription.dart';
 import 'package:voicenotetaker_app/services/transcription/window_planner.dart';
 
@@ -62,16 +63,40 @@ void main() {
   });
 
   group('WindowPlanner.forModel', () {
-    // The load-bearing number: this export drops the middle of anything
-    // longer, so a change to the window must be a deliberate one.
-    test('IndicConformer is decoded in windows of at most 8 s at 16 kHz', () {
+    // The measured number: 16 s beat 8 s on every set in
+    // `notetaker-data/accuracy-20260918-205506/`, and 24 s and 30 s bought
+    // nothing for a lot more memory. A change to it must be a deliberate one.
+    test('IndicConformer is decoded in windows of at most 16 s at 16 kHz', () {
       const model = SpeechModels.indicConformerHindiInt8;
-      expect(model.maxWindow, const Duration(seconds: 8));
+      expect(model.maxWindow, DecodeWindow.standard);
+      expect(model.maxWindow, const Duration(seconds: 16));
       expect(model.sampleRateHz, 16000);
       expect(model.featureDim, 80);
 
-      // 20 s of audio.
-      final windows = WindowPlanner.forModel(model, 20 * 16000);
+      // 40 s of audio.
+      final windows = WindowPlanner.forModel(model, 40 * 16000);
+      expect(windows, <SampleRange>[
+        const SampleRange(0, 256000),
+        const SampleRange(256000, 512000),
+        const SampleRange(512000, 640000),
+      ]);
+    });
+
+    test('both models are cut on the same grid, so segment times match', () {
+      expect(
+        SpeechModels.parakeetTdtEnglishInt8.maxWindow,
+        SpeechModels.indicConformerHindiInt8.maxWindow,
+      );
+    });
+
+    test('a job short of memory may ask for shorter windows', () {
+      const model = SpeechModels.indicConformerHindiInt8;
+      final windows = WindowPlanner.forModel(
+        model,
+        20 * 16000,
+        window: DecodeWindow.lowMemory,
+      );
+
       expect(windows, <SampleRange>[
         const SampleRange(0, 128000),
         const SampleRange(128000, 256000),

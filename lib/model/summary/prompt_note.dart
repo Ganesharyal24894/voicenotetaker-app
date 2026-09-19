@@ -30,7 +30,8 @@ class PromptNote {
 
   /// Lines of about [lineSpan] each, from a transcript's decoded windows.
   ///
-  /// The windows are ~8 s long; one line each would bury the words under
+  /// The windows are ~16 s long (`model/decode_window.dart`); one line each
+  /// would bury the words under
   /// timestamps. Consecutive windows are joined until a line spans
   /// [lineSpan], which keeps a "[01:30]" marker close enough to find the
   /// moment in the audio.

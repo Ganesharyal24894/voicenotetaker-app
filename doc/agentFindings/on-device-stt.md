@@ -4,6 +4,11 @@
 > *The feature* at the end. The spike sections below are kept as the record of
 > what was measured; where they are out of date, the new section says so.
 
+> **Update 2026-09-19: the decode window is 16 s, not 8 s.** Every "8 s window"
+> below is the historical record. The length now lives in one place,
+> `lib/model/decode_window.dart`, and the measurement that chose it is in *The
+> decode window: 8 s → 16 s* at the end.
+
 **Question:** can offline Hindi/Hinglish speech-to-text with native Devanagari
 output run on the owner's Android phone, inside this app?
 
@@ -1021,3 +1026,136 @@ transcribing with nothing tapped.
 - **[?]** The VAD model (`silero-vad`, 644 kB) is NOT in the catalogue. It is
   off unless built with `--dart-define=STT_VAD=true`, so nothing asks for it
   yet; it wants an entry before that flag is turned on.
+
+## The decode window: 8 s → 16 s (2026-09-19)
+
+### The problem
+
+`MAX_WINDOW_S` was 8 s and had been since the first spike, where it was chosen
+because a long clip decoded in one call comes back with its middle missing. Why
+*eight*, rather than any other length short enough to avoid that, was never
+measured — it was the number the prior research happened to use.
+
+### What was measured — **[V]**, by an evaluation agent, not here
+
+The harness, every run and the prose are in
+`/home/ganesh/personalProjects/notetaker-data/accuracy-20260918-205506/`
+(`RESULTS.md`, `RECOMMENDATIONS.md` §0). It is this app's own pipeline ported to
+Python against the same sherpa-onnx 1.13.8 and the same int8 IndicConformer
+export: the same window planner, the same `SpeakerTurns.clean`, the same
+quiet-point splitter, the same router.
+
+| window | gramvaani-300, human refs, router off: WER / CER | MUCS code-switched WER | owner's notes, SHIPPED diarize-then-decode path: WER / CER / decodes | peak RSS, one note |
+|---|---|---|---|---|
+| **8 s** (shipped until now) | 30.45 / 15.74 | 52.05 | 59.41 / 52.90 / **189** | 432 MB |
+| 12 s | 28.83 / 14.62 | — | — | — |
+| **16 s** (now) | **28.65 / 14.49** | **50.73** | **57.53 / 50.62 / 116** | 509 MB |
+| 24 s | 28.70 / 14.43 | — | — | 549 MB |
+| 30 s | 28.63 / 14.42 | — | — | 735 MB |
+
+16 s is the knee: past it accuracy stops moving and memory does not. It is the
+largest single accuracy change in that whole report, and it makes the phone do
+**less** work — 189 decodes become 116 on the same notes, because a speaker turn
+that used to be cut in two is now decoded whole.
+
+### What changed in the app
+
+- **One constant.** `lib/model/decode_window.dart`: `DecodeWindow.standard`
+  (16 s), with that table in its doc comment. Both `SpeechModel` catalogue
+  entries take their `maxWindow` from it, so the grid
+  (`WindowPlanner.forModel`), the speaker-turn splitter
+  (`SpeakerTurns.planForModel`) and the voice-activity cap
+  (`VadSegmentation.maxWindowSamples`) are all sized from the one number.
+- **The job's window is decided once**, at the top of
+  `TranscriptionService._run`, and passed down. Nothing below re-derives it.
+- **The splitter's hunt was checked, and its floor left alone.**
+  `SpeakerTurns.splitFrom` stays 6 s, so a turn over the window is now cut at
+  the quietest 200 ms between **6 s and 16 s** instead of between 6 s and 8 s.
+  Two reasons, written in the comment there: 6 s is the shortest piece worth
+  decoding on its own, which the window's length does not change; and a wide
+  hunt is what lets a 24 s turn be cut near its middle in a real pause rather
+  than at 16 s leaving an 8 s tail. It is also the exact range the 16 s figures
+  above were measured with (`diar16`), and the decode count fell 39 % under it,
+  so it is not producing needlessly short windows.
+- **The router did not move.** It reads text, not time. The longer window helps
+  it anyway: on gramvaani, 8 s → 16 s cut the windows wrongly sent to English
+  from 47 to 17 on its own. `minWords` is a floor on evidence, not on duration.
+- **Progress accounting** needed nothing: it has always counted planned windows,
+  and the speaker pass's share is a tenth of *that* count.
+
+### Memory — the risk, reasoned and then measured **[V]**
+
+What actually scales with the window:
+
+- **The audio buffer**, linearly: `readSync(window.length * 2)` then a
+  `Float32List` of the same samples. 8 s is 0.75 MB, 16 s is 1.5 MB. Nothing.
+- **Features**, linearly: 80 bins every 10 ms, 256 kB at 8 s, 512 kB at 16 s.
+- **The encoder's activations**, worse than linearly — a conformer's attention
+  matrix is O(T²) in the window's frames. This is the real cost, and it is paid
+  inside onnxruntime's arena, which sizes itself to the **largest** shapes it has
+  ever seen and does not give them back. So the window sets a floor on RSS for
+  the rest of the job.
+- **Nothing else.** The recogniser holds one model (unchanged, 188 MB), one
+  stream at a time, and is freed the same way. The loudness profile, the
+  diarizer and the WAV reader are sized by the recording, not the window. The
+  VAD detector's ring buffer is `2 × window + 2 s` — 1.2 MB against 0.6 MB, and
+  it is off by default.
+
+Measured here on this laptop, same harness, real owner notes, `VmHWM` of a
+process that decoded exactly one note:
+
+| note | path | 8 s | 16 s | 24 s |
+|---|---|---|---|---|
+| `…210618` (172 s) | fixed grid, decode only | 413 MB (22 windows) | **503 MB** (11) | 530 MB (8) |
+| `…210618` (172 s) | diarize-then-decode (shipped) | 403 MB (28) | 405 MB (17) | — |
+| `…164616` (147 s) | diarize-then-decode | 396 MB (22) | 422 MB (13) | — |
+| `…124222` (144 s) | diarize-then-decode, English pass too | 359 MB (22) | 419 MB (14) | — |
+
+The grid row reproduces the evaluation's +77 MB (here +90 MB). The interesting
+row is the shipped one: **on the diarize path the extra costs less** — 2 to
+60 MB rather than 90 — because the diarization pass, which holds two networks
+and the whole recording as floats, has usually already set the high-water mark
+the decode then fits inside.
+
+### The guard — **[V]** unit tested, **[?]** never yet triggered on a phone
+
+Known: the app peaks near **700–726 MB** on the owner's Xiaomi during a job
+(debug build, idle 373 MB), and a background isolate can be killed. So the
+window is not unconditional:
+
+- `ProcessMemory.availableKb()` reads `MemAvailable` from `/proc/meminfo` —
+  system-wide, which is what the kernel weighs when it picks something to kill.
+- `DecodeWindow.forAvailableMemory` returns `lowMemory` (8 s — what shipped for
+  months, 3.4 WER worse, known to run inside the budget) below
+  **512 MB** free, and `standard` otherwise.
+- **`null` means the full window.** iOS and desktop have no `/proc`; every
+  measurement motivating the fallback is Android's.
+- It is read **once per job**, before anything is loaded, so it sees the phone's
+  state and not this job's.
+
+What was *not* built: a "the last job was killed, back off" memory. The
+transcription queue is in-memory only, so knowing that would mean persisting a
+job-started marker and a new class of stale state. The free-memory check is the
+cheaper 90 % of it. If the phone ever does report a killed job,
+`DecodeWindow.lowMemoryBelowKb` is the number to move first.
+
+### Tests
+
+`decode_window_test.dart` (the constant, both models cut from it, the
+threshold's edges, unknown memory); `speaker_turns_test.dart` (a 17 s turn
+splits once, a 15 s one does not, exactly 16 s is not split, the hunt is
+6–16 s, no piece under the floor, the low-memory window);
+`window_planner_test.dart` and `transcription_service_test.dart` (the grid, and
+a job short of memory planning five short windows with progress to match). The
+fixtures in `transcription_language_service_test.dart` and
+`speaker_diarization_service_test.dart` moved to a 40 s note, so every one of
+them still means what it used to relative to the window.
+
+### Could not verify
+
+- **[?] Peak RSS on the phone at 16 s.** Everything above is x86. The number to
+  watch is `LAST TRANSCRIPT`'s peak in the developer card on a long, multi-speaker
+  note — near 800 MB is expected, and a job that dies instead of finishing is
+  the signal that `lowMemoryBelowKb` is set too low.
+- **[?] The low-memory fallback on a real phone.** It is unit tested; no Android
+  device has reported under 512 MB free here.

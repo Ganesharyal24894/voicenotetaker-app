@@ -6,6 +6,7 @@
 /// `test/speaker_turns_test.dart`.
 library;
 
+import 'decode_window.dart';
 import 'diarization.dart';
 import 'transcription.dart';
 
@@ -29,6 +30,17 @@ abstract final class SpeakerTurns {
   ///
   /// The split is hunted between here and the window's end, so every piece is
   /// at least this long and none is over the window.
+  ///
+  /// NOT DERIVED FROM THE WINDOW, ON PURPOSE. It was 6 s of an 8 s window and
+  /// it is 6 s of [DecodeWindow.standard]'s 16 s, so the hunt now ranges over
+  /// 10 s rather than 2 s. Two reasons. It is the shortest piece worth
+  /// decoding on its own, which does not change when the window grows. And a
+  /// wide hunt is what makes a long turn split WELL: a 24 s turn can be cut
+  /// near its middle, in a real pause, instead of at 16 s leaving an 8 s tail.
+  /// This is also exactly the range the 16 s figures were measured with
+  /// (`diar16` in `notetaker-data/accuracy-20260918-205506/RESULTS.md`: 116
+  /// decodes against 189 at 8 s, so the wider hunt is not producing
+  /// needlessly short windows).
   static const Duration splitFrom = Duration(seconds: 6);
 
   /// How much audio the split point is chosen by: the quietest stretch this
@@ -346,14 +358,19 @@ abstract final class SpeakerTurns {
   }
 
   /// [plan], sized from the speech model's window and the diarizer's rules.
+  ///
+  /// [window] overrides [SpeechModel.maxWindow] for one job: how the
+  /// low-memory fallback of [DecodeWindow] reaches the splitter.
   static List<SpeakerWindow> planForModel({
     required List<SpeakerTurn> turns,
     required SpeechModel model,
+    Duration? window,
     int? Function(int start, int end)? quietestSplit,
   }) =>
       plan(
         turns: turns,
-        maxWindowSamples: _samples(model.maxWindow, model.sampleRateHz),
+        maxWindowSamples:
+            _samples(window ?? model.maxWindow, model.sampleRateHz),
         splitFromSamples: _samples(splitFrom, model.sampleRateHz),
         quietestSplit: quietestSplit,
       );

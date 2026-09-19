@@ -260,10 +260,11 @@ void main() {
 
     testWidgets('transcribing: percent and a progress bar, then the words',
         (tester) async {
-      // 4:12 is 32 windows; holding before window 8 is 25%.
+      // 4:12 is 16 windows of DecodeWindow.standard; holding before window 4
+      // is 25%.
       final recognizer = ScriptedRecognizer()
         ..gate = Completer<void>()
-        ..holdBefore = 8
+        ..holdBefore = 4
         ..texts = <int, String>{0: 'चेक चेक'};
       final note = await _open(tester, recognizer: recognizer);
 

@@ -19,19 +19,20 @@ const modelsDir = '/support/models';
 const wavPath = '/rec/voicenote-20260915-120000.wav';
 const second = 16000;
 
-/// IndicConformer's text for each 8 s window of a 20 s note: Hinglish,
+/// IndicConformer's text for each window of a 40 s note - the decode window
+/// is `DecodeWindow.standard`, 16 s, so that is three windows: Hinglish,
 /// transliterated English, and a short tail that follows the (Hindi) note.
 const hindiTexts = <int, String>{
   0: 'मेरे को ऑडियो नोट बनाना है',
-  8 * second: 'इ अः प्ले सोम विडियो एंड अः यू क्नो',
-  16 * second: 'दैट शुड',
+  16 * second: 'इ अः प्ले सोम विडियो एंड अः यू क्नो',
+  32 * second: 'दैट शुड',
 };
 
 /// Parakeet's text for the same windows.
 const englishTexts = <int, String>{
   0: 'Verico audio note banana',
-  8 * second: 'is play some video and you know',
-  16 * second: 'that should',
+  16 * second: 'is play some video and you know',
+  32 * second: 'that should',
 };
 
 /// A fake engine that tells the two models apart by path, logs every call,
@@ -124,7 +125,7 @@ void main() {
     store = InMemoryFileStore();
     engine = RoutingRecognizer();
     service = build(engine);
-    store.put(wavPath, wav(const Duration(seconds: 20)));
+    store.put(wavPath, wav(const Duration(seconds: 40)));
   });
 
   Future<TranscriptionFailure> failureOf(Future<Object?> future) async {
@@ -148,7 +149,7 @@ void main() {
         onProgress: (done, total) => progress.add('$done/$total'),
       );
 
-      expect(engine.log, <String>['hi 0,8,16', 'release', 'en 8']);
+      expect(engine.log, <String>['hi 0,16,32', 'release', 'en 16']);
       final englishJob = engine.jobs.last;
       expect(englishJob.modelPath,
           '$modelsDir/${english.directoryName}/encoder.int8.onnx');
@@ -165,14 +166,14 @@ void main() {
 
       expect(result.segments.map((s) => s.text), <String>[
         hindiTexts[0]!,
-        englishTexts[8 * second]!,
-        hindiTexts[16 * second]!,
+        englishTexts[16 * second]!,
+        hindiTexts[32 * second]!,
       ]);
       expect(result.segments.map((s) => s.languageCode), <String>['hi', 'en', 'hi']);
       expect(result.segments.map((s) => s.modelId),
           <String>[hindi.id, english.id, hindi.id]);
-      expect(result.segments[1].start, const Duration(seconds: 8));
-      expect(result.segments[1].end, const Duration(seconds: 16));
+      expect(result.segments[1].start, const Duration(seconds: 16));
+      expect(result.segments[1].end, const Duration(seconds: 32));
       expect(result.languageCode, 'auto');
       expect(result.modelId, '${hindi.id}+${english.id}');
       expect(result.englishModelMissing, isFalse);
@@ -190,13 +191,13 @@ void main() {
       install(store, english);
       engine.hindiText = const <int, String>{
         0: 'थेश शुड बे गुड तो थे चट',
-        8 * second: 'दैट शुड बीट',
+        16 * second: 'दैट शुड बीट',
       };
 
       final result = await service.transcribe(wavPath);
 
       // The silent last window is not decoded again.
-      expect(engine.log, <String>['hi 0,8,16', 'release', 'en 0,8']);
+      expect(engine.log, <String>['hi 0,16,32', 'release', 'en 0,16']);
       expect(result.segments.map((s) => s.languageCode), <String>['en', 'en', 'hi']);
       expect(result.languageCode, 'en');
       expect(result.text, 'Verico audio note banana is play some video and you know');
@@ -207,12 +208,12 @@ void main() {
       install(store, hindi);
       engine.hindiText = const <int, String>{
         0: 'मेरे को ऑडियो नोट बनाना है',
-        8 * second: 'तो पहले मेरे को फ़ोन चार्ज करना है',
+        16 * second: 'तो पहले मेरे को फ़ोन चार्ज करना है',
       };
 
       final result = await service.transcribe(wavPath);
 
-      expect(engine.log, <String>['hi 0,8,16']);
+      expect(engine.log, <String>['hi 0,16,32']);
       expect(result.languageCode, 'hi');
       expect(result.modelId, hindi.id);
       expect(result.englishModelMissing, isFalse);
@@ -225,12 +226,12 @@ void main() {
 
       final result = await service.transcribe(wavPath);
 
-      expect(engine.log, <String>['hi 0,8,16']);
+      expect(engine.log, <String>['hi 0,16,32']);
       expect(result.englishModelMissing, isTrue);
       expect(result.segments.map((s) => s.text), <String>[
         hindiTexts[0]!,
-        hindiTexts[8 * second]!,
         hindiTexts[16 * second]!,
+        hindiTexts[32 * second]!,
       ]);
       expect(result.languageCode, 'hi');
     });
@@ -241,7 +242,7 @@ void main() {
 
       final result = await service.transcribe(wavPath);
 
-      expect(engine.log, <String>['hi 0,8,16']);
+      expect(engine.log, <String>['hi 0,16,32']);
       expect(result.englishModelMissing, isTrue);
     });
 
@@ -270,7 +271,7 @@ void main() {
 
       final result = await build(engine, vad: true).transcribe(wavPath);
 
-      expect(engine.log, <String>['hi 0,8,16', 'release', 'en 9']);
+      expect(engine.log, <String>['hi 0,16,32', 'release', 'en 9']);
       expect(engine.jobs.last.windows,
           const <SampleRange>[SampleRange(9 * second, 15 * second)]);
       expect(result.segments.map((s) => s.start),
@@ -285,7 +286,7 @@ void main() {
 
       expect(await failureOf(service.transcribe(wavPath)),
           TranscriptionFailure.recognizerFailed);
-      expect(engine.log, <String>['hi 0,8,16', 'release', 'en 8']);
+      expect(engine.log, <String>['hi 0,16,32', 'release', 'en 16']);
       expect(service.isBusy, isFalse);
     });
 
@@ -296,7 +297,7 @@ void main() {
 
       final job = failureOf(service.transcribe(wavPath));
       await pumpEventQueue();
-      expect(engine.log.last, 'en 8');
+      expect(engine.log.last, 'en 16');
       final cancel = service.cancel();
       // The fake is a generator: it sees the cancel at its next yield.
       engine.englishGate!.complete();
@@ -315,8 +316,8 @@ void main() {
       final result =
           await service.transcribe(wavPath, language: TranscriptionLanguage.hindi);
 
-      expect(engine.log, <String>['hi 0,8,16']);
-      expect(result.segments[1].text, hindiTexts[8 * second]);
+      expect(engine.log, <String>['hi 0,16,32']);
+      expect(result.segments[1].text, hindiTexts[16 * second]);
       expect(result.segments.every((s) => s.languageCode == 'hi'), isTrue);
       expect(result.languageCode, 'hi');
       expect(result.englishModelMissing, isFalse);
@@ -334,7 +335,7 @@ void main() {
         onProgress: (done, total) => progress.add('$done/$total'),
       );
 
-      expect(engine.log, <String>['en 0,8,16']);
+      expect(engine.log, <String>['en 0,16,32']);
       expect(result.segments.map((s) => s.text), englishTexts.values);
       expect(result.segments.every((s) => s.languageCode == 'en'), isTrue);
       expect(result.segments.every((s) => s.modelId == english.id), isTrue);

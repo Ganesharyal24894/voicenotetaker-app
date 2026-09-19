@@ -67,6 +67,15 @@ class LanguageStats {
 /// nouns sit in Hindi sentences - is full of short function words (है, को,
 /// में, नहीं). So the share of those words separates the two.
 ///
+/// IT READS TEXT, NOT TIME. Nothing here knows how long a window is, so the
+/// decode window can change without touching a rule. It does change the
+/// router's behaviour for the better all the same: a longer window gives every
+/// decision more words to look at, and on gramvaani-300 - 300 notes of pure
+/// Hindi, where every window sent to English is wrong by construction - moving
+/// from 8 s to 16 s cut the false positives from 47 to 17 on its own
+/// (`notetaker-data/accuracy-20260918-205506/RECOMMENDATIONS.md`). [minWords]
+/// is a floor on evidence, not on duration, and is left where it was measured.
+///
 /// THE RULES.
 ///   1. A window with at least [minWords] words is English when its density
 ///      is below [englishBelow], Hindi otherwise.

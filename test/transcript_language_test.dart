@@ -153,7 +153,7 @@ void main() {
       );
       expect(model.totalBytes, 136490421);
       expect(model.sampleRateHz, 16000);
-      expect(model.maxWindow, const Duration(seconds: 8));
+      expect(model.maxWindow, const Duration(seconds: 16));
     });
 
     test('the Hindi model is still CTC with two files', () {

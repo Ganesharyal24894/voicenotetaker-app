@@ -90,7 +90,7 @@ void main() {
     log = <String>[];
     engine = FakeRecognizer(log);
     diarizer = FakeDiarizer(log);
-    store.put(wavPath, wav(20));
+    store.put(wavPath, wav(40));
     installSpeechModel(store);
   });
 
@@ -100,7 +100,7 @@ void main() {
 
       expect(result.segments, hasLength(3));
       expect(result.segments.every((s) => s.speaker == null), isTrue);
-      expect(engine.job!.windows.first, SampleRange(0, s(8)));
+      expect(engine.job!.windows.first, SampleRange(0, s(16)));
     });
 
     test('models not installed: skipped silently, transcript as today',
@@ -149,25 +149,28 @@ void main() {
     test('the windows follow the turns, and segments carry the label',
         () async {
       diarizer.turns = <SpeakerTurn>[
-        SpeakerTurn(start: 0, end: s(7), speaker: 3),
-        SpeakerTurn(start: s(7), end: s(20), speaker: 1),
+        SpeakerTurn(start: 0, end: s(14), speaker: 3),
+        SpeakerTurn(start: s(14), end: s(40), speaker: 1),
       ];
       engine.texts = <int, String>{0: 'नमस्ते', 1: 'हाँ जी', 2: 'ठीक है'};
 
       final result = await serviceWith(separator: diarizer).transcribe(wavPath);
 
-      // Two turns, the second of them too long for one window.
-      expect(engine.job!.windows.first, SampleRange(0, s(7)));
+      // Two turns, the second of them too long for one window. This fixture
+      // is loud all the way through, so the splitter finds no pause and cuts
+      // at its floor (SpeakerTurns.splitFrom): the 26 s turn becomes three
+      // windows, all the second speaker's.
+      expect(engine.job!.windows.first, SampleRange(0, s(14)));
       expect(result.segments.map((seg) => seg.speaker).toList(),
-          <String>['S1', 'S2', 'S2']);
+          <String>['S1', 'S2', 'S2', 'S2']);
       // S1 is whoever spoke first, not the engine's own cluster number.
       expect(result.segments.first.speaker, 'S1');
     });
 
     test('the count the user chose is passed to the engine', () async {
       diarizer.turns = <SpeakerTurn>[
-        SpeakerTurn(start: 0, end: s(10), speaker: 0),
-        SpeakerTurn(start: s(10), end: s(20), speaker: 1),
+        SpeakerTurn(start: 0, end: s(20), speaker: 0),
+        SpeakerTurn(start: s(20), end: s(40), speaker: 1),
       ];
 
       await serviceWith(separator: diarizer)
@@ -178,7 +181,7 @@ void main() {
 
     test('auto asks for no particular number', () async {
       diarizer.turns = <SpeakerTurn>[
-        SpeakerTurn(start: 0, end: s(20), speaker: 0),
+        SpeakerTurn(start: 0, end: s(40), speaker: 0),
       ];
 
       await serviceWith(separator: diarizer).transcribe(wavPath);
@@ -188,8 +191,8 @@ void main() {
 
     test('one speaker is not labelled at all', () async {
       diarizer.turns = <SpeakerTurn>[
-        SpeakerTurn(start: 0, end: s(9), speaker: 0),
-        SpeakerTurn(start: s(9), end: s(20), speaker: 0),
+        SpeakerTurn(start: 0, end: s(18), speaker: 0),
+        SpeakerTurn(start: s(18), end: s(40), speaker: 0),
       ];
 
       final result = await serviceWith(separator: diarizer).transcribe(wavPath);
@@ -202,9 +205,9 @@ void main() {
 
     test('a speaker heard for a moment is not a second speaker', () async {
       diarizer.turns = <SpeakerTurn>[
-        SpeakerTurn(start: 0, end: s(9), speaker: 0),
-        SpeakerTurn(start: s(9), end: s(9.5), speaker: 1),
-        SpeakerTurn(start: s(9.5), end: s(20), speaker: 0),
+        SpeakerTurn(start: 0, end: s(18), speaker: 0),
+        SpeakerTurn(start: s(18), end: s(19), speaker: 1),
+        SpeakerTurn(start: s(19), end: s(40), speaker: 0),
       ];
 
       final result = await serviceWith(separator: diarizer).transcribe(wavPath);
@@ -214,22 +217,22 @@ void main() {
 
     test('a turn longer than a window is cut at the quietest moment',
         () async {
-      store.put(wavPath, wav(20, quiet: <double>[6.5]));
+      store.put(wavPath, wav(40, quiet: <double>[13]));
       diarizer.turns = <SpeakerTurn>[
-        SpeakerTurn(start: 0, end: s(20), speaker: 0),
+        SpeakerTurn(start: 0, end: s(40), speaker: 0),
       ];
 
       await serviceWith(separator: diarizer).transcribe(wavPath);
 
-      // The hush runs 6.5 s - 6.7 s, so the cut is in the middle of it.
-      expect(engine.job!.windows.first.end, closeTo(s(6.6), rate ~/ 10));
+      // The hush runs 13 s - 13.2 s, so the cut is in the middle of it.
+      expect(engine.job!.windows.first.end, closeTo(s(13.2), rate ~/ 10));
     });
 
     test('no audio is dropped: the windows cover the whole recording',
         () async {
       diarizer.turns = <SpeakerTurn>[
-        SpeakerTurn(start: s(2), end: s(6), speaker: 0),
-        SpeakerTurn(start: s(9), end: s(15), speaker: 1),
+        SpeakerTurn(start: s(4), end: s(12), speaker: 0),
+        SpeakerTurn(start: s(18), end: s(30), speaker: 1),
       ];
 
       final result = await serviceWith(separator: diarizer).transcribe(wavPath);
@@ -237,7 +240,7 @@ void main() {
       expect(result.segments.first.start, Duration.zero);
       expect(
         result.segments.last.end.inMilliseconds,
-        closeTo(20000, 2),
+        closeTo(40000, 2),
       );
     });
 
@@ -248,8 +251,8 @@ void main() {
         Uint8List(SpeechModels.sileroVad.file.sizeBytes),
       );
       diarizer.turns = <SpeakerTurn>[
-        SpeakerTurn(start: 0, end: s(10), speaker: 0),
-        SpeakerTurn(start: s(10), end: s(20), speaker: 1),
+        SpeakerTurn(start: 0, end: s(20), speaker: 0),
+        SpeakerTurn(start: s(20), end: s(40), speaker: 1),
       ];
       final service = TranscriptionService(
         fileStore: store,
@@ -271,8 +274,8 @@ void main() {
     test('the speech model is freed first, and the diarizer before the load',
         () async {
       diarizer.turns = <SpeakerTurn>[
-        SpeakerTurn(start: 0, end: s(10), speaker: 0),
-        SpeakerTurn(start: s(10), end: s(20), speaker: 1),
+        SpeakerTurn(start: 0, end: s(20), speaker: 0),
+        SpeakerTurn(start: s(20), end: s(40), speaker: 1),
       ];
 
       await serviceWith(separator: diarizer).transcribe(wavPath);
@@ -297,8 +300,8 @@ void main() {
 
     test('the speaker pass is a tenth of the work, and comes first', () async {
       diarizer.turns = <SpeakerTurn>[
-        SpeakerTurn(start: 0, end: s(10), speaker: 0),
-        SpeakerTurn(start: s(10), end: s(20), speaker: 1),
+        SpeakerTurn(start: 0, end: s(20), speaker: 0),
+        SpeakerTurn(start: s(20), end: s(40), speaker: 1),
       ];
       diarizer.progress = <double>[0.5, 1];
       final seen = <List<int>>[];
@@ -342,8 +345,8 @@ void main() {
 
     test('an English turn is decoded again, and keeps its speaker', () async {
       diarizer.turns = <SpeakerTurn>[
-        SpeakerTurn(start: 0, end: s(10), speaker: 0),
-        SpeakerTurn(start: s(10), end: s(20), speaker: 1),
+        SpeakerTurn(start: 0, end: s(20), speaker: 0),
+        SpeakerTurn(start: s(20), end: s(40), speaker: 1),
       ];
       engine.texts = <int, String>{
         0: 'हाँ जी मैं आ रहा हूँ अभी',

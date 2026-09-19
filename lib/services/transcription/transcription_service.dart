@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../../drivers/file_store.dart';
+import '../../drivers/process_memory.dart';
 import '../../drivers/speaker_diarizer.dart';
 import '../../drivers/speech_recognizer.dart';
+import '../../model/decode_window.dart';
 import '../../model/diarization.dart';
 import '../../model/language_router.dart';
 import '../../model/loudness_profile.dart';
@@ -63,7 +65,11 @@ class TranscriptionException implements Exception {
 /// memory. The recognizer keeps the model loaded between consecutive jobs and
 /// frees it on its own idle timeout, or at once through [releaseEngine].
 ///
-/// WINDOWS. The fixed 8 s grid by default, which is what was measured. With
+/// WINDOWS. A fixed grid of [DecodeWindow.standard] by default, which is what
+/// was measured; a job on a phone short of memory gets
+/// [DecodeWindow.lowMemory] instead. The length is decided ONCE per job and
+/// everything that cuts audio here is sized from it - the grid, the
+/// speaker-turn splitter, the voice-activity cap. With
 /// [useVoiceActivitySegmentation] on AND the VAD model installed, the job also
 /// asks the recognizer to cut windows in the pauses; if the VAD model is
 /// absent, or cannot run, the fixed grid is used unchanged.
@@ -91,7 +97,9 @@ class TranscriptionService {
     this._diarizationModel = DiarizationModels.pyannoteCamPlus,
     this.useVoiceActivitySegmentation = false,
     Stopwatch Function()? clock,
-  }) : _clock = clock ?? Stopwatch.new;
+    int? Function()? availableMemoryKb,
+  })  : _clock = clock ?? Stopwatch.new,
+        _availableMemoryKb = availableMemoryKb ?? ProcessMemory.availableKb;
 
   final FileStore _fileStore;
   final SpeechModelStore _models;
@@ -102,6 +110,10 @@ class TranscriptionService {
   final VadModel _vadModel;
   final DiarizationModel _diarizationModel;
   final Stopwatch Function() _clock;
+
+  /// Free system memory, asked once per job. Injected so a test can say what
+  /// the phone reports.
+  final int? Function() _availableMemoryKb;
 
   /// How much of a job's progress the speaker pass is worth: a tenth, which is
   /// what it costs - about 0.10x real time against the speech model's ~1x.
@@ -313,7 +325,12 @@ class TranscriptionService {
     final audioDuration = Duration(
       microseconds: totalSamples * 1000000 ~/ primary.sampleRateHz,
     );
-    final grid = WindowPlanner.forModel(primary, totalSamples);
+    // THE WINDOW FOR THIS JOB, DECIDED ONCE AND USED BY EVERYTHING BELOW.
+    // Longer windows are more accurate and cost memory; a phone with little
+    // left gets the short ones. Read here, before anything is loaded, so the
+    // figure is the phone's own state rather than this job's.
+    final window = DecodeWindow.forAvailableMemory(_availableMemoryKb());
+    final grid = WindowPlanner.forModel(primary, totalSamples, window: window);
 
     // Nothing to hear, nothing to load.
     if (grid.isEmpty) {
@@ -339,6 +356,7 @@ class TranscriptionService {
       numThreads: numThreads,
       speakerCount: speakerCount,
       gridWindows: grid.length,
+      window: window,
       onProgress: onProgress,
     );
     _throwIfCancelled();
@@ -356,7 +374,7 @@ class TranscriptionService {
         modelPath: _models.vadPathOf(_vadModel),
         model: _vadModel,
         maxWindowSamples:
-            primary.maxWindow.inMicroseconds * primary.sampleRateHz ~/ 1000000,
+            window.inMicroseconds * primary.sampleRateHz ~/ 1000000,
       );
     }
     _throwIfCancelled();
@@ -486,6 +504,7 @@ class TranscriptionService {
     required int numThreads,
     required int? speakerCount,
     required int gridWindows,
+    required Duration window,
     required void Function(int done, int total)? onProgress,
   }) async {
     final diarizer = _diarizer;
@@ -557,9 +576,8 @@ class TranscriptionService {
     // paragraphs; "Speaker 1" in front of every one of them is noise.
     final labelled = names.length > 1;
 
-    final maxWindowSamples = _model.maxWindow.inMicroseconds *
-        header.sampleRateHz ~/
-        1000000;
+    final maxWindowSamples =
+        window.inMicroseconds * header.sampleRateHz ~/ 1000000;
     final profile = cleaned.any((turn) => turn.length > maxWindowSamples)
         ? await _loudness(path, header, totalSamples)
         : LoudnessProfile.empty;
@@ -569,6 +587,7 @@ class TranscriptionService {
     final windows = SpeakerTurns.planForModel(
       turns: cleaned,
       model: _model,
+      window: window,
       quietestSplit: profile.isEmpty
           ? null
           : (start, end) => profile.quietestSplit(start, end, probeSamples),

@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:voicenotetaker_app/model/decode_window.dart';
 import 'package:voicenotetaker_app/model/diarization.dart';
 import 'package:voicenotetaker_app/model/loudness_profile.dart';
 import 'package:voicenotetaker_app/model/speaker_turns.dart';
@@ -223,8 +224,116 @@ void main() {
 
     test('a long turn is cut on the window without a quiet point', () {
       final windows = SpeakerTurns.planForModel(
+        turns: <SpeakerTurn>[turn(0, 40, 0)],
+        model: model,
+      );
+
+      expect(
+        windows.map((w) => w.range).toList(),
+        <SampleRange>[
+          SampleRange(0, s(16)),
+          SampleRange(s(16), s(32)),
+          SampleRange(s(32), s(40)),
+        ],
+      );
+    });
+
+    // THE BOUNDARY, at the window this app decodes in now. A turn a second
+    // over it is two windows; a second under it is one, decoded whole - which
+    // is where the measured gain comes from: 189 decodes became 116 on the
+    // owner's own notes.
+    test('a 17 s turn splits once', () {
+      final windows = SpeakerTurns.planForModel(
+        turns: <SpeakerTurn>[turn(0, 17, 0)],
+        model: model,
+      );
+
+      expect(
+        windows.map((w) => w.range).toList(),
+        <SampleRange>[
+          SampleRange(0, s(16)),
+          SampleRange(s(16), s(17)),
+        ],
+      );
+    });
+
+    test('a 15 s turn is decoded whole', () {
+      final windows = SpeakerTurns.planForModel(
+        turns: <SpeakerTurn>[turn(0, 15, 0)],
+        model: model,
+      );
+
+      expect(windows, <SpeakerWindow>[
+        SpeakerWindow(range: SampleRange(0, s(15)), speaker: 0),
+      ]);
+    });
+
+    test('a turn exactly one window long is not split', () {
+      expect(
+        SpeakerTurns.planForModel(
+          turns: <SpeakerTurn>[turn(0, 16, 0)],
+          model: model,
+        ),
+        hasLength(1),
+      );
+    });
+
+    test('a long turn is cut at the quietest moment between 6 s and 16 s', () {
+      final asked = <List<int>>[];
+      final windows = SpeakerTurns.planForModel(
+        turns: <SpeakerTurn>[turn(0, 24, 4)],
+        model: model,
+        quietestSplit: (start, end) {
+          asked.add(<int>[start, end]);
+          return s(9.5);
+        },
+      );
+
+      // The hunt runs from SpeakerTurns.splitFrom to the window's end, so a
+      // 24 s turn can be cut near its middle in a real pause rather than at
+      // 16 s leaving an 8 s tail.
+      expect(asked, <List<int>>[
+        <int>[s(6), s(16)],
+      ]);
+      expect(
+        windows.map((w) => w.range).toList(),
+        <SampleRange>[
+          SampleRange(0, s(9.5)),
+          SampleRange(s(9.5), s(24)),
+        ],
+      );
+      expect(windows.every((w) => w.speaker == 4), isTrue);
+    });
+
+    test('no piece is ever shorter than the split floor', () {
+      expect(SpeakerTurns.splitFrom, const Duration(seconds: 6));
+      // The quietest moment is always the very start of the hunt.
+      final windows = SpeakerTurns.planForModel(
+        turns: <SpeakerTurn>[turn(0, 30, 0)],
+        model: model,
+        quietestSplit: (start, end) => start,
+      );
+
+      for (final window in windows.take(windows.length - 1)) {
+        expect(window.range.length, greaterThanOrEqualTo(s(6)));
+      }
+    });
+
+    test('a split point outside the range is ignored', () {
+      final windows = SpeakerTurns.planForModel(
+        turns: <SpeakerTurn>[turn(0, 24, 0)],
+        model: model,
+        quietestSplit: (start, end) => s(2),
+      );
+
+      expect(windows.first.range, SampleRange(0, s(16)));
+    });
+
+    test('a job short of memory plans on the shorter window', () {
+      final windows = SpeakerTurns.planForModel(
         turns: <SpeakerTurn>[turn(0, 20, 0)],
         model: model,
+        window: DecodeWindow.lowMemory,
       );
 
       expect(
@@ -235,40 +344,6 @@ void main() {
           SampleRange(s(16), s(20)),
         ],
       );
-    });
-
-    test('a long turn is cut at the quietest moment between 6 s and 8 s', () {
-      final asked = <List<int>>[];
-      final windows = SpeakerTurns.planForModel(
-        turns: <SpeakerTurn>[turn(0, 12, 4)],
-        model: model,
-        quietestSplit: (start, end) {
-          asked.add(<int>[start, end]);
-          return s(6.5);
-        },
-      );
-
-      expect(asked, <List<int>>[
-        <int>[s(6), s(8)],
-      ]);
-      expect(
-        windows.map((w) => w.range).toList(),
-        <SampleRange>[
-          SampleRange(0, s(6.5)),
-          SampleRange(s(6.5), s(12)),
-        ],
-      );
-      expect(windows.every((w) => w.speaker == 4), isTrue);
-    });
-
-    test('a split point outside the range is ignored', () {
-      final windows = SpeakerTurns.planForModel(
-        turns: <SpeakerTurn>[turn(0, 12, 0)],
-        model: model,
-        quietestSplit: (start, end) => s(2),
-      );
-
-      expect(windows.first.range, SampleRange(0, s(8)));
     });
 
     test('every window has one speaker and the turns are covered whole', () {

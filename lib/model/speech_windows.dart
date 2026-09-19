@@ -5,7 +5,7 @@ import 'transcription.dart';
 /// Pure arithmetic on sample indices, no I/O: it runs inside the recognizer's
 /// worker (which has the audio) and in unit tests alike.
 ///
-/// WHY. A fixed 8 s grid cuts words in half wherever a boundary lands, and
+/// WHY. A fixed grid cuts words in half wherever a boundary lands, and
 /// where it lands moved CER by 13 points in the laptop run. Cutting in the
 /// pauses instead removes that, and leaving silence out removes decode work.
 ///

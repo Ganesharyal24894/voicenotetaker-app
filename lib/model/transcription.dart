@@ -5,6 +5,8 @@
 /// engine never moves anything here.
 library;
 
+import 'decode_window.dart';
+
 /// One file a speech model needs on disk.
 class SpeechModelFile {
   const SpeechModelFile({required this.name, required this.sizeBytes});
@@ -88,8 +90,11 @@ class SpeechModel {
 
   /// Longest stretch of audio decoded in one call.
   ///
-  /// A property of the MODEL EXPORT, not a tuning knob: see
-  /// [SpeechModels.indicConformerHindiInt8].
+  /// Always [DecodeWindow.standard]: both models are decoded in the same
+  /// windows so a routed English re-decode lands on the same segment times.
+  /// A single job may use a shorter one when the phone is short of memory -
+  /// see [DecodeWindow.forAvailableMemory] - so this is the longest a window
+  /// can be, not the length of every window.
   final Duration maxWindow;
 
   List<SpeechModelFile> get files => <SpeechModelFile>[
@@ -119,9 +124,11 @@ abstract final class SpeechModels {
   /// neither - a notetaker is better served by a visibly garbled word than by
   /// a confident fabrication.
   ///
-  /// THE 8-SECOND WINDOW IS LOAD-BEARING. Decoding a long clip in one call
-  /// with this export silently drops the middle of it; prior research decoded
-  /// fixed 8 s windows and got complete transcripts.
+  /// WINDOWING IS LOAD-BEARING. Decoding a long clip in one call with this
+  /// export silently drops the middle of it; the audio is always handed over
+  /// in pieces. The LENGTH of those pieces is a measured tuning constant, and
+  /// it lives in one place: [DecodeWindow.standard], 16 s since the accuracy
+  /// evaluation of Sep 2026.
   static const SpeechModel indicConformerHindiInt8 = SpeechModel(
     id: 'indicconformer-hi-int8',
     displayName: 'IndicConformer Hindi (int8)',
@@ -131,7 +138,7 @@ abstract final class SpeechModels {
     tokensFile: SpeechModelFile(name: 'tokens.txt', sizeBytes: 73238),
     sampleRateHz: 16000,
     featureDim: 80,
-    maxWindow: Duration(seconds: 8),
+    maxWindow: DecodeWindow.standard,
   );
 
   /// NVIDIA NeMo Parakeet TDT 110M (English), transducer, int8 ONNX export
@@ -142,7 +149,7 @@ abstract final class SpeechModels {
   /// Run only for windows the language router calls English (or every window
   /// when the language setting is English): IndicConformer writes English as
   /// Devanagari transliteration. Loaded AFTER IndicConformer is freed - never
-  /// both in memory. Decoded in the same 8 s windows so segment times match.
+  /// both in memory. Decoded in the same windows so segment times match.
   /// See `doc/agentFindings/on-device-stt.md`.
   static const SpeechModel parakeetTdtEnglishInt8 = SpeechModel(
     id: 'parakeet-tdt-110m-en-int8',
@@ -156,7 +163,7 @@ abstract final class SpeechModels {
     tokensFile: SpeechModelFile(name: 'tokens.txt', sizeBytes: 9953),
     sampleRateHz: 16000,
     featureDim: 80,
-    maxWindow: Duration(seconds: 8),
+    maxWindow: DecodeWindow.standard,
   );
 
   /// Silero VAD v4 as published by sherpa-onnx (MIT). Source: GitHub release
