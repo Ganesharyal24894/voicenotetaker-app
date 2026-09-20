@@ -27,11 +27,19 @@
          exemption dialog: without the exemption Doze and vendor task killers
          stop the service, and Android 12+ will not let a killed service
          restart itself in the foreground.
-         No WAKE_LOCK: audio notifications wake the CPU by themselves. -->
+         WAKE_LOCK is for TRANSCRIPTION AND NOTHING ELSE. An incoming audio
+         notification wakes the CPU by itself, so receiving and writing a note
+         needs no wake lock. Minutes of speech inference are different: once
+         the delivering wake lock is released the CPU is free to suspend, and
+         a job on a worker thread is frozen mid-run until the next packet. The
+         lock is taken when a job starts off screen and released the moment the
+         run ends - never while the app is on screen, and never while the queue
+         is idle. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- The not-saving alert: one short notification vibration. A normal
          permission, granted at install. -->
     <uses-permission android:name="android.permission.VIBRATE" />

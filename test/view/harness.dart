@@ -17,6 +17,7 @@ import 'package:voicenotetaker_app/drivers/platform_settings.dart';
 import 'package:voicenotetaker_app/drivers/speaker_diarizer.dart';
 import 'package:voicenotetaker_app/drivers/speech_recognizer.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
+import 'package:voicenotetaker_app/model/background_task_plan.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
 import 'package:voicenotetaker_app/model/capture_flags.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
@@ -853,16 +854,59 @@ class FakeBackgroundMode implements BackgroundMode {
   /// The title that went with each entry in [texts]; null entries are stops.
   final List<String?> titles = <String?>[];
 
+  /// Whether each entry in [texts] was an alert.
+  final List<bool> alerts = <bool>[];
+
   bool running = false;
   bool notifications = true;
   bool batteryExempt = true;
   int permissionRequests = 0;
 
+  /// The order the permission asks came in, so a test can see that the second
+  /// waited for the first.
+  final List<String> permissionOrder = <String>[];
+
+  /// Set to false to act as a phone that refuses the foreground service.
+  bool canStart = true;
+
+  /// Every [scheduleWork] request, in order; null entries are [cancelWork].
+  final List<BackgroundTaskRequest?> workRequests =
+      <BackgroundTaskRequest?>[];
+
+  /// How many times the CPU was held for an off-screen job, and whether one
+  /// is held now.
+  int cpuHolds = 0;
+  bool cpuHeld = false;
+
+  Future<void> Function()? _onGranted;
+  void Function()? _onExpiring;
+  void Function()? _onKeepAliveStopped;
+
+  /// Acts as iOS granting a `BGProcessingTask` window. Completes when the
+  /// controller says the work is done.
+  Future<void> grantWindow() async => _onGranted?.call();
+
+  /// Acts as iOS taking the window back.
+  void expireWindow() => _onExpiring?.call();
+
+  /// Acts as Android reporting that the foreground service stopped.
+  void reportStopped() => _onKeepAliveStopped?.call();
+
   @override
-  Future<void> start({required String title, required String text}) async {
+  Future<bool> start({
+    required String title,
+    required String text,
+    bool alert = false,
+  }) async {
+    if (!canStart) {
+      running = false;
+      return false;
+    }
     running = true;
     texts.add(text);
     titles.add(title);
+    alerts.add(alert);
+    return true;
   }
 
   @override
@@ -870,6 +914,7 @@ class FakeBackgroundMode implements BackgroundMode {
     running = false;
     texts.add(null);
     titles.add(null);
+    alerts.add(false);
   }
 
   @override
@@ -878,15 +923,17 @@ class FakeBackgroundMode implements BackgroundMode {
   @override
   Future<void> requestNotifications() async {
     permissionRequests++;
+    permissionOrder.add('notifications');
     notifications = true;
   }
 
   @override
-  Future<bool> ignoringBatteryOptimizations() async => batteryExempt;
+  Future<bool> backgroundWorkAllowed() async => batteryExempt;
 
   @override
-  Future<void> requestIgnoreBatteryOptimizations() async {
+  Future<void> requestBackgroundWork() async {
     permissionRequests++;
+    permissionOrder.add('backgroundWork');
     batteryExempt = true;
   }
 
@@ -895,6 +942,33 @@ class FakeBackgroundMode implements BackgroundMode {
 
   @override
   Future<bool> openAutostartSettings() async => false;
+
+  @override
+  Future<void> scheduleWork(BackgroundTaskRequest request) async =>
+      workRequests.add(request);
+
+  @override
+  Future<void> cancelWork() async => workRequests.add(null);
+
+  @override
+  Future<void> holdCpu() async {
+    cpuHolds++;
+    cpuHeld = true;
+  }
+
+  @override
+  Future<void> releaseCpu() async => cpuHeld = false;
+
+  @override
+  void listen({
+    required Future<void> Function() onGranted,
+    required void Function() onExpiring,
+    required void Function() onKeepAliveStopped,
+  }) {
+    _onGranted = onGranted;
+    _onExpiring = onExpiring;
+    _onKeepAliveStopped = onKeepAliveStopped;
+  }
 }
 
 

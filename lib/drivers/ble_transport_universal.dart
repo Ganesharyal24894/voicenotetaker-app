@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:developer' as developer;
+import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart';
 import 'package:universal_ble/universal_ble.dart' as ub;
@@ -206,7 +207,22 @@ class UniversalBleTransport implements BleTransport, BlePairing {
     _watchDrops();
     _dropReasons.remove(deviceId.toLowerCase());
     try {
-      await ub.UniversalBle.connect(deviceId, timeout: timeout);
+      await ub.UniversalBle.connect(
+        deviceId,
+        timeout: timeout,
+        // iPHONE ONLY, AND ONLY FOR WHAT IT DOES THERE. On iOS 17 and newer
+        // this sets `CBConnectPeripheralOptionEnableAutoReconnect`, so after
+        // an unexpected disconnect Core Bluetooth re-establishes the link by
+        // itself - including while the app is suspended, which is exactly the
+        // case the app cannot reach: a suspended app gets no timer to run its
+        // own reconnect with. Older iOS ignores it.
+        //
+        // NOT ON ANDROID. There the same flag becomes the platform's
+        // `autoConnect`, which trades a first connection that takes seconds
+        // for one that takes a scan window - and Android has the foreground
+        // service, so the app's own reconnect backoff runs and is faster.
+        autoConnect: Platform.isIOS,
+      );
       // Several platforms require an explicit discovery pass before any
       // read/write/subscribe on a custom service will resolve.
       final services = await ub.UniversalBle.discoverServices(deviceId);

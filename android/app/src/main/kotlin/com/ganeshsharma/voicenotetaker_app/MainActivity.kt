@@ -48,8 +48,41 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         if (EngineHolder.activity === this) EngineHolder.activity = null
+        // A permission prompt this activity raised can no longer be answered.
+        // The Dart call waiting on it must be let go, or the second thing the
+        // permissions sheet asks for is never asked.
+        EngineHolder.releasePendingPermission()
         super.onDestroy()
         if (isFinishing) EngineHolder.releaseIfIdle()
+    }
+
+    /**
+     * The user answered a permission prompt. `super` hands it to the plugins;
+     * the notification prompt is this app's own and is answered here.
+     */
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        EngineHolder.onPermissionsResult(requestCode)
+    }
+
+    /**
+     * The activity is going but the engine is not - always-listening keeps it.
+     * These three handlers close over THIS activity (`startActivity`,
+     * `getSystemService`), so leaving them installed holds a destroyed
+     * activity and its whole view hierarchy for as long as the engine lives,
+     * and a call arriving off screen would run against it. The next activity
+     * installs its own in `configureFlutterEngine`.
+     */
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        for (name in listOf(CHANNEL, BLUETOOTH_CHANNEL, STORAGE_CHANNEL)) {
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, name)
+                .setMethodCallHandler(null)
+        }
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

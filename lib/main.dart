@@ -83,27 +83,26 @@ Future<void> main() async {
     fileStore: fileStore,
     audioPlayer: JustAudioPlayer(),
     platformSettings: const MethodChannelPlatformSettings(),
+    // BOTH PHONES, and the two halves answer on the same channel: Android's
+    // in `EngineHolder.kt`, the iPhone's in `AppDelegate.swift`. Each does
+    // what its OS actually allows and says so honestly when asked - a
+    // foreground service and a vibration on Android, a local notification and
+    // a `BGProcessingTask` window on iOS. See `BackgroundMode`.
+    backgroundMode: MethodChannelBackgroundMode(),
     // ANDROID ONLY, AND SAID SO HERE RATHER THAN DISCOVERED AT RUNTIME.
     //
-    // Both of these are the app's own method channel, answered by
-    // `EngineHolder.kt`. iOS has no handler, and both drivers swallow the
-    // MissingPluginException - so wiring them everywhere does not crash, it
-    // does something worse: the not-saving alert believes it has a way to
-    // reach the wearer, runs its 30 s timer, and then buzzes into a vibrator
-    // that is not there and writes to a notification that does not exist.
-    // Nobody is told anything, and a timer runs to say it.
-    //
-    // Passing null instead makes the controller's "nobody to tell" branch
-    // true, so on iOS no timer runs at all and the header line - which the
-    // user sees when they open the app - is the honest single surface.
-    // `AlwaysListeningCard` says as much in one line, on iOS only.
-    backgroundMode:
-        android ? const MethodChannelBackgroundMode() : null,
+    // An iPhone in a pocket cannot be made to vibrate by an app that is not on
+    // screen; there is no API for it. Wiring this everywhere would not crash -
+    // the driver swallows the MissingPluginException - it would do something
+    // worse: the alert would believe it had a way to reach the wearer and buzz
+    // into a vibrator that is not there. Null instead, and on iOS the local
+    // notification `backgroundMode` posts is the whole alert.
     haptics: android ? const MethodChannelHaptics() : null,
     phonePower: BatteryPlusPhonePower(),
     // Android only: its foreground service keeps this isolate alive with the
-    // screen off. iOS makes no such promise, so there transcription waits for
-    // the app to be opened.
+    // screen off, so a queued transcript simply carries on running. iOS makes
+    // no such promise - there the queue runs when the app is opened, or inside
+    // a `BGProcessingTask` window if the system grants one.
     backgroundTranscription: android,
     // App data, not the user's documents: which device to reach, and whether
     // to keep listening.

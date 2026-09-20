@@ -12,6 +12,7 @@ import '../drivers/phone_power.dart';
 import '../drivers/platform_settings.dart';
 import '../model/audio_codec.dart';
 import '../model/auto_sleep.dart';
+import '../model/background_task_plan.dart';
 import '../model/background_transcription_policy.dart';
 import '../model/battery_anchor.dart';
 import '../model/battery_bars.dart';
@@ -473,7 +474,7 @@ class AppController extends ChangeNotifier {
     // audio removable.
     if (succeeded) unawaited(_sweepAudio());
     unawaited(_sweepEmptyNotesIfPending());
-    if (!_pumping) unawaited(_pumpTranscriptions());
+    if (_pumpDone == null) unawaited(_pumpTranscriptions());
   }
 
   // Which language transcription listens for. Auto unless changed; nothing
@@ -511,6 +512,13 @@ class AppController extends ChangeNotifier {
   //   * `backgroundTranscription` (Android, from `main.dart`) AND
   //     always-listening on - its foreground service is what keeps the
   //     process, and this isolate, running with the screen off;
+  //   * OR iOS has granted a `BGProcessingTask` window, which is the one way
+  //     an iPhone lends an app minutes of CPU off screen. The app asks for one
+  //     whenever it leaves the screen with notes still to transcribe - see
+  //     `BackgroundTaskPlan` - and iOS picks its own moment, while the phone
+  //     is idle and on a charger. It ends the moment the user picks the phone
+  //     up. Nothing depends on the window arriving: the queue is still there
+  //     on the next foreground either way, which is what the user is told;
   //   * and [BackgroundTranscriptionPolicy] says yes: on a charger, or at 30%
   //     battery or more with battery saver off - never when the phone is hot.
   //
@@ -532,7 +540,12 @@ class AppController extends ChangeNotifier {
 
   final TranscriptionQueue _queue = TranscriptionQueue();
   bool _inForeground = false;
-  bool _pumping = false;
+
+  /// The run of jobs now going, so a second caller joins it rather than
+  /// starting another - and so an iOS window can wait for it to finish before
+  /// telling the system the task is done.
+  Future<void>? _pumpDone;
+
   bool _initialised = false;
 
   /// Null in builds and tests without a battery reader; background
@@ -551,6 +564,15 @@ class AppController extends ChangeNotifier {
   Timer? _powerRecheck;
   StreamSubscription<void>? _powerChanges;
 
+  /// True only while iOS has granted a `BGProcessingTask` window. For that
+  /// window - and no longer - the process is kept alive off screen exactly as
+  /// Android's foreground service keeps it, so the same policy applies.
+  bool _backgroundWindow = false;
+
+  /// Set when iOS says the window is about to end. Every loop below checks it
+  /// and stops; an app that overruns its window is killed.
+  bool _windowExpiring = false;
+
   /// Recordings waiting for the background queue, front first.
   List<String> get transcriptionQueue => _queue.pending;
 
@@ -558,9 +580,15 @@ class AppController extends ChangeNotifier {
   /// first decision. For a future status line ("Waiting for charger").
   TranscriptionPermit? get transcriptionPermit => _permit;
 
-  /// Whether a paused queue off screen could run at all here - that is,
+  /// Whether the process is being kept alive off screen at this moment - so
   /// whether a charger could change anything.
-  bool get _keepAlive => _backgroundTranscription && _continuous.enabled;
+  bool get _keepAlive =>
+      _backgroundWindow || (_backgroundTranscription && _continuous.enabled);
+
+  /// Whether queued work can be looked at with the app off screen. Android
+  /// always (its service holds the process); iOS only inside a granted
+  /// window.
+  bool get _worksOffScreen => _backgroundTranscription || _backgroundWindow;
 
   /// The app is on screen: re-read the adapter, reach for the device if
   /// always-listening wants it, run the audio sweep and start the
@@ -570,6 +598,10 @@ class AppController extends ChangeNotifier {
     _stopPowerRecheck();
     _stopWaitingForPower();
     if (!_initialised) return;
+    // Before anything else: a keep-alive the OS refused while the app was off
+    // screen is asked for again here, with an activity on screen, which is the
+    // one moment Android is most likely to say yes.
+    _syncBackground();
     await refreshAvailability();
     _ensureContinuousLink();
     if (_batteryHistoryDue()) await refreshBatteryHistory();
@@ -598,12 +630,16 @@ class AppController extends ChangeNotifier {
       } else if (_queue.isEmpty) {
         await _releaseIdleEngine();
       }
+      await _syncBackgroundWork();
       return;
     }
     if (running != null) _queue.addFront(running);
     // Cancels the job and frees the model: nothing will use it off screen.
     await _transcription?.releaseEngine();
     _waitForPower();
+    // iOS: ask for a window for what is left. Android has its service and
+    // this is a no-op there.
+    await _syncBackgroundWork();
   }
 
   /// Whether a job may start or continue now, recording the answer.
@@ -638,7 +674,7 @@ class AppController extends ChangeNotifier {
     final service = _transcription;
     if (service == null) return;
     // Off screen where nothing keeps the process: do not even look.
-    if (!_inForeground && !_backgroundTranscription) return;
+    if (!_inForeground && !_worksOffScreen) return;
     try {
       if (!(await service.modelStatus()).isReady) return;
     } on Object {
@@ -664,12 +700,30 @@ class AppController extends ChangeNotifier {
 
   /// Runs queued jobs one after another until the queue is empty, the policy
   /// says stop, or something else is already transcribing.
-  Future<void> _pumpTranscriptions() async {
+  ///
+  /// A second caller while a run is going joins that run rather than starting
+  /// another, and gets the same future - which is what lets an iOS window wait
+  /// for the work to finish before telling the system the task is done.
+  Future<void> _pumpTranscriptions() {
+    final running = _pumpDone;
+    if (running != null) return running;
     final service = _transcription;
-    if (_pumping || service == null) return;
-    _pumping = true;
+    if (service == null) return Future<void>.value();
+    final done = _pumpLoop().whenComplete(() => _pumpDone = null);
+    _pumpDone = done;
+    return done;
+  }
+
+  Future<void> _pumpLoop() async {
+    // Taken when the first job starts off screen, released when the run ends.
+    // Never while the app is on screen, and never while the queue is idle.
+    var holdingCpu = false;
     try {
       while (_transcribingPath == null && !_queue.isEmpty) {
+        // iOS is taking its window back. Stop cleanly rather than be killed
+        // for overrunning it; the queue is untouched and waits for the next
+        // window or the next time the app is opened.
+        if (_windowExpiring) break;
         if (!await _mayTranscribe()) {
           _waitForPower();
           break;
@@ -687,12 +741,18 @@ class AppController extends ChangeNotifier {
           continue;
         }
         _stopWaitingForPower();
-        if (!_inForeground) _startPowerRecheck();
+        if (!_inForeground) {
+          _startPowerRecheck();
+          if (!holdingCpu) {
+            holdingCpu = true;
+            await _background?.holdCpu();
+          }
+        }
         await transcribe(recording);
       }
     } finally {
-      _pumping = false;
       _stopPowerRecheck();
+      if (holdingCpu) await _background?.releaseCpu();
     }
     if (!_inForeground && _transcribingPath == null) {
       await _releaseIdleEngine();
@@ -712,7 +772,7 @@ class AppController extends ChangeNotifier {
   Future<void> _enqueueFinished(String path) async {
     final service = _transcription;
     if (service == null) return;
-    if (!_inForeground && !_backgroundTranscription) return;
+    if (!_inForeground && !_worksOffScreen) return;
     try {
       if (!(await service.modelStatus()).isReady) return;
     } on Object {
@@ -772,6 +832,107 @@ class AppController extends ChangeNotifier {
     final changes = _powerChanges;
     _powerChanges = null;
     if (changes != null) unawaited(changes.cancel());
+  }
+
+  // -------------------------------------------------------------------------
+  // iOS BACKGROUND WINDOWS
+  //
+  // An iPhone keeps this app's process alive off screen for Bluetooth, and
+  // only for Bluetooth: it is woken for each characteristic notification, the
+  // note is written to disk in that wake-up, and it goes straight back to
+  // sleep. Apple's own guidance is that a wake-up is about ten seconds and
+  // that nothing unrelated to the wake-up belongs in it, so minutes of speech
+  // inference cannot ride on it.
+  //
+  // `BGProcessingTask` is the sanctioned way to ask for that time instead:
+  // "Although processing tasks can run for minutes, the system can interrupt
+  // the process"; "Processing tasks run only when the device is idle. The
+  // system terminates any background processing tasks running when the user
+  // starts using the device."
+  //
+  // So the app asks whenever it goes off screen with notes still to
+  // transcribe, iOS picks its own moment, and the window is spent running the
+  // same queue under the same policy Android's service runs it under. Nothing
+  // anywhere depends on a window arriving - it may never come, and on a phone
+  // with Background App Refresh off it never will. The queue is still there
+  // the next time the app is opened, which is what the screen says.
+  // -------------------------------------------------------------------------
+
+  /// iOS granted a window. Runs the queue until it drains, the policy pauses
+  /// it, or iOS asks for the window back; completes when there is no more to
+  /// do, which is when native tells the system the task finished.
+  Future<void> _runBackgroundWindow() async {
+    // The user picked the phone up between the grant and this call. iOS ends
+    // a processing task then anyway, and the foreground queue is about to run
+    // the same jobs.
+    if (_inForeground || _backgroundWindow) return;
+    _backgroundWindow = true;
+    _windowExpiring = false;
+    try {
+      await _planTranscriptions();
+      await _pumpTranscriptions();
+    } on Object catch (error) {
+      debugPrint('Background window failed: $error');
+    } finally {
+      _backgroundWindow = false;
+      _windowExpiring = false;
+      _stopPowerRecheck();
+      _stopWaitingForPower();
+      // The window is over: nothing off screen will use the model, and a
+      // timer is not to be trusted while the CPU sleeps.
+      await _transcription?.releaseEngine();
+    }
+    // Work left over asks for another window; a drained queue withdraws the
+    // request so the phone is not woken for nothing.
+    await _syncBackgroundWork();
+  }
+
+  /// Android's foreground service is not running after all. Forgetting the
+  /// text it was started with is what makes the next change ask again - and
+  /// nothing asks from here, because an OS that just refused would refuse a
+  /// retry in the same breath and the two would chase each other.
+  void _keepAliveStopped() {
+    _backgroundText = null;
+  }
+
+  /// iOS is about to take the window back. The running job stops at its next
+  /// check and goes back to the front of the queue.
+  void _expireBackgroundWindow() {
+    if (!_backgroundWindow) return;
+    _windowExpiring = true;
+    unawaited(cancelTranscription());
+  }
+
+  /// Asks iOS for a window when there is work for one, and withdraws the
+  /// request when there is not. A no-op where the process is kept alive
+  /// anyway - Android - and where there is no platform to ask.
+  Future<void> _syncBackgroundWork() async {
+    final background = _background;
+    if (background == null || _backgroundTranscription) return;
+    final service = _transcription;
+    var modelReady = false;
+    if (service != null) {
+      try {
+        modelReady = (await service.modelStatus()).isReady;
+      } on Object {
+        modelReady = false;
+      }
+    }
+    final request = BackgroundTaskPlan.plan(
+      pending: _queue.pending.length + (_transcribingPath == null ? 0 : 1),
+      modelReady: modelReady,
+    );
+    try {
+      if (request == null) {
+        await background.cancelWork();
+      } else {
+        await background.scheduleWork(request);
+      }
+    } on Object catch (error) {
+      // A refused request changes nothing the user can see: the queue still
+      // runs the next time the app is opened.
+      debugPrint('Could not ask for a background window: $error');
+    }
   }
 
   /// Stops the running transcription. Completes once the model is released.
@@ -1416,6 +1577,13 @@ class AppController extends ChangeNotifier {
     _downloadOnMobileData = await _modelDownloadSettings.loadAllowMobileData();
     _watchModelDownloads();
     await _modelDownloads?.refresh();
+    // Registered once, at startup, because iOS may hand a window to a process
+    // it woke for Bluetooth at any moment after this.
+    _background?.listen(
+      onGranted: _runBackgroundWindow,
+      onExpiring: _expireBackgroundWindow,
+      onKeepAliveStopped: _keepAliveStopped,
+    );
     _initialised = true;
     _syncBackground();
     _ensureContinuousLink();
@@ -1425,7 +1593,7 @@ class AppController extends ChangeNotifier {
     // Off screen too where the platform keeps the process alive - a process
     // Android restarted headless for always-listening picks its queue back
     // up, as the policy allows.
-    if (_inForeground || _backgroundTranscription) await _planTranscriptions();
+    if (_inForeground || _worksOffScreen) await _planTranscriptions();
   }
 
   /// The adapter changed state. THE STALE-CONNECTED BUG LIVES HERE.
@@ -2599,19 +2767,25 @@ class AppController extends ChangeNotifier {
     final background = _background;
     if (background == null) return true;
     return await background.notificationsAllowed() &&
-        await background.ignoringBatteryOptimizations();
+        await background.backgroundWorkAllowed();
   }
 
-  /// Asks for what [backgroundPermissionsGranted] checks. The screen explains
-  /// why first.
+  /// Asks for what [backgroundPermissionsGranted] checks, one at a time.
+  ///
+  /// THE SECOND ASK WAITS FOR THE FIRST. Both are system UI over this app -
+  /// a permission dialog on Android, a Settings page on iOS - and raising them
+  /// together stacks two dialogs, or loses the second to the background
+  /// activity-start rules. [BackgroundMode.requestNotifications] does not
+  /// return until the user has answered, which is what makes this safe; a
+  /// "no" there does not stop the other being asked.
   Future<void> requestBackgroundPermissions() async {
     final background = _background;
     if (background == null) return;
     if (!await background.notificationsAllowed()) {
       await background.requestNotifications();
     }
-    if (!await background.ignoringBatteryOptimizations()) {
-      await background.requestIgnoreBatteryOptimizations();
+    if (!await background.backgroundWorkAllowed()) {
+      await background.requestBackgroundWork();
     }
   }
 
@@ -2788,9 +2962,14 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  /// Keeps the Android foreground service in step with [continuousStatus]:
-  /// running exactly while always-listening is on, and saying what it is
-  /// doing. The platform is only called when the text actually changes.
+  /// Keeps the keep-alive in step with [continuousStatus]: running exactly
+  /// while always-listening is on, and saying what it is doing. The platform
+  /// is only called when the text actually changes, OR when the last call
+  /// failed - a foreground service that was refused has to be asked again, and
+  /// the text is often the same when it is.
+  ///
+  /// On Android that is the service notification; on iOS only the `alert`
+  /// flag means anything, and an ordinary status line does nothing at all.
   ///
   /// It is also where the NOT-SAVING ALERT is asked: every change that can
   /// start or stop notes being saved already passes through here.
@@ -2811,7 +2990,34 @@ class AppController extends ChangeNotifier {
     final key = '$title\n$text';
     if (key == _backgroundText) return;
     _backgroundText = key;
-    unawaited(background.start(title: title, text: text));
+    unawaited(_startBackground(title: title, text: text, alert: alerting));
+  }
+
+  /// Starts or updates the keep-alive, and FORGETS THE TEXT IF IT FAILED.
+  ///
+  /// A foreground service can be refused - Android 14 with the Bluetooth
+  /// permission revoked, or a background start with no exemption - and a
+  /// refusal that is remembered as done is never retried, because the text
+  /// rarely changes twice. Clearing the key instead means the next thing that
+  /// happens on the link asks again.
+  Future<void> _startBackground({
+    required String title,
+    required String text,
+    required bool alert,
+  }) async {
+    var running = true;
+    try {
+      running = await _background?.start(
+            title: title,
+            text: text,
+            alert: alert,
+          ) ??
+          true;
+    } on Object catch (error) {
+      debugPrint('Could not start the keep-alive: $error');
+      running = false;
+    }
+    if (!running && _backgroundText == '$title\n$text') _backgroundText = null;
   }
 
   // -------------------------------------------------------------------------

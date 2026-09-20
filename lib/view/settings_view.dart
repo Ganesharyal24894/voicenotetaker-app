@@ -388,10 +388,14 @@ class _Section extends StatelessWidget {
 /// it on: it then works while the app is open, which is better than a switch
 /// that refuses.
 ///
-/// On iPhone there is nothing to grant and nothing to ask, so the dialog never
-/// appears - but the switch would then quietly promise Android's behaviour.
-/// [iosNote] is the one line that says what actually happens instead, and it
-/// shows on iOS only.
+/// BOTH PHONES ASK, FOR DIFFERENT THINGS, AND THE SHEET SAYS WHICH. Android
+/// needs a notification and its battery-optimisation exemption to keep its
+/// foreground service; an iPhone needs a notification to tell the wearer their
+/// notes stopped saving, and Background App Refresh to be given the window
+/// that finishes transcripts. One sheet, one sentence each, no jargon.
+///
+/// [iosNote] is the one line under the card that says what an iPhone does
+/// differently even with everything granted, and it shows on iOS only.
 class AlwaysListeningCard extends StatelessWidget {
   const AlwaysListeningCard({required this.controller, super.key});
 
@@ -399,12 +403,27 @@ class AlwaysListeningCard extends StatelessWidget {
 
   static const String title = 'Always listening';
 
-  /// What iPhone does differently, in the two ways a person would notice:
-  /// transcripts wait, and a problem waits to be seen rather than buzzing.
+  /// What an iPhone does differently, in the one way a person would notice:
+  /// transcripts wait for the app or for the charger, rather than running the
+  /// moment a note is finished.
   static const String iosNote =
-      'On iPhone, notes keep saving while the recorder is linked, but '
-      'transcripts finish when you open the app - and you will see any '
-      'problem here rather than as an alert.';
+      'On iPhone, notes keep saving while the recorder is linked. Transcripts '
+      'finish when you open the app, or on the charger while you are not '
+      'using the phone.';
+
+  /// Why the sheet is asking, per phone. Short, plain, and true of the
+  /// platform it shows on - see the class comment.
+  static String permissionReason({required bool ios, required bool autostart}) {
+    if (ios) {
+      return 'Notes keep saving while your phone is locked. Allow '
+          'notifications so you know if the recorder drops, and leave '
+          'Background App Refresh on so transcripts can finish on the charger.';
+    }
+    return 'To keep saving notes while your phone is locked, allow '
+        'notifications and let the app keep running in the background.'
+        '${autostart ? '\n\nOn Xiaomi phones, also turn on Autostart and set '
+            'this app to No restrictions.' : ''}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -498,9 +517,10 @@ class AlwaysListeningCard extends StatelessWidget {
           shape: const RoundedRectangleBorder(borderRadius: AppShape.card),
           title: const Text('Keep listening', style: AppText.title22),
           content: Text(
-            'To save notes while your phone is locked, allow notifications '
-            'and turn off battery limits for this app.'
-            '${autostart ? '\n\nOn Xiaomi phones, also turn on Autostart.' : ''}',
+            permissionReason(
+              ios: defaultTargetPlatform == TargetPlatform.iOS,
+              autostart: autostart,
+            ),
             style: AppText.footnote12,
           ),
           actions: <Widget>[

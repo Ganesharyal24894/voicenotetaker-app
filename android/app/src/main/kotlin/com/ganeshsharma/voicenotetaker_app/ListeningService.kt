@@ -26,8 +26,11 @@ import android.util.Log
  * only call `startForeground` when the app is exempt from battery optimisation,
  * which is why turning always-listening on asks for the exemption.
  *
- * NO WAKE LOCK. Audio notifications wake the CPU on their own; the one-minute
- * keep-alive read is allowed to slip in Doze - see doc/continuous-mode.md.
+ * NO WAKE LOCK HERE. Audio notifications wake the CPU on their own, and the
+ * one-minute keep-alive read is allowed to slip in Doze - see
+ * doc/continuous-mode.md. The one wake lock this app takes is
+ * `EngineHolder.holdCpu`, held only for the length of a transcription run off
+ * screen, because inference on a worker thread has nothing waking it.
  */
 class ListeningService : Service() {
 
@@ -45,30 +48,49 @@ class ListeningService : Service() {
         var running = false
             private set
 
-        fun start(context: Context, title: String, text: String) {
+        /**
+         * False when Android refused the start. The caller TELLS DART, which
+         * forgets the notification text it thinks is up and asks again on the
+         * next change or the next time the app is opened - a refusal that was
+         * reported as success was never retried, because the text rarely
+         * changes twice.
+         */
+        fun start(context: Context, title: String, text: String): Boolean {
             val intent = Intent(context, ListeningService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_TITLE, title)
                 .putExtra(EXTRA_TEXT, text)
-            try {
+            return try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
                 } else {
                     context.startService(intent)
                 }
+                true
             } catch (refused: RuntimeException) {
                 // ForegroundServiceStartNotAllowedException on 12+ when started
-                // from the background without an exemption. Dart tries again on
-                // the next foreground.
+                // from the background without an exemption.
                 Log.w(TAG, "could not start: $refused")
+                false
             }
         }
 
         fun stop(context: Context) {
             if (!running) return
-            context.startService(
-                Intent(context, ListeningService::class.java).setAction(ACTION_STOP)
-            )
+            val service = Intent(context, ListeningService::class.java)
+            try {
+                context.startService(service.setAction(ACTION_STOP))
+            } catch (refused: RuntimeException) {
+                // A background `startService` is refused on O+ outside the
+                // foreground-service exemption, and `running` can be stale.
+                // Stopping outright takes the notification down just the same.
+                Log.w(TAG, "could not ask to stop: $refused")
+                try {
+                    context.stopService(service)
+                } catch (ignored: RuntimeException) {
+                    Log.w(TAG, "could not stop: $ignored")
+                }
+            }
         }
     }
 
@@ -90,18 +112,31 @@ class ListeningService : Service() {
             startForegroundCompat(buildNotification())
             running = true
         } catch (refused: RuntimeException) {
+            // SecurityException on 14+ when BLUETOOTH_CONNECT has been revoked -
+            // the `connectedDevice` type demands it - and
+            // ForegroundServiceStartNotAllowedException on 12+ from the
+            // background. Dart is told, so the switch does not stay green over
+            // a service that is not running.
             Log.w(TAG, "startForeground refused: $refused")
+            EngineHolder.reportKeepAliveStopped()
             stopSelf()
             return START_NOT_STICKY
         }
-        // A null intent is the system restarting us after a kill: bring the Dart
-        // side back so it can reconnect.
-        if (intent == null) EngineHolder.obtain(this)
+        // UNCONDITIONALLY, not only for the null intent of a sticky restart.
+        // The app can be swiped away between Dart asking for this service and
+        // this line running, and `releaseIfIdle` sees `running` still false and
+        // destroys the engine - leaving a notification with no isolate behind
+        // it. `obtain` is idempotent and cheap, so asking always is the fix.
+        EngineHolder.obtain(this)
         return START_STICKY
     }
 
     override fun onDestroy() {
+        val wasRunning = running
         running = false
+        // Killed by the system or by a vendor task killer rather than by Dart
+        // asking: the same "ask again" path as a refused start.
+        if (wasRunning) EngineHolder.reportKeepAliveStopped()
         super.onDestroy()
     }
 

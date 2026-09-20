@@ -53,12 +53,39 @@ object EngineHolder {
     private const val ASSISTANT_CHANNEL = "com.ganeshsharma.voicenotetaker_app/assistant"
     private const val NOTIFICATION_PERMISSION_REQUEST = 7021
 
+    /**
+     * The longest the CPU lock is ever held. A 1-hour note is about 9 minutes
+     * of two cores; 30 minutes is far past anything the policy would start and
+     * is a backstop against a lock this process forgot, never a budget.
+     */
+    private const val CPU_LOCK_TIMEOUT_MS = 30L * 60L * 1000L
+
     /** The activity on screen, if any. Only permission requests need one. */
     @SuppressLint("StaticFieldLeak")
     var activity: Activity? = null
 
     /** The live assistant channel, or null while there is no engine. */
     private var assistant: MethodChannel? = null
+
+    /**
+     * The live background channel. Held for the same reason as [assistant]:
+     * Kotlin calls INTO Dart on it to say that the keep-alive stopped.
+     */
+    private var background: MethodChannel? = null
+
+    /**
+     * The Dart call waiting on the notification prompt. A permission request
+     * is answered in `onRequestPermissionsResult`, not when the dialog is
+     * raised, and the Dart side has a SECOND thing to ask for straight after -
+     * so this is what stops two system dialogs being raised at once.
+     */
+    private var pendingNotifications: MethodChannel.Result? = null
+
+    /**
+     * Held only while a transcription runs with the app off screen. See the
+     * WAKE_LOCK note in `AndroidManifest.xml`.
+     */
+    private var cpuLock: PowerManager.WakeLock? = null
 
     /**
      * An Undo tapped before Dart was listening - the notification outlived the
@@ -87,6 +114,8 @@ object EngineHolder {
         val engine = FlutterEngineCache.getInstance().get(ENGINE_ID) ?: return
         FlutterEngineCache.getInstance().remove(ENGINE_ID)
         assistant = null
+        background = null
+        releaseCpu()
         engine.destroy()
     }
 
@@ -139,30 +168,45 @@ object EngineHolder {
     }
 
     private fun installBackgroundChannel(app: Context, engine: FlutterEngine) {
-        MethodChannel(engine.dartExecutor.binaryMessenger, BACKGROUND_CHANNEL)
-            .setMethodCallHandler { call, result ->
+        val channel = MethodChannel(engine.dartExecutor.binaryMessenger, BACKGROUND_CHANNEL)
+        background = channel
+        channel.setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "start" -> {
+                    // ANSWERS WITH WHETHER THE SERVICE IS ACTUALLY RUNNING.
+                    // A refused start that reported success was remembered by
+                    // Dart as done and never asked for again, and the switch
+                    // stayed green over nothing.
+                    "start" -> result.success(
                         ListeningService.start(
                             app,
                             call.argument<String>("title") ?: "",
                             call.argument<String>("text") ?: "",
                         )
-                        result.success(null)
-                    }
+                    )
                     "stop" -> {
                         ListeningService.stop(app)
                         result.success(null)
                     }
                     "notificationsAllowed" -> result.success(notificationsAllowed(app))
-                    "requestNotifications" -> {
-                        requestNotifications()
+                    // Answered from `onPermissionsResult`, once the user has
+                    // tapped something - see [pendingNotifications].
+                    "requestNotifications" -> requestNotifications(app, result)
+                    "backgroundWorkAllowed" ->
+                        result.success(ignoringBatteryOptimizations(app))
+                    "requestBackgroundWork" -> {
+                        requestIgnoreBatteryOptimizations(app)
                         result.success(null)
                     }
-                    "ignoringBatteryOptimizations" ->
-                        result.success(ignoringBatteryOptimizations(app))
-                    "requestIgnoreBatteryOptimizations" -> {
-                        requestIgnoreBatteryOptimizations(app)
+                    // iOS asks the system for a window; Android's foreground
+                    // service is already the window, so there is nothing to
+                    // ask for and nothing to withdraw.
+                    "scheduleWork", "cancelWork" -> result.success(null)
+                    "holdCpu" -> {
+                        holdCpu(app)
+                        result.success(null)
+                    }
+                    "releaseCpu" -> {
+                        releaseCpu()
                         result.success(null)
                     }
                     "thermalStatus" -> result.success(thermalStatus(app))
@@ -177,18 +221,100 @@ object EngineHolder {
             }
     }
 
+    /**
+     * The foreground service stopped without Dart asking it to - refused at
+     * start, or killed. Dart forgets the notification text it thinks is up, so
+     * the next change asks again instead of believing it is already running.
+     */
+    fun reportKeepAliveStopped() {
+        val channel = background ?: return
+        Handler(Looper.getMainLooper()).post {
+            channel.invokeMethod("keepAliveStopped", null)
+        }
+    }
+
+    /**
+     * A partial wake lock, so a transcription started with the screen off runs
+     * to the end instead of being frozen between audio packets.
+     *
+     * TIMED, always. A lock this process forgot to release would hold the CPU
+     * until the phone rebooted; the timeout is well past the longest job the
+     * policy would start and it is released the moment the run ends anyway.
+     */
+    private fun holdCpu(app: Context) {
+        if (cpuLock?.isHeld == true) return
+        val power = app.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val lock = power.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "voicenotetaker:transcribe",
+        )
+        lock.setReferenceCounted(false)
+        try {
+            lock.acquire(CPU_LOCK_TIMEOUT_MS)
+        } catch (refused: SecurityException) {
+            // No WAKE_LOCK permission on this build: the job still runs, it
+            // may just be slower with the screen off.
+            return
+        }
+        cpuLock = lock
+    }
+
+    private fun releaseCpu() {
+        val lock = cpuLock ?: return
+        cpuLock = null
+        if (lock.isHeld) lock.release()
+    }
+
     private fun notificationsAllowed(app: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             app.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
 
-    /** Needs an activity; without one on screen there is nobody to ask. */
-    private fun requestNotifications() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        activity?.requestPermissions(
-            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-            NOTIFICATION_PERMISSION_REQUEST,
-        )
+    /**
+     * Raises the notification prompt and answers [result] only once the user
+     * has. Answers straight away where there is nothing to ask: below
+     * Android 13, already granted, or no activity on screen to ask with.
+     */
+    private fun requestNotifications(app: Context, result: MethodChannel.Result) {
+        val host = activity
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            notificationsAllowed(app) ||
+            host == null
+        ) {
+            result.success(null)
+            return
+        }
+        // A prompt already up: answer this one now rather than lose the first
+        // result. A MethodChannel result may be answered exactly once.
+        pendingNotifications?.success(null)
+        pendingNotifications = result
+        try {
+            host.requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                NOTIFICATION_PERMISSION_REQUEST,
+            )
+        } catch (refused: RuntimeException) {
+            answerNotifications()
+        }
+    }
+
+    /**
+     * The user answered the notification prompt, or the activity went away
+     * before they did. Either way the Dart call must be let go, or the second
+     * thing it asks for is never asked.
+     */
+    fun onPermissionsResult(requestCode: Int) {
+        if (requestCode != NOTIFICATION_PERMISSION_REQUEST) return
+        answerNotifications()
+    }
+
+    /** Called when the host activity is destroyed with a prompt outstanding. */
+    fun releasePendingPermission() = answerNotifications()
+
+    private fun answerNotifications() {
+        val waiting = pendingNotifications ?: return
+        pendingNotifications = null
+        waiting.success(null)
     }
 
     private fun ignoringBatteryOptimizations(app: Context): Boolean {
@@ -206,9 +332,17 @@ object EngineHolder {
             Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
             Uri.fromParts("package", app.packageName, null),
         )
-        if (!launch(app, direct)) {
-            launch(app, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        if (launch(app, direct)) {
+            // MIUI SHOWS THE AOSP DIALOG AND THEN LARGELY IGNORES THE ANSWER.
+            // Its own per-app battery page - "No restrictions" - is the switch
+            // that actually keeps the service alive, so on a Xiaomi the user is
+            // taken there as well; the Keep listening sheet says to expect it.
+            if (isXiaomi()) {
+                launch(app, Intent("miui.intent.action.HIDDEN_APPS_CONFIG_ACTIVITY"))
+            }
+            return
         }
+        launch(app, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
     }
 
     /**
@@ -292,13 +426,27 @@ object EngineHolder {
      */
     private fun openAutostartSettings(app: Context): Boolean {
         if (isXiaomi()) {
-            val miui = Intent().setComponent(
-                ComponentName(
-                    "com.miui.securitycenter",
-                    "com.miui.permcenter.autostart.AutoStartManagementActivity",
-                )
+            // The component name is current on MIUI 12-14 and HyperOS, but it
+            // is often not exported to third-party apps, which throws - so the
+            // published action and the security centre's own front door are
+            // tried after it, and the app's details page after those. MIUI
+            // puts an Autostart switch there too.
+            val pages = listOf(
+                Intent().setComponent(
+                    ComponentName(
+                        "com.miui.securitycenter",
+                        "com.miui.permcenter.autostart.AutoStartManagementActivity",
+                    )
+                ),
+                Intent("miui.intent.action.OP_AUTO_START").addCategory(Intent.CATEGORY_DEFAULT),
+                Intent().setComponent(
+                    ComponentName(
+                        "com.miui.securitycenter",
+                        "com.miui.securityscan.MainActivity",
+                    )
+                ),
             )
-            if (launch(app, miui)) return true
+            for (page in pages) if (launch(app, page)) return true
         }
         return launch(
             app,

@@ -123,10 +123,16 @@ being saved - not on every disconnect.
 - **Doze**: the 30 s timer is a Dart timer. With the screen off and no BLE
   traffic (the link is gone) it can fire late; the disconnect callback and the
   reconnect attempts wake the CPU often enough in practice. Not measured.
-- **iOS**: no alert. A backgrounded app cannot vibrate by itself; the only way
-  is a local notification with sound, which needs notification permission and
-  a plugin this app does not have (`MethodChannelHaptics` has no iOS handler).
-  Dart timers also do not run while suspended. The header says *Not saving*
+- **iOS**: a local notification, not a buzz. A backgrounded app cannot vibrate
+  by itself - there is no API - so `MethodChannelHaptics` still has no iOS
+  handler and `main.dart` passes `haptics: null` there. What iOS does allow is
+  a local notification, which `AppDelegate.swift` posts and withdraws on the
+  `alert` flag of `BackgroundMode.start`; Apple names exactly this case ("a
+  background app could ask the system to display an alert"). One identifier,
+  replaced in place, so a flapping link does not pile up notifications. It
+  needs notification permission, which the Keep listening sheet asks for.
+  Dart timers still do not run while suspended, so the alert lands at the next
+  BLE wake-up rather than exactly 30 s in; the header still says *Not saving*
   when the app is opened.
 
 ## Notes on disk
@@ -169,12 +175,14 @@ deleted, and is never transcribed.
   failure and their audio still present, newest first, one at a time.
 - **When it runs** (`BackgroundTranscriptionPolicy`, pure, unit tested):
   - app on screen: always;
-  - app off screen: only on Android (`backgroundTranscription`, set in
-    `main.dart`) AND with always-listening on, because its foreground service
-    is what keeps the process alive - and then only if the phone is **on a
-    charger**, or at **>= 30% battery with battery saver off**; never at
-    thermal status **MODERATE or hotter** (charger or not); anything the
-    phone does not report counts as "no".
+  - app off screen: only where the process is actually being kept alive -
+    on Android (`backgroundTranscription`, set in `main.dart`) AND with
+    always-listening on, because its foreground service is what keeps the
+    process; or on iOS **inside a granted `BGProcessingTask` window** (see
+    below) - and then only if the phone is **on a charger**, or at
+    **>= 30% battery with battery saver off**; never at thermal status
+    **MODERATE or hotter** (charger or not); anything the phone does not
+    report counts as "no".
   - Asked before every job, and every **60 s** while a job runs off screen.
     A "no" puts the running job back at the front, frees the model, and
     listens for charger events; the next finished note or opening the app
@@ -187,14 +195,39 @@ deleted, and is never transcribed.
   `drivers/phone_power.dart`; thermal status from
   `PowerManager.getCurrentThermalStatus()` over the existing background channel
   (`thermalStatus`, API 29+, null below).
-- **No wake lock** (unchanged): with the screen off Android may suspend the CPU
-  between BLE events, so background decoding can run in bursts and take longer
-  than its RTF suggests. Not measured.
+- **A wake lock, for inference only.** A foreground service keeps the PROCESS,
+  not the CPU: once the binder transaction that delivered a packet is done
+  with, Android is free to suspend and a job on a worker thread is frozen until
+  the next packet. So `EngineHolder.holdCpu` takes a `PARTIAL_WAKE_LOCK` when
+  the first job of an off-screen run starts and releases it when the run ends -
+  one lock per run, never on screen, never while the queue is idle, and always
+  with a 30-minute timeout as a backstop. Receiving and writing a note still
+  needs no lock: the incoming notification wakes the CPU by itself. In full
+  Doze an app wake lock is ignored anyway, which the foreground service mostly
+  keeps the app out of. Not measured on device.
 - The model is loaded once for a run of jobs; see
   `doc/agentFindings/on-device-stt.md` ("Model kept loaded between jobs").
-- **iOS:** background execution is not guaranteed, so nothing changes there -
-  leaving the app cancels the job, frees the model, and the queue runs again
-  on open (`TranscriptionPermit.noKeepAlive`).
+- **iOS:** `BGProcessingTask`, and nothing else. Leaving the app still cancels
+  the running job and frees the model (`TranscriptionPermit.noKeepAlive`), and
+  the queue runs again on open. In addition, `AppController._syncBackgroundWork`
+  asks iOS for a processing window whenever the app leaves the screen with work
+  queued (`BackgroundTaskPlan.plan`: only with work AND a model installed;
+  `requiresExternalPower`, no network, `earliestBeginDate` 15 minutes out). When
+  the system grants one, `AppDelegate.swift` calls `runWork` into Dart,
+  `_runBackgroundWindow` sets `_backgroundWindow` so the SAME policy applies,
+  and the window is handed back the moment the queue drains. `workExpiring`
+  stops the run early - iOS kills an app that overruns, and iOS ends a
+  processing task the moment the user picks the phone up.
+  **Nothing depends on a window arriving.** It needs Background App Refresh on,
+  the phone idle and plugged in, and it may never come; the queue is still
+  there on the next foreground and the UI says so.
+  **No `audio` background mode.** Apple's current wording for it is "the app
+  plays audible content in the background", and every Apple doc ties it to an
+  active `AVAudioSession`. This app receives audio bytes over BLE and neither
+  captures nor plays them in the background, so the mode does not apply -
+  claiming it is a guideline 2.5.4 ("background services ... for their intended
+  purposes") risk and, more to the point, a permanently unsuspended app is a
+  battery cost the owner would notice on their daily phone.
 - Opening a note that is waiting moves it to the front; the note screen shows
   *Waiting to transcribe...*, then *Transcribing NN%*, then the text.
 - Failures that would repeat (`unsupported`, engine `failed`) are saved as
@@ -260,8 +293,32 @@ removes **only the WAV** when ALL hold (`AudioRetention`, pure, unit tested):
 - **Permissions** (manifest): `FOREGROUND_SERVICE`,
   `FOREGROUND_SERVICE_CONNECTED_DEVICE` (Android 14+, satisfied at runtime by
   the granted `BLUETOOTH_CONNECT`), `POST_NOTIFICATIONS` (runtime on 13+),
-  `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`. **No `WAKE_LOCK`.** The switch
-  explains and asks for notifications + the battery exemption when missing.
+  `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, and `WAKE_LOCK` - the last one for
+  transcription and nothing else, see "Background transcription" above. The
+  switch explains and asks for notifications + the battery exemption when
+  missing, **one at a time**: `requestNotifications` does not answer its Dart
+  call until `onRequestPermissionsResult` fires, so the battery-exemption
+  Activity is not started on top of an open permission dialog.
+- **A refused start is reported, not swallowed.** `ListeningService.start`
+  returns false when Android refuses (background start with no exemption;
+  `SecurityException` on 14+ when `BLUETOOTH_CONNECT` has been revoked, which
+  the `connectedDevice` type requires), and `startForeground` failing inside
+  `onStartCommand` calls `EngineHolder.reportKeepAliveStopped`, as does an
+  `onDestroy` the app did not ask for. Either way Dart clears the notification
+  text it believes is up, so the next status change - or `appForegrounded`,
+  which now re-syncs first - asks again. Before this, a refusal was recorded as
+  success and never retried, and the switch stayed green over nothing.
+- **`EngineHolder.obtain` is called on every `onStartCommand`**, not only for
+  the null intent of a sticky restart: the app can be swiped away between Dart
+  asking for the service and the service starting, and `releaseIfIdle` would
+  then destroy the engine behind a live notification.
+- **`MainActivity.cleanUpFlutterEngine`** clears the three method-call handlers
+  it installed. They close over the activity (`startActivity`,
+  `getSystemService`), so leaving them on an engine that outlives it held a
+  destroyed activity and its view hierarchy for as long as always-listening ran.
+- **Android 15/16 six-hour FGS cap**: `dataSync` and `mediaProcessing` only.
+  `connectedDevice` is not on that list, so no `Service.onTimeout` override is
+  needed.
 - **Android 12+ background-start rule**: a foreground service may not be
   started from the background - except by an app exempt from battery
   optimisation. The exemption is what lets the sticky restart and a
@@ -293,32 +350,96 @@ versions):
 
 ## iOS specifics (not built here - correct by inspection only)
 
-- `Info.plist` declares `UIBackgroundModes: bluetooth-central`. With it,
-  `universal_ble` creates its `CBCentralManager` with a restore identifier at
-  launch, so iOS can relaunch the app in the background for a peripheral that
-  had a live connection, and re-adopts it (`willRestoreState`).
-- Notifications (`fe01`, `fe08`) keep arriving while backgrounded, so notes are
-  written with the screen locked. There is no foreground-service notification;
-  `MethodChannelBackgroundMode` has no iOS handler and answers "ready".
-- Limits: **a user force-quit (swipe up in the app switcher) stops capture**
-  and iOS will not relaunch it until the user opens the app. Dart timers do not
-  run while suspended, so the 60 s keep-alive and backoff waits only run when a
-  BLE event wakes the app; in a long silence the firmware may drop the link
-  after 10 min, the disconnect wakes the app, and the immediate reconnect
-  attempt runs. Reconnect by id after a restart uses
-  `retrievePeripherals(withIdentifiers:)`, which works for a device iOS has
-  seen before.
+**What keeps working off screen**
+
+- `Info.plist` declares `UIBackgroundModes: bluetooth-central` (and now
+  `processing`, for the transcription window). With `bluetooth-central`, Apple:
+  "the system wakes up your app when any of the `CBCentralManagerDelegate` or
+  `CBPeripheralDelegate` delegate methods are invoked ... such as ... when a
+  peripheral sends updated characteristic values". So `fe01` / `fe08`
+  notifications keep arriving and notes are written with the screen locked and
+  the app off screen. Nothing has to be started for this and nothing has to be
+  granted.
+- **The budget per wake-up is small.** Apple's only published number is in the
+  (archived, 2013) Core Bluetooth background guide: "Upon being woken up, an
+  app has around 10 seconds to complete a task ... Apps that spend too much
+  time executing in the background can be throttled back by the system or
+  killed." That is enough to decode and append a frame; it is nowhere near
+  enough for speech inference, which is why the processing window exists.
+- **`autoConnect: true` on iOS only** (`ble_transport_universal.dart`). On
+  iOS 17+ `universal_ble` maps this to
+  `CBConnectPeripheralOptionEnableAutoReconnect`, so Core Bluetooth
+  re-establishes the link itself after an unexpected disconnect - including
+  while the app is suspended, which is precisely the case the app cannot reach,
+  because a suspended app has no timer to run its own backoff with. Not passed
+  on Android, where the same flag becomes the platform `autoConnect` (slower
+  first connection) and the foreground service lets the app's own backoff run.
+- **No `CBConnectPeripheralOption NotifyOnConnection/Disconnection/Notification`.**
+  Those ask iOS to show the USER an alert per event while the app is suspended;
+  for a continuous audio stream that is a notification per packet.
+
+**What is not possible, and why**
+
+- **Force quit ends it.** TN3115's relaunch table is explicit: "App Force Quit
+  by the user - No". Swipe the app out of the app switcher and iOS will not
+  bring it back for Bluetooth; nothing is captured until the user opens it.
+  There is no workaround.
+- **State restoration is not reachable from this app's launch path, today.**
+  `universal_ble` 2.3.0 *does* support it: when `bluetooth-central` is declared
+  and Bluetooth permission is granted, it builds its `CBCentralManager` with
+  `CBCentralManagerOptionRestoreIdentifierKey` and implements
+  `centralManager(_:willRestoreState:)`
+  (`UniversalBlePlugin.swift:75-89`, `:110-120`, `:561-578`). The problem is
+  ours: Apple requires the restoring manager to exist before
+  `application(_:didFinishLaunchingWithOptions:)` returns, and this app is
+  scene-based with an *implicit* Flutter engine - `AppDelegate` registers
+  plugins in `didInitializeImplicitFlutterEngine`, which the engine only calls
+  from `FlutterViewController` initialisation, i.e. at scene connect. A
+  Bluetooth background relaunch connects no scene, so no engine, no plugin
+  registration, no central manager, and no Dart to receive anything.
+  **What it would take:** create an explicit `FlutterEngine` in
+  `didFinishLaunchingWithOptions`, run it and call
+  `GeneratedPluginRegistrant.register` against it there, then hand that engine
+  to a code-created `FlutterViewController` at scene connect (dropping
+  `UIMainStoryboardFile`). That is a rewrite of the iOS launch path and must be
+  validated on a device before it is trusted, so it is deliberately NOT done
+  here.
+  **And it may be moot on iOS 26**: TN3115 note 5 says "Starting in iOS 26 and
+  iPadOS 26, only apps that use AccessorySetupKit to setup Bluetooth
+  accessories will be relaunched." Apple's wording is ambiguous about exactly
+  which rows that restricts; it needs a device test before anything is built
+  on it.
+- **Dart timers do not run while suspended**, so the 60 s keep-alive and the
+  reconnect backoff only run when a BLE event wakes the app. In a long silence
+  the firmware may drop the link after 10 min; the disconnect wakes the app and
+  the immediate reconnect attempt runs - and on iOS 17+ Core Bluetooth's own
+  auto-reconnect is now also in play.
+- Reconnect by id after a restart uses `retrievePeripherals(withIdentifiers:)`,
+  which works for a device iOS has seen before.
+- **Background App Refresh gates the processing window**, and Low Power Mode
+  switches Background App Refresh off (`UIApplication.backgroundRefreshStatus`:
+  "Background App Refresh is disabled automatically when a device is operating
+  in low-power mode"). Whether it also gates Core Bluetooth wake-ups is
+  **undocumented either way** - worth a device test, not an assumption.
 
 ## Not done
 
 - **On-device storage when the phone is away.** Speech while the phone is out
   of range or the link is down is lost; the firmware has nowhere to keep it.
 - A mute/unmute control in the app (driver method exists).
-- The not-saving alert on iOS (see above), and a "session could not start"
-  state: a session that fails to start on a connected, capable recorder still
-  reads *Saving notes*.
+- A "session could not start" state: a session that fails to start on a
+  connected, capable recorder still reads *Saving notes*.
 - A dedicated mic-check blocker message for always-listening (it reuses "A
   recording is running").
-- Wake-lock / `AlarmManager` keep-alive, pending the Doze measurement above.
-- iOS build and on-device verification.
+- `AlarmManager` keep-alive, pending the Doze measurement above. (The
+  transcription wake lock is now in - see "Background transcription".)
+- **A `BOOT_COMPLETED` receiver.** Nothing brings always-listening back after
+  the phone restarts until the user opens the app. `connectedDevice` is not on
+  Android 15's BOOT_COMPLETED-launch deny-list, so it is allowed; it is simply
+  not built.
+- **iOS Core Bluetooth state restoration** - see "iOS specifics" for exactly
+  what it would take and why it is not done blind.
+- iOS build and on-device verification. Everything in "iOS specifics" is
+  correct by inspection and by Apple's documentation; none of it has been run
+  on a phone from this repository.
 - Waveform envelope and speaker/segment boundaries inside a note.

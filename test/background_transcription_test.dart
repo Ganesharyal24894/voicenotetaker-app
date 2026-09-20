@@ -210,11 +210,13 @@ void main() {
       bool listening = true,
       Duration recheck = const Duration(seconds: 60),
       bool initialise = true,
+      FakeBackgroundMode? background,
     }) async {
       final phone = power ?? FakePhonePower();
       final harness = ViewHarness(
         recognizer: recognizer ?? ScriptedRecognizer(),
         phonePower: phone,
+        backgroundMode: background,
         backgroundTranscription: true,
         powerRecheckInterval: recheck,
       );
@@ -246,6 +248,36 @@ void main() {
           TranscriptionPermit.batteryOk);
       // Drained off screen: the model is freed at once, not left to a timer.
       expect(harness.recognizer!.releaseRequests, greaterThan(0));
+    });
+
+    test('the CPU is held for a run off screen, and let go at the end of it',
+        () async {
+      final background = FakeBackgroundMode();
+      final harness = await android(background: background);
+      await settle();
+
+      // A foreground service keeps the PROCESS, not the CPU: once the packet
+      // that woke it is done with, the phone is free to suspend and a job on
+      // a worker thread is frozen between packets.
+      expect(harness.recognizer!.calls, 3);
+      expect(background.cpuHolds, 1,
+          reason: 'one lock for the run, not one per job');
+      expect(background.cpuHeld, isFalse, reason: 'let go when the run ended');
+    });
+
+    test('nothing is held for a run on screen', () async {
+      final background = FakeBackgroundMode();
+      final harness = await android(background: background);
+      await settle();
+      background.cpuHolds = 0;
+
+      await harness.seedRecording(
+          at: DateTime(2026, 9, 14, 12), length: const Duration(seconds: 20));
+      await harness.controller.appForegrounded();
+      await settle();
+
+      expect(background.cpuHolds, 0,
+          reason: 'the screen being on is what keeps the CPU up');
     });
 
     test('low battery: nothing runs; plugging in starts it', () async {

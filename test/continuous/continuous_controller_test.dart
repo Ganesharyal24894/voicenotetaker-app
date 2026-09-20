@@ -264,6 +264,71 @@ void main() {
     expect(background.permissionRequests, 2);
   });
 
+  test('the notification is asked for first, and answered, before the second '
+      'ask is raised', () async {
+    final (harness, background) = await started();
+    background
+      ..notifications = false
+      ..batteryExempt = false;
+
+    await harness.controller.requestBackgroundPermissions();
+
+    // Two system prompts at once is one the user never sees. The notification
+    // prompt does not return until it has been answered, so the order here is
+    // the order they appear in.
+    expect(background.permissionOrder,
+        <String>['notifications', 'backgroundWork']);
+  });
+
+  test('a permission already granted is not asked for again', () async {
+    final (harness, background) = await started();
+    background
+      ..notifications = true
+      ..batteryExempt = false;
+
+    await harness.controller.requestBackgroundPermissions();
+
+    expect(background.permissionOrder, <String>['backgroundWork']);
+  });
+
+  test('a keep-alive the OS refused is asked for again, not remembered as '
+      'running', () async {
+    final (harness, background) = await started();
+    background.canStart = false;
+
+    await harness.controller.setContinuousEnabled(true);
+    await settle();
+    expect(background.running, isFalse);
+
+    // The phone changes its mind - the user granted the exemption, or the app
+    // came back on screen. The same text must be asked for again; the old
+    // code remembered the refusal as done and never retried.
+    background.canStart = true;
+    await harness.controller.appForegrounded();
+    await settle();
+
+    expect(background.running, isTrue);
+    expect(background.texts.last, 'Always listening');
+  });
+
+  test('a service killed behind the app\'s back is asked for again',
+      () async {
+    final (harness, background) = await started();
+    await harness.controller.setContinuousEnabled(true);
+    await settle();
+    expect(background.running, isTrue);
+    final asks = background.texts.length;
+
+    // A vendor task killer took it. Android says so on the channel.
+    background.running = false;
+    background.reportStopped();
+    await harness.controller.appForegrounded();
+    await settle();
+
+    expect(background.texts.length, greaterThan(asks));
+    expect(background.running, isTrue);
+  });
+
   test('the note being written is marked, and cannot be deleted', () async {
     final (harness, _) = await started();
     await harness.controller.setContinuousEnabled(true);

@@ -179,6 +179,42 @@ void main() {
     await stopListening(tester, harness);
   });
 
+  testWidgets('the Keep listening sheet asks for what THIS phone needs',
+      (tester) async {
+    final android = AlwaysListeningCard.permissionReason(
+        ios: false, autostart: false);
+    final xiaomi = AlwaysListeningCard.permissionReason(
+        ios: false, autostart: true);
+    final ios = AlwaysListeningCard.permissionReason(
+        ios: true, autostart: false);
+
+    // Android: the foreground service needs a notification and the battery
+    // exemption, and neither is named in jargon.
+    expect(android, contains('notifications'));
+    expect(android, contains('background'));
+    expect(android, isNot(contains('Background App Refresh')));
+    expect(android, isNot(contains('Autostart')));
+
+    // Xiaomi gets the extra line, and only Xiaomi.
+    expect(xiaomi, startsWith(android));
+    expect(xiaomi, contains('Autostart'));
+
+    // iPhone: a different pair of things, for different reasons - and it does
+    // not promise Android's "keeps transcribing" behaviour.
+    expect(ios, contains('notifications'));
+    expect(ios, contains('Background App Refresh'));
+    expect(ios, contains('charger'));
+    expect(ios, isNot(contains('Autostart')));
+  });
+
+  testWidgets('the iPhone line no longer promises transcripts only on open',
+      (tester) async {
+    // The app now asks iOS for a processing window, so "when you open the
+    // app" is no longer the whole truth - and the line must not say it is.
+    expect(AlwaysListeningCard.iosNote, contains('keep saving'));
+    expect(AlwaysListeningCard.iosNote, contains('charger'));
+  });
+
   testWidgets('the dot colours are the theme\'s status colours', (tester) async {
     expect(AlwaysListeningCard.toneColor(HomeStatusTone.good), AppColors.connected);
     expect(AlwaysListeningCard.toneColor(HomeStatusTone.warning), AppColors.warning);

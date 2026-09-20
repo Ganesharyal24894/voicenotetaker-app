@@ -91,7 +91,8 @@ lib/
                  process_memory.dart           /proc RSS probe (Linux/Android)
                  background_mode.dart          abstract keep-alive while always
                                                listening + MethodChannel impl
-                                               (Android foreground service)
+                                               (Android foreground service;
+                                               iOS alert + BGProcessingTask)
                  email_sender.dart             abstract "send one email":
                                                THE ONLY OUTBOUND PATH
                  email_sender_mailer.dart      mailer/SMTP implementation -
@@ -445,9 +446,14 @@ signed on the phone with the owner's own free Apple ID, so no Apple Developer
 Program membership and no secret in this repo are involved anywhere.
 
 **[doc/ios-install.md](doc/ios-install.md)** is the instructions: what SideStore
-is, the 7-day expiry, the 3-app limit, and the two things the app genuinely
-cannot do on an iPhone (no background alert, and transcripts finish when the app
-is opened). The speech models download inside the app on both platforms.
+is, the 7-day expiry, the 3-app limit, and the one thing the app genuinely
+cannot do on an iPhone - survive a force quit, because iOS will not relaunch an
+app the user swiped away, whatever it was waiting for. Notes keep saving with
+the phone locked (`bluetooth-central`), the not-saving alert arrives as a local
+notification, and transcripts finish either when the app is opened or in a
+`BGProcessingTask` window while the phone is idle on the charger. See
+`doc/continuous-mode.md` ("iOS specifics") for what Apple allows, with the
+citations. The speech models download inside the app on both platforms.
 
 **Getting the notes back off the phone.** `ios/Runner/Info.plist` sets
 `UIFileSharingEnabled`, so the app's `Documents` directory - which holds

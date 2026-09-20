@@ -175,15 +175,31 @@ with no notes, silently, which is a worse surprise than this one.
 None of these are bugs, and none of them are being worked around. They are what
 iOS allows.
 
-**No alert when recording stops.** On Android, if the recorder disconnects or
-stops saving, the phone buzzes and shows a notification. On iPhone there is no
-buzz and no notification. You will see the problem on the app's own screen the
-next time you open it, and that is the only place it appears. The app does not
-run a timer pretending otherwise.
+**A notification, not a buzz, when recording stops.** On Android, if the
+recorder disconnects or stops saving, the phone buzzes and the listening
+notification says so. On iPhone you get a notification saying **Notes not
+saving** instead - an app that is not on screen cannot make an iPhone vibrate,
+there is no API for it. Allow notifications when the app asks, or you will only
+see the problem the next time you open the app.
 
-**Transcripts finish when you open the app.** Notes keep saving while the
-recorder is linked, but the transcription only runs while the app is on screen.
-Open the app for a minute and it catches up.
+**Notes keep saving with the phone locked.** The app declares the
+`bluetooth-central` background mode, so iOS wakes it for every packet the
+recorder sends, writes the note to disk, and puts it back to sleep. This works
+with the screen off and with the app swiped off the multitasking switcher's
+front page. It does **not** survive a force quit: if you swipe the app away in
+the app switcher, iOS will not relaunch it for Bluetooth, and nothing is saved
+until you open it again.
+
+**Transcripts finish when you open the app - or on the charger.** Transcription
+is minutes of CPU per note, which iOS will not give a backgrounded app for free.
+The app asks for a `BGProcessingTask` window instead: iOS runs it when the phone
+is idle and plugged in, typically overnight. So leave the phone on the charger
+and the backlog is usually done by morning; otherwise open the app for a minute
+and it catches up. Nothing is ever lost either way - the queue is still there.
+
+**Leave Background App Refresh on.** Settings → General → Background App
+Refresh. With it off, iOS refuses the processing window and transcripts wait for
+you to open the app. It is also switched off automatically by Low Power Mode.
 
 **The speech model downloads inside the app, over Wi-Fi.** Transcription runs
 entirely on the phone, so the language pack has to be on the phone. Open a note
