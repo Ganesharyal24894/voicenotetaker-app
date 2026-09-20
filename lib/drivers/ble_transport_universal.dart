@@ -14,6 +14,7 @@ import '../model/device_state.dart';
 import '../model/die_temperature.dart';
 import '../model/pairing_advert.dart';
 import '../model/pairing_outcome.dart';
+import '../model/recorder_sleep.dart';
 import '../model/stream_info.dart';
 import 'ble_pairing.dart';
 import 'ble_transport.dart';
@@ -39,8 +40,13 @@ class UniversalBleTransport implements BleTransport, BlePairing {
   /// The reason the platform gave for the last disconnect of each device, and
   /// when - lower-cased ids. `universal_ble` reports it only through its one
   /// global connection callback, not through `connectionStream`.
-  final Map<String, (String, DateTime)> _dropReasons =
-      <String, (String, DateTime)>{};
+  ///
+  /// A NULL REASON IS RECORDED TOO, and that is the whole point of the change:
+  /// iOS reports a clean `didDisconnectPeripheral` with no error at all, so
+  /// "the platform said nothing" has to be a fact this map can hold rather
+  /// than an absence indistinguishable from "nothing has dropped".
+  final Map<String, (String?, DateTime)> _dropReasons =
+      <String, (String?, DateTime)>{};
   bool _watchingDrops = false;
 
   /// Installed on first use rather than in the constructor, so building the
@@ -49,9 +55,19 @@ class UniversalBleTransport implements BleTransport, BlePairing {
     if (_watchingDrops) return;
     _watchingDrops = true;
     ub.UniversalBle.onConnectionChange = (deviceId, connected, error) {
-      if (connected || error == null) return;
+      if (connected) return;
       _dropReasons[deviceId.toLowerCase()] = (error, DateTime.now());
     };
+  }
+
+  @override
+  LinkDropReason? lastDropReason(String deviceId) {
+    final drop = _dropReasons[deviceId.toLowerCase()];
+    if (drop == null ||
+        DateTime.now().difference(drop.$2) > dropReasonWindow) {
+      return null;
+    }
+    return LinkDropReason.fromPlatform(drop.$1);
   }
 
   /// Guarded so `connect` does not rediscover services on every call.
@@ -203,6 +219,7 @@ class UniversalBleTransport implements BleTransport, BlePairing {
   Future<void> connect(
     String deviceId, {
     Duration timeout = const Duration(seconds: 30),
+    bool waitForAdvertisement = false,
   }) async {
     _watchDrops();
     _dropReasons.remove(deviceId.toLowerCase());
@@ -221,7 +238,13 @@ class UniversalBleTransport implements BleTransport, BlePairing {
         // `autoConnect`, which trades a first connection that takes seconds
         // for one that takes a scan window - and Android has the foreground
         // service, so the app's own reconnect backoff runs and is faster.
-        autoConnect: Platform.isIOS,
+        //
+        // WITH [waitForAdvertisement] IT IS ASKED FOR ON BOTH. That is the
+        // point of the flag: Android's `autoConnect` hands the waiting to the
+        // controller's own offloaded scan instead of driving the radio from
+        // here, which is what makes a recorder asleep overnight cost the
+        // phone nothing.
+        autoConnect: waitForAdvertisement || Platform.isIOS,
       );
       // Several platforms require an explicit discovery pass before any
       // read/write/subscribe on a custom service will resolve.
@@ -260,6 +283,18 @@ class UniversalBleTransport implements BleTransport, BlePairing {
         _log('connection priority request failed: $e');
       }
     } catch (e) {
+      if (waitForAdvertisement) {
+        // A standing attempt outlives its Dart timeout: the platform keeps
+        // waiting for the advertisement, and `universal_ble` documents
+        // `disconnect` as the way to call that off. Without this, re-arming
+        // would stack pending connections, and one of them could connect
+        // behind the app's back.
+        try {
+          await ub.UniversalBle.disconnect(deviceId);
+        } catch (_) {
+          // Nothing was pending, or the stack has already let go.
+        }
+      }
       throw BleTransportException('could not connect to $deviceId', e);
     }
   }

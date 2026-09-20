@@ -35,6 +35,20 @@ void main() {
     );
   });
 
+  test('a sleeping recorder is not an error: plain words, no amber', () {
+    expect(
+      resolve(ContinuousStatus.asleep, connected: false),
+      const HomeStatus(
+        'Recorder asleep — pick it up to wake it',
+        HomeStatusTone.idle,
+      ),
+    );
+  });
+
+  test('privacy mode is called privacy mode', () {
+    expect(resolve(ContinuousStatus.muted).label, 'Privacy mode on');
+  });
+
   test('always listening off: the link, or nothing', () {
     expect(resolve(ContinuousStatus.off), const HomeStatus('Connected', HomeStatusTone.good));
     expect(resolve(ContinuousStatus.off, charging: true).label, 'Charging');

@@ -72,7 +72,7 @@ void main() {
     );
     await settle();
     expect(harness.controller.continuousStatus, ContinuousStatus.muted);
-    expect(background.texts.last, 'Muted on device');
+    expect(background.texts.last, 'Privacy mode');
   });
 
   test('Record is refused while always listening', () async {

@@ -11,12 +11,12 @@ header status line and its menu open (see `settings-and-battery.md`). Home's
 header, the settings card and the not-saving alert all answer one question -
 *are my notes being saved?* - from one derivation
 (`ContinuousStatus.resolve` -> `NotesSaving.from` -> `HomeStatus.resolve`):
-*Saving notes*, *Muted on the recorder*, *Not saving — recorder disconnected*,
-*Not saving — mic off to save battery*, *Not saving — recorder needs an
-update*. The Android notification shows the `ContinuousStatus` label
-(*Always listening*, *Hearing speech*, *Muted on device*, *Mic off to save
-battery*, *Device not connected*, *Needs firmware update*) - except while the
-not-saving alert is up, below.
+*Saving notes*, *Privacy mode on*, *Recorder asleep — pick it up to wake it*,
+*Not saving — recorder disconnected*, *Not saving — mic off to save battery*,
+*Not saving — recorder needs an update*. The Android notification shows the
+`ContinuousStatus` label (*Always listening*, *Hearing speech*, *Privacy
+mode*, *Recorder asleep*, *Mic off to save battery*, *Device not connected*,
+*Needs firmware update*) - except while the not-saving alert is up, below.
 
 ## Architecture
 
@@ -43,10 +43,12 @@ model/audio_retention.dart  PURE: may this WAV be removed
 drivers/phone_power*.dart   battery/charger/saver (battery_plus) + thermal
 model/capture_flags.dart    fe08 wire format (read flags, write commands)
 model/continuous_status.dart  the one status, and its copy
-model/notes_saving.dart     PURE: saving / muted / mic off / disconnected / SD "saving on recorder"
+model/notes_saving.dart     PURE: saving / privacy mode / asleep / mic off / disconnected / SD "saving on recorder"
 model/not_saving_alert.dart PURE: when to buzz (30 s grace, 1 buzz per 10 min)
 drivers/haptics*.dart       the buzz (Android vibrator over the background channel)
-model/reconnect_backoff.dart  0, 2, 5, 15, 30, 60, 60 ... s; 20 s per attempt
+model/recorder_sleep.dart   PURE: asleep or gone? drop reason + what happened since
+model/reconnect_backoff.dart  0, 2, 5, 15, 30, 60, 60 ... s; 20 s per attempt;
+                            asleep: one standing 2 min wait, 10 s apart
 drivers/background_mode*.dart  foreground service over a MethodChannel
 android/.../ListeningService.kt, EngineHolder.kt, MainActivity.kt
 ```
@@ -98,12 +100,12 @@ being saved - not on every disconnect.
 | Rule | Value |
 |---|---|
 | Counts as "not saving" | `NotesSaving.isLosingNotes`: recorder disconnected (no storage on it), mic off to save battery (`fe08` bit 3), firmware needs an update |
-| Never alerts | always-listening off; **muted on the recorder** (the wearer's choice); an SD-card recorder away from the phone (*Saving on recorder · syncs when back*, grey) |
+| Never alerts | always-listening off; **privacy mode** (the wearer's choice); **a sleeping recorder** (its own doing - see *When the recorder sleeps*); an SD-card recorder away from the phone (*Saving on recorder · syncs when back*, grey) |
 | Grace | 30 s without a break before the alert; the clock restarts when saving resumes, not when the reason changes |
 | Alert | one 400 ms notification vibration + the listening notification becomes **"Notes not saving" / "Recorder disconnected"** (or *Mic off to save battery*, *Recorder needs an update*) |
 | Flapping | at most one not-saving buzz per 10 min; later alerts in that window update the notification silently |
 | Resume | one 60 ms buzz and the notification returns to normal - only after an alert that buzzed; after a silent one, silently |
-| Off / mute during an alert | the notification returns to normal, no buzz |
+| Off, privacy mode or a sleep during an alert | the notification returns to normal, no buzz |
 
 - `NotSavingAlertPolicy` is pure and unit tested (timers, flapping, mute, off,
   resume). The controller asks it on every change that passes through
@@ -134,6 +136,57 @@ being saved - not on every disconnect.
   Dart timers still do not run while suspended, so the alert lands at the next
   BLE wake-up rather than exactly 30 s in; the header still says *Not saving*
   when the app is opened.
+
+## When the recorder sleeps
+
+The firmware powers itself off (System OFF) when it has been still and either
+the wearer is in privacy mode or the link has been idle - see the firmware's
+own `doc/continuous-mode.md`. **That is normal, not a fault**, and the app must
+not buzz anybody at 02:00 for it. Three facts make it recognisable:
+
+1. **It lets the link go on purpose** - HCI `0x13` *Remote User Terminated
+   Connection*, not a supervision timeout.
+2. **It then stops advertising entirely**, so nothing answers a connect.
+3. **Only motion wakes it**, after which it reboots and advertises within
+   milliseconds.
+
+`model/recorder_sleep.dart` is where that is decided, purely:
+
+| What the platform said | What the app does |
+|---|---|
+| Android `"Remote User Terminated Connection"`, iOS `"…has disconnected from us."` | settles 10 s, then **asleep** - or asleep at once if an attempt finds nothing |
+| Android `"Connection Timeout"` (`0x08`), iOS `"The connection has timed out unexpectedly."` | **lost**: out of range, a flat cell, a crash. The alert still fires |
+| Nothing at all (iOS can report a clean disconnect with no error) | settles 90 s before it counts as a sleep; a failed connect does NOT shorten it, because out of range sounds the same |
+| Anything heard from it - an advertisement, a refusal, a link | **not asleep**, whatever it did a moment ago |
+
+`universal_ble` 2.3.0 carries the reason through its one global connection
+callback, so the driver records it (including "no reason", which is a fact) and
+`BleTransport.lastDropReason` hands it over as a `LinkDropReason`.
+
+**The alert.** Nothing buzzes while the recorder is asleep, and nothing buzzes
+while a clean drop is still settling - `NotSavingAlertPolicy.update(atRest:)`.
+An alert already showing when the answer turns out to be "asleep" ends
+silently.
+
+**The screen and the notification.** Home's header and the settings card read
+*Recorder asleep — pick it up to wake it*, grey rather than amber; the
+notification says *Recorder asleep*.
+
+**The reconnect.** Hunting a device in System OFF cannot succeed: it answers
+nothing until it is moved. So the backoff ladder is abandoned for **one
+standing attempt that waits for the advertisement** -
+`BleTransport.connect(waitForAdvertisement: true)`, which is Android's
+`autoConnect` (the controller's own offloaded scan) and an iOS pending
+connection that survives the app being suspended. It is armed for 2 minutes at
+a time, 10 s apart, and cancelled before being re-armed so pending connections
+cannot stack up. The cost is the point: a night of the old behaviour is ~480
+hard 20 s connect attempts driving the phone's radio for nothing, against a
+wait the platform was doing anyway - and the wearer picking the recorder up
+still gets a link in about a second, because the wait was already armed.
+
+**The 60 s `fe08` keep-alive is unchanged.** It is what holds the recorder
+awake while the app is genuinely alive; dropping it to save phone battery would
+make the recorder sleep under the app, which has to be a deliberate choice.
 
 ## Notes on disk
 

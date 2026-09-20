@@ -26,6 +26,8 @@ import 'package:voicenotetaker_app/model/die_temperature.dart';
 import 'package:voicenotetaker_app/model/not_saving_alert.dart';
 import 'package:voicenotetaker_app/model/pairing_outcome.dart';
 import 'package:voicenotetaker_app/model/phone_power.dart';
+import 'package:voicenotetaker_app/model/reconnect_backoff.dart';
+import 'package:voicenotetaker_app/model/recorder_sleep.dart';
 import 'package:voicenotetaker_app/model/stream_info.dart';
 import 'package:voicenotetaker_app/model/transcript.dart';
 import 'package:voicenotetaker_app/model/transcription.dart';
@@ -130,6 +132,7 @@ class ViewHarness {
     bool speakerModelsInstalled = true,
     BackgroundMode? backgroundMode,
     Duration continuousKeepalive = const Duration(seconds: 60),
+    Duration asleepRetryDelay = ReconnectBackoff.asleepDelay,
     PhonePower? phonePower,
     bool backgroundTranscription = false,
     Duration powerRecheckInterval = const Duration(seconds: 60),
@@ -173,6 +176,20 @@ class ViewHarness {
     });
     when(() => transport.stopScan()).thenAnswer((_) async {});
     when(() => transport.connect(any())).thenAnswer((_) async {});
+    // A STANDING "wait for it to advertise" attempt, which the controller only
+    // arms at a recorder it believes asleep.
+    when(
+      () => transport.connect(
+        any(),
+        timeout: any(named: 'timeout'),
+        waitForAdvertisement: any(named: 'waitForAdvertisement'),
+      ),
+    ).thenAnswer((_) async {});
+    // WHY THE LAST LINK ENDED. The default is the ordinary bad news - the
+    // recorder faded out of range - so a test that means "it went to sleep"
+    // has to say so, by setting [dropReason]. See `RecorderSleepWatch`.
+    when(() => transport.lastDropReason(any()))
+        .thenAnswer((_) => dropReason);
     // An OPEN link stream, so a test can drop the link the way the radio does
     // - see [dropLink]. Nothing arrives unless a test sends it.
     when(() => transport.connectionState(any())).thenAnswer((_) => link.stream);
@@ -238,6 +255,7 @@ class ViewHarness {
       recordingsDirectory: recordingsDirectory,
       backgroundMode: backgroundMode,
       continuousKeepalive: continuousKeepalive,
+      asleepRetryDelay: asleepRetryDelay,
       phonePower: phonePower,
       backgroundTranscription: backgroundTranscription,
       powerRecheckInterval: powerRecheckInterval,
@@ -330,6 +348,11 @@ class ViewHarness {
   }
 
   final MockBleTransport transport;
+
+  /// What the platform says about the next link that drops. Tests about the
+  /// recorder going to sleep set [LinkDropReason.remoteTerminated].
+  LinkDropReason dropReason = LinkDropReason.supervisionTimeout;
+
   final MockPlatformSettings settings = MockPlatformSettings();
   final MemoryFileStore fileStore = MemoryFileStore();
 

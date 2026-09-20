@@ -6,6 +6,7 @@ import '../model/battery_status.dart';
 import '../model/capture_flags.dart';
 import '../model/device_state.dart';
 import '../model/die_temperature.dart';
+import '../model/recorder_sleep.dart';
 import '../model/stream_info.dart';
 
 /// Everything the app needs from a Bluetooth Low Energy stack, expressed
@@ -55,7 +56,27 @@ abstract class BleTransport {
   /// payload, which cannot carry a 166-byte ADPCM frame at all.
   int? get negotiatedMtu;
 
-  Future<void> connect(String deviceId, {Duration timeout});
+  /// [waitForAdvertisement] arms a STANDING attempt instead of a hard one:
+  /// the platform waits for the peripheral to advertise and connects then
+  /// (Android `autoConnect`, an iOS pending connection that survives
+  /// suspension). It costs next to no radio time, which is what makes it the
+  /// right thing to point at a recorder believed asleep - see
+  /// [ReconnectBackoff.asleepAttemptTimeout]. It still gives up at [timeout].
+  Future<void> connect(
+    String deviceId, {
+    Duration timeout,
+    bool waitForAdvertisement,
+  });
+
+  /// Why the last link to [deviceId] ended, as the platform reported it, or
+  /// null when nothing recent explains it.
+  ///
+  /// This is how "the recorder went to sleep" (`0x13`, and then silence) is
+  /// told apart from "the recorder is gone" (`0x08`). The platforms word it
+  /// differently and iOS may say nothing at all;
+  /// [LinkDropReason.fromPlatform] is where that is sorted out, and
+  /// [RecorderSleepWatch] is what decides what it means.
+  LinkDropReason? lastDropReason(String deviceId);
 
   Future<void> disconnect(String deviceId);
 

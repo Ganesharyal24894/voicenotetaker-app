@@ -6,16 +6,18 @@
 /// THE RULES
 ///
 ///   * Only while notes are being LOST ([NotesSaving.isLosingNotes]) - not
-///     when always-listening is off, not when the wearer muted the recorder
-///     (their choice), and not when an SD-card recorder is keeping the audio.
+///     when always-listening is off, not when the wearer is in privacy mode
+///     (their choice), not when the recorder has gone to sleep (its own
+///     doing, and motion wakes it), and not when an SD-card recorder is
+///     keeping the audio.
 ///   * Only after [grace] of it without a break: a link that drops and comes
 ///     straight back is not news.
 ///   * At most one not-saving buzz per [buzzInterval]. A flapping link still
 ///     updates the notification, silently.
 ///   * When saving resumes after an alert that buzzed: one short buzz. After a
 ///     silent alert, silently.
-///   * The wearer turning always-listening off or muting ends an alert
-///     silently.
+///   * The wearer turning always-listening off or on privacy mode ends an
+///     alert silently, and so does a drop that turns out to be a sleep.
 library;
 
 import 'notes_saving.dart';
@@ -36,7 +38,8 @@ enum NotSavingAction {
   resumed,
 
   /// The alert is over without a buzz: resumed after a silent alert, or the
-  /// wearer turned listening off or muted.
+  /// wearer turned listening off or on privacy mode, or the recorder turned
+  /// out to be asleep.
   cleared,
 }
 
@@ -61,8 +64,15 @@ class NotSavingAlertPolicy {
   bool get alerting => _alerting;
 
   /// Takes the saving [state] at [now] and says what to do.
-  NotSavingAction update(NotesSaving state, DateTime now) {
-    if (state.isLosingNotes) {
+  ///
+  /// [atRest] is the recorder believed to be asleep, or a clean drop still
+  /// being decided - see `RecorderSleepWatch`. NOTHING BUZZES THEN: the
+  /// recorder let the link go on purpose, motion wakes it, and a wearer buzzed
+  /// at 02:00 about a device doing exactly what it was asked to do turns the
+  /// feature off. A drop that is a real fault - a supervision timeout, a flat
+  /// cell, a recorder that will not let us in - never sets this.
+  NotSavingAction update(NotesSaving state, DateTime now, {bool atRest = false}) {
+    if (state.isLosingNotes && !atRest) {
       final since = _losingSince ??= now;
       if (_alerting || now.difference(since) < grace) {
         return NotSavingAction.none;

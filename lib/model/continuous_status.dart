@@ -25,14 +25,19 @@ enum ContinuousStatus {
   /// works; always-listening cannot.
   needsFirmwareUpdate('Needs firmware update'),
 
+  /// On, no link, and the recorder let the link go and stopped advertising:
+  /// it is asleep until somebody picks it up. Not a fault - see
+  /// [RecorderSleepWatch].
+  asleep('Recorder asleep'),
+
   /// On, connected, and the device is waiting for speech.
   listening('Always listening'),
 
   /// The speech gate is open: a note is being written now.
   hearingSpeech('Hearing speech'),
 
-  /// The wearer muted the device with a double tap.
-  muted('Muted on device'),
+  /// The wearer put the recorder in privacy mode with a double tap.
+  muted('Privacy mode'),
 
   /// Connected, but the recorder stopped its microphone to save battery
   /// (`fe08` bit 3): nothing has been receiving its audio for 2 minutes.
@@ -48,6 +53,9 @@ enum ContinuousStatus {
   /// [refused] is [pairedToAnother] or [oldPairing] when the last automatic
   /// attempt ended in that pairing problem; it only shows while unconnected.
   ///
+  /// [asleep] is the recorder believed to be in System OFF: it outranks a
+  /// pairing refusal, which describes a recorder that answered.
+  ///
   /// [captureSupported] is null while it has not been checked yet - a link
   /// that is still coming up - which reads as "listening" rather than as a
   /// firmware problem nobody has found. [flags] is null until the device has
@@ -58,9 +66,13 @@ enum ContinuousStatus {
     required bool? captureSupported,
     required CaptureFlags? flags,
     ContinuousStatus? refused,
+    bool asleep = false,
   }) {
     if (!enabled) return ContinuousStatus.off;
-    if (!connected) return refused ?? ContinuousStatus.notConnected;
+    if (!connected) {
+      if (asleep) return ContinuousStatus.asleep;
+      return refused ?? ContinuousStatus.notConnected;
+    }
     if (captureSupported == false) return ContinuousStatus.needsFirmwareUpdate;
     // Muted outranks speech: a muted device cannot be hearing anything the
     // app will keep, whatever the gate bit says.

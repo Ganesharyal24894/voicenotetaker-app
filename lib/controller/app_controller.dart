@@ -33,6 +33,7 @@ import '../model/notes_saving.dart';
 import '../model/pairing_outcome.dart';
 import '../model/device_profile.dart';
 import '../model/recorder_pairing.dart';
+import '../model/recorder_sleep.dart';
 import '../model/phone_power.dart';
 import '../model/recording_info.dart';
 import '../model/reconnect_backoff.dart';
@@ -140,6 +141,7 @@ class AppController extends ChangeNotifier {
     DateTime Function()? clock,
     String? settingsDirectory,
     this._continuousKeepalive = ContinuousSession.defaultKeepaliveInterval,
+    this._asleepRetryDelay = ReconnectBackoff.asleepDelay,
     AudioCodec preferredCodec = AudioCodec.imaAdpcm,
     // The public parameter name `preferredCodec:` is part of the existing API,
     // while the field behind it is private because it is now reached through a
@@ -1783,7 +1785,11 @@ class AppController extends ChangeNotifier {
 
   /// [automatic] is always-listening reaching for the remembered device: a
   /// failure then is not an error screen, only the next attempt scheduled.
-  Future<void> _connect(DiscoveredDevice device, {bool automatic = false}) async {
+  Future<void> _connect(
+    DiscoveredDevice device, {
+    bool automatic = false,
+    bool waitForAdvertisement = false,
+  }) async {
     if (!automatic) await stopScan();
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
@@ -1797,7 +1803,16 @@ class AppController extends ChangeNotifier {
     _setPhase(AppPhase.connecting);
     final attempt = await _pairingService?.begin(device);
     try {
-      if (automatic) {
+      if (automatic && waitForAdvertisement) {
+        // The recorder is believed asleep: arm a standing wait rather than
+        // driving the radio at something that cannot answer. See
+        // [ReconnectBackoff.asleepAttemptTimeout].
+        await _transport.connect(
+          device.id,
+          timeout: ReconnectBackoff.asleepAttemptTimeout,
+          waitForAdvertisement: true,
+        );
+      } else if (automatic) {
         await _transport.connect(
           device.id,
           timeout: ReconnectBackoff.attemptTimeout,
@@ -1820,6 +1835,20 @@ class AppController extends ChangeNotifier {
       // there at all.
       _linkOutcome = LinkOutcome.connectFailed;
       _fail(e.message);
+      return;
+    }
+    // A STANDING attempt stays armed for minutes, and the wearer may turn
+    // always-listening off while it waits. A link that arrives after that is
+    // nobody's: let it go rather than quietly holding the recorder open - and
+    // holding it open is also what would keep the recorder from sleeping
+    // again.
+    if (waitForAdvertisement && !_continuous.enabled) {
+      try {
+        await _transport.disconnect(device.id);
+      } on BleTransportException {
+        // Already gone; there is nothing to release.
+      }
+      _setPhase(AppPhase.idle);
       return;
     }
     if (attempt != null) {
@@ -1861,6 +1890,8 @@ class AppController extends ChangeNotifier {
     });
     _setPhase(AppPhase.connected);
     _reconnectAttempt = 0;
+    // Whatever the app believed about a sleep, the recorder is plainly awake.
+    _sleepWatch.linked(_now());
     final ownerId = attempt?.ownerId;
     await _rememberDevice(
       ownerId == null
@@ -2414,6 +2445,20 @@ class AppController extends ChangeNotifier {
   Future<void> _releaseLink(_LinkEnding ending) async {
     final device = _connectedDevice;
     if (device == null) return;
+    // WHY THE LINK ENDED, FIRST, BEFORE THE TEARDOWN SPENDS ANY TIME. A
+    // recorder that let go itself with `0x13` and then stopped advertising has
+    // gone to sleep, which is not a fault and must not buzz the wearer at
+    // 02:00; a supervision timeout is a real drop and still does. The
+    // platform's own record of the reason is short-lived, and only an
+    // unsolicited drop can be a sleep at all - see [RecorderSleepWatch].
+    if (ending == _LinkEnding.peripheralGone) {
+      _sleepWatch.dropped(
+        reason: _transport.lastDropReason(device.id) ?? LinkDropReason.unknown,
+        now: _now(),
+      );
+    } else {
+      _sleepWatch.reset();
+    }
     // The open note is closed and kept, whatever ended the link. The device is
     // only told to stop gating when it can still hear us.
     await _stopContinuousSession(linkUp: ending == _LinkEnding.userAsked);
@@ -2488,6 +2533,7 @@ class AppController extends ChangeNotifier {
             : LinkOutcome.none;
     _setPhase(AppPhase.idle);
     if (ending != _LinkEnding.userAsked) _scheduleReconnect();
+    _watchForSleep();
     _syncBackground();
   }
 
@@ -2613,10 +2659,39 @@ class AppController extends ChangeNotifier {
       _refusal = outcome.needsCharger
           ? ContinuousStatus.pairedToAnother
           : ContinuousStatus.oldPairing;
+      // A recorder that refuses this phone is awake and advertising: it is
+      // not asleep, whatever the last disconnect looked like.
+      _sleepWatch.heard(_now());
       _syncBackground();
+    } else {
+      // Nothing answered. On a link that ended cleanly that is the other half
+      // of "asleep": a recorder that had merely rebooted would be advertising
+      // by now and this attempt would have found it.
+      _sleepWatch.foundNothing(_now());
     }
     _setPhase(AppPhase.idle);
+    _watchForSleep();
     _scheduleReconnect();
+    _syncBackground();
+  }
+
+  /// Keeps the header and the notification honest while a clean drop is still
+  /// settling: when the quiet window runs out the answer becomes "asleep" with
+  /// nothing else having happened, so something has to ask again.
+  ///
+  /// NOTHING RUNS UNLESS A DECISION IS PENDING - one timer, and only while
+  /// [RecorderSleepWatch] says a check is due.
+  void _watchForSleep() {
+    _sleepTimer?.cancel();
+    _sleepTimer = null;
+    final next = _sleepWatch.nextCheck();
+    if (next == null) return;
+    final wait = next.difference(_now());
+    _sleepTimer = Timer(wait.isNegative ? Duration.zero : wait, () {
+      _sleepTimer = null;
+      _syncBackground();
+      notifyListeners();
+    });
   }
 
   /// "I've done that": scans for a recorder with its pairing window open and
@@ -2681,6 +2756,18 @@ class AppController extends ChangeNotifier {
   Timer? _reconnectTimer;
   int _reconnectAttempt = 0;
 
+  /// The gap between standing "wait for it to advertise" attempts at a
+  /// sleeping recorder. Injected so tests do not have to wait it out.
+  final Duration _asleepRetryDelay;
+
+  /// Asleep or gone? The one place that decides - see [RecorderSleepWatch].
+  final RecorderSleepWatch _sleepWatch = RecorderSleepWatch();
+
+  /// Fires when a settling drop has been quiet long enough to count as sleep,
+  /// so the header and the notification change without waiting for the next
+  /// thing to happen on the link.
+  Timer? _sleepTimer;
+
   Duration? _scheduledReconnectDelay;
 
   /// The wait before the reconnect attempt most recently scheduled.
@@ -2708,7 +2795,13 @@ class AppController extends ChangeNotifier {
         captureSupported: _captureSupported,
         flags: _session?.flags,
         refused: _refusal,
+        asleep: recorderAsleep,
       );
+
+  /// Whether the recorder is believed to be asleep - it let the link go and
+  /// has not been heard from since. See [RecorderSleepWatch].
+  bool get recorderAsleep =>
+      _sleepWatch.update(_now()) == RecorderPresence.asleep;
 
   /// Where this recorder can keep audio by itself. Every recorder today has
   /// no storage; an SD-card one would answer [RecorderStorage.card], and a lost
@@ -2754,6 +2847,9 @@ class AppController extends ChangeNotifier {
       _reconnectTimer?.cancel();
       _reconnectTimer = null;
       _reconnectAttempt = 0;
+      _sleepTimer?.cancel();
+      _sleepTimer = null;
+      _sleepWatch.reset();
       await _stopContinuousSession(linkUp: _connectedDevice != null);
     }
     _syncBackground();
@@ -2853,10 +2949,13 @@ class AppController extends ChangeNotifier {
         _availability != BleAvailability.poweredOn) {
       return;
     }
-    final delay = ReconnectBackoff.delayFor(
-      _reconnectAttempt++,
-      refusals: _pairingRefusals,
-    );
+    final asleep = recorderAsleep;
+    final delay = asleep
+        ? _asleepRetryDelay
+        : ReconnectBackoff.delayFor(
+            _reconnectAttempt++,
+            refusals: _pairingRefusals,
+          );
     _scheduledReconnectDelay = delay;
     _reconnectTimer = Timer(delay, () {
       _reconnectTimer = null;
@@ -2887,6 +2986,7 @@ class AppController extends ChangeNotifier {
     await _connect(
       DiscoveredDevice(id: target, name: _continuous.deviceName),
       automatic: true,
+      waitForAdvertisement: recorderAsleep,
     );
   }
 
@@ -3026,7 +3126,8 @@ class AppController extends ChangeNotifier {
   // While always-listening is on and notes have not been saved for 30 s, the
   // phone buzzes once and the listening notification says "Notes not saving".
   // When saving resumes, one short buzz and the notification goes back. The
-  // rules - grace, one buzz per 10 min, never for mute or off - are
+  // rules - grace, one buzz per 10 min, never for privacy mode, a sleeping
+  // recorder or off - are
   // [NotSavingAlertPolicy]'s. This only runs the one timer and the drivers.
   //
   // NOTHING RUNS UNLESS REQUIRED: the timer exists only while notes are being
@@ -3054,7 +3155,11 @@ class AppController extends ChangeNotifier {
     // Nobody to tell: a build without a notification or a vibrator.
     if (_background == null && _haptics == null) return;
     final now = _now();
-    switch (_savingAlert.update(notesSaving, now)) {
+    // A recorder that let the link go itself is not a failure to report - and
+    // while a clean drop is still being decided, neither is that. See
+    // [RecorderSleepWatch].
+    final atRest = _sleepWatch.update(now).isRestful;
+    switch (_savingAlert.update(notesSaving, now, atRest: atRest)) {
       case NotSavingAction.alert:
         unawaited(_haptics?.buzz(BuzzPattern.notSaving));
       case NotSavingAction.resumed:
@@ -3530,6 +3635,8 @@ class AppController extends ChangeNotifier {
     _savingTimer = null;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _sleepTimer?.cancel();
+    _sleepTimer = null;
     await _stopContinuousSession(linkUp: false);
     _stopPowerRecheck();
     _stopWaitingForPower();

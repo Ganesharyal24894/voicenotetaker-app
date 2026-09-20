@@ -122,7 +122,7 @@ void main() {
       const CaptureFlags(muted: true, speechOpen: false, gateEnabled: true),
     );
     await flush(tester);
-    expect(find.text('Muted on the recorder'), findsOneWidget);
+    expect(find.text('Privacy mode on'), findsOneWidget);
 
     harness.capture.add(
       const CaptureFlags(muted: false, speechOpen: true, gateEnabled: true),

@@ -25,8 +25,13 @@ enum NotesSaving {
   /// never an alarm.
   savingOnRecorder,
 
-  /// The wearer muted the recorder. Their choice: shown, never alarmed.
+  /// The wearer put the recorder in privacy mode. Their choice: shown, never
+  /// alarmed.
   muted,
+
+  /// The recorder went to sleep: it let the link go and stopped advertising,
+  /// and motion wakes it. Normal, never an alarm - see [RecorderSleepWatch].
+  asleep,
 
   /// Connected, but the recorder turned its mic off to save battery.
   micOff,
@@ -65,6 +70,7 @@ enum NotesSaving {
         ContinuousStatus.hearingSpeech =>
           NotesSaving.saving,
         ContinuousStatus.muted => NotesSaving.muted,
+        ContinuousStatus.asleep => NotesSaving.asleep,
         ContinuousStatus.micOff => NotesSaving.micOff,
         ContinuousStatus.needsFirmwareUpdate => NotesSaving.needsUpdate,
         ContinuousStatus.pairedToAnother => NotesSaving.pairedToAnother,

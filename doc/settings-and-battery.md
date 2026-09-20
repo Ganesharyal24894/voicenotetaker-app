@@ -24,8 +24,9 @@ Reached from Home's status line **and** the header ⋮, in release builds on
 both platforms. Back returns to Home.
 
 - **Listening** - *Always listening* switch, with the same status line as the
-  header (*Saving notes*, *Not saving — …*, *Muted on the recorder*). Turning
-  it on uses the existing permission explanation. Under it, only while
+  header (*Saving notes*, *Not saving — …*, *Privacy mode on*, *Recorder
+  asleep — pick it up to wake it*). Turning it on uses the existing permission
+  explanation. Under it, only while
   always-listening is off: **Disconnect** (connected) or **Connect a
   recorder** (not connected; leaves Settings and opens pairing over Home). These
   came from the interim recorder sheet, which is gone.

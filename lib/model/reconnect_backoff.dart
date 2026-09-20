@@ -28,13 +28,22 @@ abstract final class ReconnectBackoff {
 
   /// The wait before attempt number [attempt], counting from zero.
   ///
+  /// [asleep] is the recorder believed to be in System OFF: there is nothing
+  /// to hunt for, so the ladder is abandoned for one standing, mostly passive
+  /// wait - see [asleepDelay] and [asleepAttemptTimeout].
+  ///
   /// [refusals] is how many attempts in a row ended in a PAIRING problem - the
   /// recorder paired to another phone, or a key it no longer has. Retrying
   /// those every minute cannot succeed until someone acts on the recorder or
   /// in the phone's settings, so from [refusalsBeforeLongWait] on the wait is
   /// [refusedDelay]. One refusal is not enough: a first "refused" can be a
   /// window closing or a bond settling.
-  static Duration delayFor(int attempt, {int refusals = 0}) {
+  static Duration delayFor(
+    int attempt, {
+    int refusals = 0,
+    bool asleep = false,
+  }) {
+    if (asleep) return asleepDelay;
     if (refusals >= refusalsBeforeLongWait) return refusedDelay;
     if (attempt < 0) return schedule.first;
     if (attempt >= schedule.length) return schedule.last;
@@ -46,4 +55,33 @@ abstract final class ReconnectBackoff {
 
   /// The wait once the recorder keeps refusing this phone.
   static const Duration refusedDelay = Duration(minutes: 10);
+
+  /// WHILE THE RECORDER IS ASLEEP THE APP STOPS HUNTING AND STARTS WAITING.
+  ///
+  /// A sleeping recorder is in System OFF: it answers nothing, and only motion
+  /// wakes it - after which it reboots and advertises again within
+  /// milliseconds. So an attempt every minute can only fail, and a whole night
+  /// of them is 480 attempts x 20 s of the phone's radio driven hard, for
+  /// nothing. That is the phone's battery, and a user whose phone is flat by
+  /// morning turns the feature off.
+  ///
+  /// INSTEAD: ONE STANDING ATTEMPT THAT WAITS FOR THE ADVERTISEMENT. Both
+  /// platforms have a primitive for exactly this, and neither costs a duty
+  /// cycle worth measuring - the controller, not the app, does the waiting:
+  ///
+  ///   * Android `autoConnect = true` hands the wait to the Bluetooth
+  ///     controller's own filtered background scan, which is offloaded and
+  ///     which the platform runs whether this app asks or not.
+  ///   * iOS keeps a pending connection that survives the app being
+  ///     suspended, and resolves the moment the peripheral advertises.
+  ///
+  /// The cost is then one connect call per [asleepAttemptTimeout] instead of
+  /// hundreds of hard radio attempts, and the wearer picking the recorder up
+  /// still gets a link in about a second, because the wait was already armed.
+  static const Duration asleepDelay = Duration(seconds: 10);
+
+  /// How long one standing "wait for it to advertise" attempt is left armed
+  /// before it is cancelled and re-armed. Bounded rather than endless so a
+  /// pending connect the platform quietly dropped cannot strand the app.
+  static const Duration asleepAttemptTimeout = Duration(minutes: 2);
 }

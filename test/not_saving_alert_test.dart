@@ -17,6 +17,17 @@ void main() {
       expect(NotesSaving.from(ContinuousStatus.micOff), NotesSaving.micOff);
       expect(NotesSaving.from(ContinuousStatus.needsFirmwareUpdate), NotesSaving.needsUpdate);
       expect(NotesSaving.from(ContinuousStatus.notConnected), NotesSaving.disconnected);
+      expect(NotesSaving.from(ContinuousStatus.asleep), NotesSaving.asleep);
+    });
+
+    test('a sleeping recorder is neither saving nor losing', () {
+      expect(NotesSaving.asleep.isSaving, isFalse);
+      expect(NotesSaving.asleep.isLosingNotes, isFalse);
+      expect(
+        NotesSaving.from(ContinuousStatus.asleep, storage: RecorderStorage.card),
+        NotesSaving.asleep,
+        reason: 'a recorder in System OFF is not recording to its card either',
+      );
     });
 
     test('an SD-card recorder away from the phone is still saving', () {
@@ -39,6 +50,7 @@ void main() {
           NotesSaving.pairedToAnother,
           NotesSaving.oldPairing,
         },
+        reason: 'privacy mode, off, asleep and an SD recorder are not losses',
       );
     });
   });
@@ -109,6 +121,52 @@ void main() {
       policy.update(NotesSaving.needsUpdate, at(3600));
       policy.update(NotesSaving.needsUpdate, at(3630));
       expect(policy.update(NotesSaving.off, at(3631)), NotSavingAction.cleared);
+    });
+
+    test('asleep is the recorder\'s own doing: never an alert', () {
+      final policy = NotSavingAlertPolicy();
+      expect(policy.update(NotesSaving.asleep, at(0)), NotSavingAction.none);
+      expect(policy.update(NotesSaving.asleep, at(3600)), NotSavingAction.none);
+      expect(policy.nextCheck(), isNull, reason: 'no timer runs all night');
+    });
+
+    test('a clean drop still being decided holds the alert back', () {
+      final policy = NotSavingAlertPolicy();
+      // Still "disconnected" on screen, but the recorder let go cleanly and
+      // the app has not decided whether that was a sleep.
+      expect(
+        policy.update(NotesSaving.disconnected, at(0), atRest: true),
+        NotSavingAction.none,
+      );
+      expect(
+        policy.update(NotesSaving.disconnected, at(600), atRest: true),
+        NotSavingAction.none,
+      );
+      expect(policy.alerting, isFalse);
+
+      // Decided the other way: a real drop, and the grace starts from there.
+      expect(
+        policy.update(NotesSaving.disconnected, at(601)),
+        NotSavingAction.none,
+      );
+      expect(
+        policy.update(NotesSaving.disconnected, at(631)),
+        NotSavingAction.alert,
+      );
+    });
+
+    test('a drop that turns out to be a sleep ends the alert silently', () {
+      final policy = NotSavingAlertPolicy();
+      policy.update(NotesSaving.disconnected, at(0));
+      expect(
+        policy.update(NotesSaving.disconnected, at(30)),
+        NotSavingAction.alert,
+      );
+      expect(
+        policy.update(NotesSaving.disconnected, at(40), atRest: true),
+        NotSavingAction.cleared,
+      );
+      expect(policy.alerting, isFalse);
     });
 
     test('an SD recorder away from the phone never alerts', () {
