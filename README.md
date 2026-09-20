@@ -22,7 +22,7 @@ Fixed peripheral; the app adapts to it, never the other way around.
 | `fe01` | NOTIFY — audio frames |
 | `fe02` | READ — stream info |
 | `fe03` | WRITE — 1 byte codec select |
-| `fe08` | READ/NOTIFY/WRITE — capture state: mute, speech gate (always listening; see `doc/continuous-mode.md`) |
+| `fe08` | READ/NOTIFY/WRITE — capture state: privacy mode (bit 0, named "muted" on the wire), speech gate (always listening; see `doc/continuous-mode.md`) |
 
 **Pairing.** Recorder firmware that pairs to one phone requires an encrypted
 link for every characteristic and advertises its status in the scan response

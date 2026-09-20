@@ -6,10 +6,11 @@ import 'package:voicenotetaker_app/model/reconnect_backoff.dart';
 /// The one status Home and the notification share, and the reconnect waits.
 void main() {
   const quiet =
-      CaptureFlags(muted: false, speechOpen: false, gateEnabled: true);
+      CaptureFlags(privacyMode: false, speechOpen: false, gateEnabled: true);
   const speaking =
-      CaptureFlags(muted: false, speechOpen: true, gateEnabled: true);
-  const muted = CaptureFlags(muted: true, speechOpen: true, gateEnabled: true);
+      CaptureFlags(privacyMode: false, speechOpen: true, gateEnabled: true);
+  const privacyMode =
+      CaptureFlags(privacyMode: true, speechOpen: true, gateEnabled: true);
 
   ContinuousStatus resolve({
     bool enabled = true,
@@ -27,7 +28,7 @@ void main() {
   group('ContinuousStatus.resolve', () {
     test('off wins over everything', () {
       expect(resolve(enabled: false, connected: false), ContinuousStatus.off);
-      expect(resolve(enabled: false, flags: muted), ContinuousStatus.off);
+      expect(resolve(enabled: false, flags: privacyMode), ContinuousStatus.off);
     });
 
     test('no link is "not connected", whatever was last reported', () {
@@ -43,13 +44,16 @@ void main() {
       expect(resolve(supported: null, flags: null), ContinuousStatus.listening);
     });
 
-    test('muted outranks hearing speech', () {
-      expect(resolve(flags: muted), ContinuousStatus.muted);
+    test('privacy mode outranks hearing speech', () {
+      expect(resolve(flags: privacyMode), ContinuousStatus.privacyMode);
     });
 
-    test('the mic off to save battery is its own state; mute outranks it', () {
+    // Two different things: the mic off to save battery is the device's own
+    // power saving; privacy mode is what the wearer asked for.
+    test('the mic off to save battery is its own state; privacy mode outranks '
+        'it', () {
       const micOff = CaptureFlags(
-        muted: false,
+        privacyMode: false,
         speechOpen: false,
         gateEnabled: true,
         micOff: true,
@@ -58,13 +62,13 @@ void main() {
       expect(
         resolve(
           flags: const CaptureFlags(
-            muted: true,
+            privacyMode: true,
             speechOpen: false,
             gateEnabled: true,
             micOff: true,
           ),
         ),
-        ContinuousStatus.muted,
+        ContinuousStatus.privacyMode,
       );
       expect(resolve(enabled: false, flags: micOff), ContinuousStatus.off);
     });
@@ -80,7 +84,7 @@ void main() {
       expect(
         resolve(
           flags: const CaptureFlags(
-            muted: false,
+            privacyMode: false,
             speechOpen: true,
             gateEnabled: false,
           ),
@@ -133,7 +137,7 @@ void main() {
 
   test('the copy is short and plain', () {
     expect(ContinuousStatus.listening.label, 'Always listening');
-    expect(ContinuousStatus.muted.label, 'Privacy mode');
+    expect(ContinuousStatus.privacyMode.label, 'Privacy mode');
     expect(ContinuousStatus.hearingSpeech.label, 'Hearing speech');
     expect(ContinuousStatus.notConnected.label, 'Device not connected');
     expect(ContinuousStatus.needsFirmwareUpdate.label, 'Needs firmware update');

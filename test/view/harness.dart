@@ -386,7 +386,7 @@ class ViewHarness {
 
   /// What a `fe08` read answers.
   CaptureFlags captureFlags = const CaptureFlags(
-    muted: false,
+    privacyMode: false,
     speechOpen: false,
     gateEnabled: true,
   );

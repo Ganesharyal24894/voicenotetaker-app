@@ -119,20 +119,20 @@ void main() {
 
     await openSheet(tester);
     harness.capture.add(
-      const CaptureFlags(muted: true, speechOpen: false, gateEnabled: true),
+      const CaptureFlags(privacyMode: true, speechOpen: false, gateEnabled: true),
     );
     await flush(tester);
     expect(find.text('Privacy mode on'), findsOneWidget);
 
     harness.capture.add(
-      const CaptureFlags(muted: false, speechOpen: true, gateEnabled: true),
+      const CaptureFlags(privacyMode: false, speechOpen: true, gateEnabled: true),
     );
     await flush(tester);
     expect(find.text('Saving notes'), findsOneWidget);
 
     harness.capture.add(
       const CaptureFlags(
-        muted: false,
+        privacyMode: false,
         speechOpen: false,
         gateEnabled: true,
         micOff: true,

@@ -23,7 +23,7 @@ AI** builds a prompt the user pastes into ChatGPT, Claude or Gemini, and
 Device name; the status line (`HomeStatus.resolve`): *Saving notes* (green,
 breathing) while always-listening works, amber *Not saving — recorder
 disconnected* / *Not saving — mic off to save battery* / *Not saving —
-recorder needs an update* / *Muted on the recorder*, otherwise *Connected* /
+recorder needs an update* / *Privacy mode on*, otherwise *Connected* /
 *Charging* / *Not connected*. Tapping it opens **Recorder settings** (see
 `settings-and-battery.md`), which replaced the interim recorder sheet. Then
 battery bars (no percentage, as before), the mic (manual recording; explains

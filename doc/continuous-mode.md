@@ -62,24 +62,32 @@ service, and the app behaves as it did before the mode existed.
 
 | Direction | Value |
 |---|---|
-| READ / NOTIFY, 1 byte | bit0 muted, bit1 audio flowing, bit2 speech gate enabled, bit3 mic off for power (no `fe01` subscriber for 2 min on a recorder without storage; clears on subscribe); bits 4-7 reserved (a value with one set is refused, as for `fe04`/`fe05`) |
-| WRITE, 1 byte | `0` gate disabled (stream everything), `1` speech only, `2` mute, `3` unmute. `4..255` -> ATT `0x13`, wrong length -> `0x0D` |
+| READ / NOTIFY, 1 byte | bit0 privacy mode (`muted` on the wire), bit1 audio flowing, bit2 speech gate enabled, bit3 mic off for power (no `fe01` subscriber for 2 min on a recorder without storage; clears on subscribe); bits 4-7 reserved (a value with one set is refused, as for `fe04`/`fe05`) |
+| WRITE, 1 byte | `0` gate disabled (stream everything), `1` speech only, `2` privacy mode on (`CAPTURE_CMD_MUTE`), `3` privacy mode off (`CAPTURE_CMD_UNMUTE`). `4..255` -> ATT `0x13`, wrong length -> `0x0D` |
 
 As implemented by the firmware, and relied on here:
 
-- **bit1 is "audio flowing"**: `fe01` subscribed AND not muted AND (gate
-  disabled OR gate open). With the gate disabled it is set whenever `fe01` is
+- **The wire keeps the old name.** Bit 0 and the write values `2`/`3` are
+  called *mute* / *unmute* in the firmware and are left that way here; the
+  feature is **privacy mode** in everything the wearer reads.
+- **bit0 (privacy mode) and bit3 (mic off) are different things.** Bit 0 is
+  the wearer's deliberate choice - a double tap, or a command from the app.
+  Bit 3 is the firmware saving power after 2 minutes with no `fe01`
+  subscriber; nobody asked for it, and the app says *Mic off to save battery*,
+  not *Privacy mode on*.
+- **bit1 is "audio flowing"**: `fe01` subscribed AND not in privacy mode AND
+  (gate disabled OR gate open). With the gate disabled it is set whenever `fe01` is
   subscribed, so the app treats it as *Hearing speech* only together with bit2
   (`CaptureFlags.hearingSpeech`).
 - **The gate resets to disabled on every connect and disconnect.** A new
   `ContinuousSession` is made for every link and writes `1` again.
 - Subscribing to `fe08` notifies the current value immediately. Changes are
-  sampled every 20 ms (100 ms while muted); two changes in one tick arrive as
+  sampled every 20 ms (100 ms in privacy mode); two changes in one tick arrive as
   the final state.
-- Mute/unmute writes are ACKed at once and applied within ~100 ms; the notify
-  is the confirmation. The app has the driver call (`writeCapture`) but no
-  control yet: muting is a double tap on the device.
-- The device can **boot muted**; the first read already says so.
+- Privacy-mode writes are ACKed at once and applied within ~100 ms; the
+  notify is the confirmation. The app has the driver call (`writeCapture`) but
+  no control yet: privacy mode is a double tap on the device.
+- The device can **boot in privacy mode**; the first read already says so.
 - **Liveness**: the firmware drops a link with no ATT activity from the phone
   for 10 minutes. The session reads `fe08` every 60 s; any read counts.
 - While the gate is closed no `fe01` packets arrive and **no sequence numbers
@@ -107,7 +115,8 @@ being saved - not on every disconnect.
 | Resume | one 60 ms buzz and the notification returns to normal - only after an alert that buzzed; after a silent one, silently |
 | Off, privacy mode or a sleep during an alert | the notification returns to normal, no buzz |
 
-- `NotSavingAlertPolicy` is pure and unit tested (timers, flapping, mute, off,
+- `NotSavingAlertPolicy` is pure and unit tested (timers, flapping, privacy
+  mode, off,
   resume). The controller asks it on every change that passes through
   `_syncBackground` and holds ONE one-shot timer, only while notes are being
   lost and the grace has not run out. Nothing runs when a build has neither a
@@ -202,7 +211,7 @@ Same folder (`<documents>/recordings`), same name
 | Discard notes with less speech than | 2 s | Coughs and doors. Inserted silence does not count. |
 | Header patched every | 5 s of audio | A kill loses at most 5 s of *header*, never audio... |
 | Startup repair (`WavRepair`) | every launch, before the library is read | ...and this fixes the rest: a header claiming less than the file holds (placeholder `0` included) is patched to the whole samples on disk. |
-| Muting on the device | ends the note at once | A double tap is the wearer drawing a line. |
+| Privacy mode on the device | ends the note at once | A double tap is the wearer drawing a line. |
 
 The note being written is marked *Writing...* in the notes list, cannot be
 deleted, and is never transcribed.
@@ -479,7 +488,7 @@ versions):
 
 - **On-device storage when the phone is away.** Speech while the phone is out
   of range or the link is down is lost; the firmware has nowhere to keep it.
-- A mute/unmute control in the app (driver method exists).
+- A privacy-mode control in the app (driver method exists).
 - A "session could not start" state: a session that fails to start on a
   connected, capable recorder still reads *Saving notes*.
 - A dedicated mic-check blocker message for always-listening (it reuses "A

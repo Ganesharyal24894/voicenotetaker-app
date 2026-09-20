@@ -224,12 +224,14 @@ class ContinuousSession {
   }
 
   void _onFlags(CaptureFlags flags) {
-    final wasMuted = _flags?.muted ?? false;
+    final wasPrivacyMode = _flags?.privacyMode ?? false;
     if (flags == _flags) return;
     _flags = flags;
-    // A double tap to mute is the wearer drawing a line, so the note ends
-    // there rather than two minutes later.
-    if (flags.muted && !wasMuted) _enqueue((writer) => writer.finish());
+    // A double tap into privacy mode is the wearer drawing a line, so the
+    // note ends there rather than two minutes later.
+    if (flags.privacyMode && !wasPrivacyMode) {
+      _enqueue((writer) => writer.finish());
+    }
     _notify();
   }
 

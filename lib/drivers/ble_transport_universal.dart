@@ -107,7 +107,8 @@ class UniversalBleTransport implements BleTransport, BlePairing {
   String? _temperatureDeviceId;
 
   /// Capture-state notifications, a fourth independent subscription: they
-  /// report the mute and the speech gate whether or not audio is flowing.
+  /// report privacy mode and the speech gate whether or not audio is
+  /// flowing.
   StreamSubscription<Uint8List>? _captureSubscription;
   StreamController<CaptureFlags>? _captureController;
   String? _captureDeviceId;

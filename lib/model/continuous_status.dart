@@ -36,11 +36,14 @@ enum ContinuousStatus {
   /// The speech gate is open: a note is being written now.
   hearingSpeech('Hearing speech'),
 
-  /// The wearer put the recorder in privacy mode with a double tap.
-  muted('Privacy mode'),
+  /// The wearer put the recorder in privacy mode with a double tap. Their
+  /// deliberate choice - not the same thing as [micOff].
+  privacyMode('Privacy mode'),
 
   /// Connected, but the recorder stopped its microphone to save battery
   /// (`fe08` bit 3): nothing has been receiving its audio for 2 minutes.
+  /// The device's own power saving, which nobody asked for - not privacy
+  /// mode.
   micOff('Mic off to save battery');
 
   const ContinuousStatus(this.label);
@@ -74,9 +77,11 @@ enum ContinuousStatus {
       return refused ?? ContinuousStatus.notConnected;
     }
     if (captureSupported == false) return ContinuousStatus.needsFirmwareUpdate;
-    // Muted outranks speech: a muted device cannot be hearing anything the
-    // app will keep, whatever the gate bit says.
-    if (flags != null && flags.muted) return ContinuousStatus.muted;
+    // Privacy mode outranks speech: a recorder the wearer silenced cannot be
+    // hearing anything the app will keep, whatever the gate bit says.
+    if (flags != null && flags.privacyMode) {
+      return ContinuousStatus.privacyMode;
+    }
     // The recorder's own word that nothing is being captured, whatever the
     // phone believes it subscribed to.
     if (flags != null && flags.micOff) return ContinuousStatus.micOff;

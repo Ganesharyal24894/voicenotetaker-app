@@ -93,24 +93,24 @@ void main() {
     expect(session.currentNotePath, isNull);
   });
 
-  test('a double tap to mute ends the note there', () async {
+  test('a double tap into privacy mode ends the note there', () async {
     await session.start(deviceId);
     await speak(3);
 
     // Both the notification AND the fe08 read, because a real device answers
     // the keep-alive with the state it just announced. Setting only the
     // notification leaves the next keep-alive tick -- 20 ms away here --
-    // reading the old unmuted flags back over the new ones, which is a race
+    // reading the old flags back over the new ones, which is a race
     // this test loses on a busy machine and wins on an idle one.
-    const muted =
-        CaptureFlags(muted: true, speechOpen: false, gateEnabled: true);
-    harness.captureFlags = muted;
-    harness.capture.add(muted);
+    const privacyMode =
+        CaptureFlags(privacyMode: true, speechOpen: false, gateEnabled: true);
+    harness.captureFlags = privacyMode;
+    harness.capture.add(privacyMode);
     await pumpEventQueue();
     await session.idle;
 
     expect(session.currentNotePath, isNull);
-    expect(session.flags!.muted, isTrue);
+    expect(session.flags!.privacyMode, isTrue);
     expect(notes(), hasLength(1));
   });
 

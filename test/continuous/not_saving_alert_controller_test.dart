@@ -74,15 +74,15 @@ void main() {
     expect(background.titles.last, 'voiceNotetaker');
   });
 
-  test('muted by the wearer: shown, never buzzed', () async {
+  test('privacy mode, chosen by the wearer: shown, never buzzed', () async {
     final (harness, background, haptics) = await listening();
 
     harness.capture.add(
-      const CaptureFlags(muted: true, speechOpen: false, gateEnabled: true),
+      const CaptureFlags(privacyMode: true, speechOpen: false, gateEnabled: true),
     );
     await wait(grace * 3);
 
-    expect(harness.controller.notesSaving, NotesSaving.muted);
+    expect(harness.controller.notesSaving, NotesSaving.privacyMode);
     expect(haptics.buzzes, isEmpty);
     expect(background.titles.last, 'voiceNotetaker');
   });
@@ -92,7 +92,7 @@ void main() {
 
     harness.capture.add(
       const CaptureFlags(
-        muted: false,
+        privacyMode: false,
         speechOpen: false,
         gateEnabled: true,
         micOff: true,

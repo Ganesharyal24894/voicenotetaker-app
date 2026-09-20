@@ -9,11 +9,12 @@ void main() {
   DateTime at(int seconds) => t0.add(Duration(seconds: seconds));
 
   group('NotesSaving.from', () {
-    test('saving, muted, off and not saving each map to their own state', () {
+    test('saving, privacy mode, off and not saving each map to their own state',
+        () {
       expect(NotesSaving.from(ContinuousStatus.off), NotesSaving.off);
       expect(NotesSaving.from(ContinuousStatus.listening), NotesSaving.saving);
       expect(NotesSaving.from(ContinuousStatus.hearingSpeech), NotesSaving.saving);
-      expect(NotesSaving.from(ContinuousStatus.muted), NotesSaving.muted);
+      expect(NotesSaving.from(ContinuousStatus.privacyMode), NotesSaving.privacyMode);
       expect(NotesSaving.from(ContinuousStatus.micOff), NotesSaving.micOff);
       expect(NotesSaving.from(ContinuousStatus.needsFirmwareUpdate), NotesSaving.needsUpdate);
       expect(NotesSaving.from(ContinuousStatus.notConnected), NotesSaving.disconnected);
@@ -102,16 +103,17 @@ void main() {
           reason: '10 min after the last buzz');
     });
 
-    test('muted is the wearer\'s choice: never an alert, and it ends one silently',
-        () {
+    test(
+        'privacy mode is the wearer\'s choice: never an alert, and it ends one '
+        'silently', () {
       final policy = NotSavingAlertPolicy();
-      expect(policy.update(NotesSaving.muted, at(0)), NotSavingAction.none);
-      expect(policy.update(NotesSaving.muted, at(600)), NotSavingAction.none);
+      expect(policy.update(NotesSaving.privacyMode, at(0)), NotSavingAction.none);
+      expect(policy.update(NotesSaving.privacyMode, at(600)), NotSavingAction.none);
       expect(policy.nextCheck(), isNull);
 
       policy.update(NotesSaving.disconnected, at(700));
       policy.update(NotesSaving.disconnected, at(730));
-      expect(policy.update(NotesSaving.muted, at(740)), NotSavingAction.cleared);
+      expect(policy.update(NotesSaving.privacyMode, at(740)), NotSavingAction.cleared);
     });
 
     test('always listening off: never an alert, and it ends one silently', () {

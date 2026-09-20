@@ -4,21 +4,25 @@ import 'dart:typed_data';
 ///
 /// Exactly one byte:
 ///
-///   * bit 0 - [muted]: the wearer double-tapped the device to mute it. The
-///     device can BOOT muted (a persisted mute, or one it could not read), so
-///     the first read may already say so.
-///   * bit 1 - [speechOpen]: audio is flowing - `fe01` subscribed AND not
-///     muted AND (gate disabled OR gate open). With the gate disabled it is set
-///     whenever `fe01` is subscribed, so it means "speech heard" ONLY together
-///     with [gateEnabled]; see [hearingSpeech].
+///   * bit 0 - [privacyMode]: the wearer double-tapped the device to put it
+///     in privacy mode. The device can BOOT in privacy mode (a persisted one,
+///     or one it could not read), so the first read may already say so. The
+///     firmware and this wire format still call this bit "muted"; the feature
+///     is called privacy mode everywhere the wearer can see it.
+///   * bit 1 - [speechOpen]: audio is flowing - `fe01` subscribed AND not in
+///     privacy mode AND (gate disabled OR gate open). With the gate disabled
+///     it is set whenever `fe01` is subscribed, so it means "speech heard"
+///     ONLY together with [gateEnabled]; see [hearingSpeech].
 ///   * bit 2 - [gateEnabled]: the device is streaming speech only. It resets to
 ///     disabled on every connect and disconnect, so always-listening writes it
 ///     again after every reconnect.
 ///   * bit 3 - [micOff]: the microphone is stopped to save battery, because
 ///     nothing has received audio for 2 minutes (no `fe01` subscriber on a
 ///     recorder without storage). Clears as soon as `fe01` is subscribed.
+///     This is POWER saving and nothing else: the device decided it, the
+///     wearer did not, and it is a different thing from privacy mode.
 ///
-/// Changes are sampled every 20 ms on the device (100 ms while muted); two
+/// Changes are sampled every 20 ms on the device (100 ms in privacy mode); two
 /// within one tick arrive as one notification carrying the final state.
 ///
 /// Every other bit is reserved and must be zero. A value with one set is a
@@ -29,12 +33,15 @@ import 'dart:typed_data';
 /// `model/` and survives a package swap.
 class CaptureFlags {
   const CaptureFlags({
-    required this.muted,
+    required this.privacyMode,
     required this.speechOpen,
     required this.gateEnabled,
     this.micOff = false,
   });
 
+  /// `fe08` bit 0. The wire name is "muted"; the feature the wearer sees
+  /// is called privacy mode. The name and value here must match the
+  /// firmware, so they are NOT renamed.
   static const int mutedBit = 0x01;
   static const int speechOpenBit = 0x02;
   static const int gateEnabledBit = 0x04;
@@ -46,7 +53,10 @@ class CaptureFlags {
   /// The characteristic is exactly this long, in both directions.
   static const int valueBytes = 1;
 
-  final bool muted;
+  /// The wearer's deliberate choice: the microphone is off because they
+  /// asked for it (a double tap, or a command from the app). Not to be
+  /// confused with [micOff], which is the device saving power.
+  final bool privacyMode;
 
   /// Audio is flowing on `fe01` - see the class comment for exactly when.
   final bool speechOpen;
@@ -57,7 +67,7 @@ class CaptureFlags {
   final bool micOff;
 
   /// The speech gate is enabled and open: the device is hearing speech now.
-  bool get hearingSpeech => gateEnabled && speechOpen && !muted;
+  bool get hearingSpeech => gateEnabled && speechOpen && !privacyMode;
 
   /// Reads the one byte the characteristic carries.
   ///
@@ -77,7 +87,7 @@ class CaptureFlags {
       );
     }
     return CaptureFlags(
-      muted: value & mutedBit != 0,
+      privacyMode: value & mutedBit != 0,
       speechOpen: value & speechOpenBit != 0,
       gateEnabled: value & gateEnabledBit != 0,
       micOff: value & micOffBit != 0,
@@ -87,23 +97,28 @@ class CaptureFlags {
   @override
   bool operator ==(Object other) =>
       other is CaptureFlags &&
-      other.muted == muted &&
+      other.privacyMode == privacyMode &&
       other.speechOpen == speechOpen &&
       other.gateEnabled == gateEnabled &&
       other.micOff == micOff;
 
   @override
-  int get hashCode => Object.hash(muted, speechOpen, gateEnabled, micOff);
+  int get hashCode => Object.hash(privacyMode, speechOpen, gateEnabled, micOff);
 
   @override
-  String toString() => 'CaptureFlags(muted: $muted, speechOpen: $speechOpen, '
+  String toString() => 'CaptureFlags(privacyMode: $privacyMode, '
+      'speechOpen: $speechOpen, '
       'gateEnabled: $gateEnabled, micOff: $micOff)';
 }
 
 /// What the app may WRITE to `fe08`: one byte, one of four commands.
 ///
 /// Writing is not the mirror image of reading on purpose - the device owns
-/// the gate's state and the mute, the app only asks.
+/// the gate's state and privacy mode, the app only asks.
+///
+/// [mute] and [unmute] keep their firmware names ([CaptureCommand.mute] is
+/// `CAPTURE_CMD_MUTE`): they are on the wire and must match. The feature is
+/// called privacy mode in everything the wearer reads.
 enum CaptureCommand {
   /// Stream everything while `fe01` is subscribed. The device's default after
   /// a connect, and what a manual recording needs.
@@ -112,11 +127,11 @@ enum CaptureCommand {
   /// Stream speech only. Always listening.
   gateEnabled(1),
 
-  /// Mute the microphone. The wearer normally does this with a double tap;
-  /// the app has no control for it yet.
+  /// Turn privacy mode on (firmware `CAPTURE_CMD_MUTE`). The wearer normally
+  /// does this with a double tap; the app has no control for it yet.
   mute(2),
 
-  /// Unmute the microphone.
+  /// Turn privacy mode off (firmware `CAPTURE_CMD_UNMUTE`).
   unmute(3);
 
   const CaptureCommand(this.wireValue);

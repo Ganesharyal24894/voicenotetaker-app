@@ -55,23 +55,23 @@ void main() {
     expect(background.texts.last, 'Always listening');
   });
 
-  test('the device reporting speech and mute moves the status and the '
+  test('the device reporting speech and privacy mode moves the status and the '
       'notification', () async {
     final (harness, background) = await started();
     await harness.controller.setContinuousEnabled(true);
 
     harness.capture.add(
-      const CaptureFlags(muted: false, speechOpen: true, gateEnabled: true),
+      const CaptureFlags(privacyMode: false, speechOpen: true, gateEnabled: true),
     );
     await settle();
     expect(harness.controller.continuousStatus, ContinuousStatus.hearingSpeech);
     expect(background.texts.last, 'Hearing speech');
 
     harness.capture.add(
-      const CaptureFlags(muted: true, speechOpen: false, gateEnabled: true),
+      const CaptureFlags(privacyMode: true, speechOpen: false, gateEnabled: true),
     );
     await settle();
-    expect(harness.controller.continuousStatus, ContinuousStatus.muted);
+    expect(harness.controller.continuousStatus, ContinuousStatus.privacyMode);
     expect(background.texts.last, 'Privacy mode');
   });
 

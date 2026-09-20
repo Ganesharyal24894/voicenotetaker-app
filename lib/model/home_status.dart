@@ -36,7 +36,7 @@ class HomeStatus {
         const HomeStatus('Saving notes', HomeStatusTone.good),
       NotesSaving.savingOnRecorder =>
         const HomeStatus('Saving on recorder · syncs when back', HomeStatusTone.idle),
-      NotesSaving.muted =>
+      NotesSaving.privacyMode =>
         const HomeStatus('Privacy mode on', HomeStatusTone.warning),
       // Not an error colour: a sleeping recorder is doing what it was asked
       // to do, and the one thing the wearer can do about it is in the line.
