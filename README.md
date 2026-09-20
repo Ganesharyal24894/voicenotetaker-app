@@ -509,3 +509,22 @@ resolves inside `code_cache`, which the OS is free to evict.
   Read-only on the phone; needs `libimobiledevice-utils` and `ifuse`.
 * Git is handled by the project owner. Nothing here initialises a repository
   or commits.
+
+## Where the plan and the research live
+
+Both are in the **firmware** repo, because the plan spans the device, the app
+and the hardware and splitting it hid what blocks what:
+
+- **`nrf52840-sense/doc/todo.md`** — the single master TODO. The app's rows are
+  currently marked **paused**.
+- **`nrf52840-sense/doc/research/`** — the condensed archive of every
+  investigation, including the ones that decided things in *this* repo: the
+  16 s decode window, the language router, diarization, iOS background
+  execution and the assistant integration.
+
+[`doc/research/README.md`](doc/research/README.md) in this repo is the pointer,
+plus the app-specific findings that belong here rather than there.
+
+**The rule, from 2026-09-20:** *every investigation ends with a committed
+summary in the firmware repo's `doc/research/`. Raw data may live outside git;
+the findings may not.*
