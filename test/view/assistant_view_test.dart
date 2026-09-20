@@ -769,7 +769,7 @@ void main() {
         AllNotesView(
           controller: harness.controller,
           assistant: controller,
-          onOpen: (_) {},
+          onOpen: (_, _) {},
           now: now,
         ),
       );

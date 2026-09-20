@@ -122,7 +122,7 @@ Future<_Note> _open(
       recording: info,
       now: _now,
       onDeleted: onDeleted,
-      onSummarize: onSummarize,
+      onSummarize: onSummarize == null ? null : (_) => onSummarize(),
     ),
   );
   await flush(tester);

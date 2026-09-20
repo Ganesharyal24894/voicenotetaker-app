@@ -435,7 +435,7 @@ void main() {
       addTearDown(harness.dispose);
       await pumpScreen(
         tester,
-        AllNotesView(controller: harness.controller, onOpen: (_) {}),
+        AllNotesView(controller: harness.controller, onOpen: (_, _) {}),
       );
 
       expect(find.text('No notes yet'), findsOneWidget);

@@ -26,6 +26,146 @@ import 'widgets/app_icons.dart';
 import 'widgets/common.dart';
 import 'widgets/home_icons.dart';
 
+/// One note, and the notes either side of it - `NoteSwipe.dc.html`.
+///
+/// Swipe RIGHT for the note above in the list (newer), LEFT for the one below
+/// (older), through the same list the note was opened from: a note opened
+/// from a filtered All notes swipes through those notes and no others. The
+/// ends do not wrap - the page rubber-bands and springs back.
+///
+/// The gesture is a [PageView]'s, so it arms only once the finger has
+/// travelled further sideways than up or down. The transcript's own vertical
+/// scrolling and the audio panel's horizontal scrubber both sit deeper in the
+/// gesture arena and win their own drags; a swipe above the panel changes
+/// note as usual.
+///
+/// Changing note STOPS PLAYBACK and closes the panel behind you: the audio
+/// belonged to the note you left. The neighbour's transcript is read while it
+/// is being built, which is one small file, so it is there by the time the
+/// page lands; a transcript that is not ready yet shows the same state this
+/// screen always shows.
+class NoteView extends StatefulWidget {
+  const NoteView({
+    required this.controller,
+    required this.recording,
+    this.siblings = const <RecordingInfo>[],
+    this.assistant,
+    this.onBack,
+    this.onDeleted,
+    this.onSummarize,
+    this.onDownloadModels,
+    this.now,
+    super.key,
+  });
+
+  final AppController controller;
+
+  /// The note that was tapped.
+  final RecordingInfo recording;
+
+  /// The list [recording] was opened from, in the order it was shown - what
+  /// the swipe walks through. Empty, or a list without [recording] in it,
+  /// leaves the screen with one note and nothing to swipe to.
+  final List<RecordingInfo> siblings;
+
+  final AssistantController? assistant;
+  final VoidCallback? onBack;
+  final VoidCallback? onDeleted;
+
+  /// "Summarize with your AI", for whichever note is on screen. Null disables
+  /// the button.
+  final ValueChanged<RecordingInfo>? onSummarize;
+
+  final VoidCallback? onDownloadModels;
+  final DateTime? now;
+
+  /// How long after the user scrolls the transcript it is left alone, rather
+  /// than following the playhead.
+  static const Duration userScrollHold = NotePage.userScrollHold;
+
+  @override
+  State<NoteView> createState() => _NoteViewState();
+}
+
+class _NoteViewState extends State<NoteView> {
+  /// The notes to swipe through, and where we are in them.
+  late final List<RecordingInfo> _notes = _swipeList();
+  late int _index = _notes.indexWhere(
+    (recording) => recording.path == widget.recording.path,
+  );
+  late final PageController _pages = PageController(initialPage: _index);
+
+  List<RecordingInfo> _swipeList() {
+    final siblings = widget.siblings;
+    final has = siblings.any(
+      (recording) => recording.path == widget.recording.path,
+    );
+    return has ? siblings : <RecordingInfo>[widget.recording];
+  }
+
+  @override
+  void dispose() {
+    _pages.dispose();
+    super.dispose();
+  }
+
+  void _onPageChanged(int index) {
+    if (index == _index) return;
+    // The audio belonged to the note being left.
+    unawaited(widget.controller.stopPlayback());
+    setState(() => _index = index);
+  }
+
+  /// `3 of 18 · Today` - where you are, and that there are notes either side.
+  /// The day is the day of the note you are on, so crossing midnight says so.
+  String _position(int index) {
+    final now = widget.now ?? DateTime.now();
+    final day = NoteLabels.group(_notes[index].recordedAt, now: now);
+    return '${index + 1} of ${_notes.length} · $day';
+  }
+
+  Widget _page(int index) {
+    final recording = _notes[index];
+    final summarize = widget.onSummarize;
+    return NotePage(
+      // Keyed by path, so each note keeps its own scroll and its own panel.
+      key: ValueKey<String>(recording.path),
+      controller: widget.controller,
+      recording: recording,
+      assistant: widget.assistant,
+      active: index == _index,
+      positionLabel: _notes.length > 1 ? _position(index) : null,
+      onBack: widget.onBack,
+      onDeleted: widget.onDeleted,
+      onSummarize: summarize == null ? null : () => summarize(recording),
+      onDownloadModels: widget.onDownloadModels,
+      now: widget.now,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // One note is one note: no page view, and nothing to swipe against.
+    if (_notes.length < 2) return _page(_index < 0 ? 0 : _index);
+
+    return PageView.custom(
+      controller: _pages,
+      // Bouncing, so the first and last notes rubber-band and spring back
+      // instead of wrapping round or stopping dead.
+      physics: const PageScrollPhysics(parent: BouncingScrollPhysics()),
+      onPageChanged: _onPageChanged,
+      childrenDelegate: SliverChildBuilderDelegate(
+        (context, index) => _page(index),
+        childCount: _notes.length,
+        // NOT `PageView.builder`: its semantic index wraps each page in a
+        // node of its own, and a whole note screen then reads out as one
+        // merged control. A page is a screen, not a list row.
+        addSemanticIndexes: false,
+      ),
+    );
+  }
+}
+
 /// One note: its transcript first, its audio one tap away.
 ///
 /// `NoteDetail.dc.html` and `NoteAudio.dc.html`. Everything shown comes from
@@ -33,11 +173,13 @@ import 'widgets/home_icons.dart';
 /// retention setting, and - while the audio panel is open - the player's own
 /// [PlaybackState]. The screen keeps only what is about the screen: whether
 /// the panel is open, and whether the user scrolled recently.
-class NoteView extends StatefulWidget {
-  const NoteView({
+class NotePage extends StatefulWidget {
+  const NotePage({
     required this.controller,
     required this.recording,
     this.assistant,
+    this.active = true,
+    this.positionLabel,
     this.onBack,
     this.onDeleted,
     this.onSummarize,
@@ -55,6 +197,15 @@ class NoteView extends StatefulWidget {
   /// The note as it was when opened. The screen follows the library's newer
   /// copy of it (kept, audio removed) by path.
   final RecordingInfo recording;
+
+  /// Whether this is the note being read, rather than a neighbour built ready
+  /// for a swipe. A neighbour reads its transcript but does not jump the
+  /// transcription queue, and closes its audio panel when it is swiped away.
+  final bool active;
+
+  /// `3 of 18 · Today`, in place of the day alone. Null on a note with
+  /// nothing either side of it.
+  final String? positionLabel;
 
   final VoidCallback? onBack;
 
@@ -77,10 +228,10 @@ class NoteView extends StatefulWidget {
   static const Duration userScrollHold = Duration(seconds: 4);
 
   @override
-  State<NoteView> createState() => _NoteViewState();
+  State<NotePage> createState() => _NotePageState();
 }
 
-class _NoteViewState extends State<NoteView> {
+class _NotePageState extends State<NotePage> {
   final ScrollController _scroll = ScrollController();
   List<GlobalKey> _paragraphKeys = <GlobalKey>[];
 
@@ -176,12 +327,32 @@ class _NoteViewState extends State<NoteView> {
     final recording = widget.recording;
     // An empty note is not deleted while it is on screen.
     _controller.noteOpened(recording.path);
-    // Both only READ: a stat and a small file each.
+    // Both only READ: a stat and a small file each. A neighbour built ready
+    // for a swipe reads them too - that is the preload, and it is why the
+    // note is already there when the page lands.
     unawaited(_controller.loadTranscript(recording));
     unawaited(_controller.loadSpeakerNames(recording.path));
-    // Waiting in the background queue? Then it goes next.
+    _prioritise();
+  }
+
+  /// Waiting in the background queue? Then it goes next - but only for the
+  /// note being READ. A neighbour does not push in front of it.
+  void _prioritise() {
+    if (!widget.active) return;
     if (_controller.transcriptionAvailable) {
-      _controller.prioritiseTranscription(recording);
+      _controller.prioritiseTranscription(widget.recording);
+    }
+  }
+
+  @override
+  void didUpdateWidget(NotePage old) {
+    super.didUpdateWidget(old);
+    if (widget.active == old.active) return;
+    if (widget.active) {
+      _prioritise();
+    } else if (_audioOpen) {
+      // Swiped away from: the panel belonged to the note being read.
+      setState(() => _audioOpen = false);
     }
   }
 
@@ -275,7 +446,7 @@ class _NoteViewState extends State<NoteView> {
     };
     if (byUser) {
       _userScrolled?.cancel();
-      _userScrolled = Timer(NoteView.userScrollHold, () {
+      _userScrolled = Timer(NotePage.userScrollHold, () {
         _userScrolled = null;
       });
     }
@@ -514,7 +685,10 @@ class _NoteViewState extends State<NoteView> {
           child: Transform.translate(
             offset: const Offset(-8, 0),
             child: Text(
-              NoteLabels.group(recording.recordedAt, now: _now),
+              // `3 of 18 · Today` once there are notes either side; the day
+              // on its own when this note is all there is.
+              widget.positionLabel ??
+                  NoteLabels.group(recording.recordedAt, now: _now),
               style: AppText.meta13,
             ),
           ),

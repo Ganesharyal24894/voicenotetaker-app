@@ -1,3 +1,4 @@
+import '../model/note_days.dart';
 import '../model/note_search.dart';
 import '../model/recording_info.dart';
 import '../model/transcript.dart';
@@ -225,18 +226,38 @@ class NoteGroup {
 
   final String label;
   final List<NoteListItem> items;
+
+  /// `Today · 12 notes` - the pinned heading. The count is what is UNDER the
+  /// heading, so with a search running it is the number of rows found on that
+  /// day rather than everything the day holds.
+  String get heading =>
+      '$label · ${items.length} ${items.length == 1 ? 'note' : 'notes'}';
 }
 
 abstract final class NoteList {
-  /// [items] that match [query], newest first.
-  static List<NoteListItem> filter(List<NoteListItem> items, String query) {
+  /// [items] that match [query] and fall on one of [days], newest first.
+  ///
+  /// The two compose with AND, and the days go first: picking days narrows the
+  /// library to those days, and typing then searches inside them. An empty
+  /// [days] means every day, which is the unfiltered list.
+  static List<NoteListItem> filter(
+    List<NoteListItem> items,
+    String query, {
+    Set<DateTime> days = const <DateTime>{},
+  }) {
     final sorted = <NoteListItem>[...items]
       ..sort((a, b) => b.recording.recordedAt.compareTo(a.recording.recordedAt));
     return <NoteListItem>[
       for (final item in sorted)
-        if (item.matches(query)) item,
+        if (onDays(item, days) && item.matches(query)) item,
     ];
   }
+
+  /// Whether [item] falls on one of [days]; true for every item when [days] is
+  /// empty, which is the filter turned off.
+  static bool onDays(NoteListItem item, Set<DateTime> days) =>
+      days.isEmpty ||
+      days.contains(NoteDayIndex.dayOf(item.recording.recordedAt));
 
   /// [items], in the order given, under their day headings.
   static List<NoteGroup> group(List<NoteListItem> items, {required DateTime now}) {

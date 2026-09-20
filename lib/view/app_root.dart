@@ -9,6 +9,7 @@ import '../controller/export_controller.dart';
 import '../controller/summary_controller.dart';
 import '../model/device_state.dart';
 import '../services/assistant/undo_notifier.dart';
+import '../model/note_days.dart';
 import '../model/recording_info.dart';
 import 'connection_lost_view.dart';
 import 'developer_view.dart';
@@ -188,7 +189,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           controller: widget.controller,
           assistant: widget.assistant,
           onBack: () => Navigator.of(context).pop(),
-          onOpen: (recording) => _openNote(context, recording),
+          // The rows on screen, in the order they are shown, are what the
+          // note screen swipes through.
+          onOpen: (recording, shown) =>
+              _openNote(context, recording, siblings: shown),
         ),
       ),
     );
@@ -214,21 +218,41 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     // actually tapped rather than whatever the list holds later. A row with
     // no file behind it has no note to open.
     final recording = _recordingFor(entry);
-    if (recording != null) _openNote(context, recording);
+    if (recording != null) {
+      // Home lists one day at a time, so that day is what the note swipes
+      // through: open something from Today and you stay inside today.
+      _openNote(context, recording, siblings: _sameDayAs(recording));
+    }
   }
 
-  /// Opens one note on its transcript.
-  void _openNote(BuildContext context, RecordingInfo recording) {
+  /// Every note recorded on [recording]'s day, newest first.
+  List<RecordingInfo> _sameDayAs(RecordingInfo recording) {
+    final day = NoteDayIndex.dayOf(recording.recordedAt);
+    final notes = <RecordingInfo>[
+      for (final info in widget.controller.recordings)
+        if (NoteDayIndex.dayOf(info.recordedAt) == day) info,
+    ]..sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
+    return notes;
+  }
+
+  /// Opens one note on its transcript, inside the list it came from.
+  void _openNote(
+    BuildContext context,
+    RecordingInfo recording, {
+    List<RecordingInfo> siblings = const <RecordingInfo>[],
+  }) {
     _push(
       context,
       (context) => NoteView(
         controller: widget.controller,
         assistant: widget.assistant,
         recording: recording,
+        siblings: siblings,
         // The screen is showing a note that no longer exists, so it leaves.
         onDeleted: () => Navigator.of(context).pop(),
         onBack: () => Navigator.of(context).pop(),
-        onSummarize: () => _summarizeNote(context, recording),
+        // Whichever note is on screen after a swipe is the one summarized.
+        onSummarize: (note) => _summarizeNote(context, note),
       ),
     );
   }

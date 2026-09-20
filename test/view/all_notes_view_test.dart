@@ -55,7 +55,7 @@ Future<void> _pump(
     tester,
     AllNotesView(
       controller: harness.controller,
-      onOpen: onOpen ?? (_) {},
+      onOpen: (recording, _) => onOpen?.call(recording),
       onBack: () {},
       now: _now,
     ),
@@ -73,8 +73,9 @@ void main() {
 
     expect(find.text('Notes'), findsOneWidget);
     expect(find.text('3 notes'), findsOneWidget);
-    expect(find.text('TODAY'), findsOneWidget);
-    expect(find.text('YESTERDAY'), findsOneWidget);
+    // The pinned day headings now carry their count.
+    expect(find.text('TODAY · 2 NOTES'), findsOneWidget);
+    expect(find.text('YESTERDAY · 1 NOTE'), findsOneWidget);
     expect(find.text('कल की मीटिंग में क्लाइंट ने डेडलाइन बढ़ा दी'),
         findsOneWidget);
     expect(find.text('09:14 · 4 min'), findsOneWidget);
@@ -105,7 +106,7 @@ void main() {
     await tester.pump(AllNotesView.searchDebounce);
     expect(find.text('सैलरी पर HR से बात हो गई'), findsOneWidget);
     expect(find.text('09:14 · 4 min'), findsNothing);
-    expect(find.text('TODAY'), findsNothing);
+    expect(find.text('TODAY · 2 NOTES'), findsNothing);
 
     await tester.enterText(find.byType(TextField), 'मीटिंग');
     await tester.pump(AllNotesView.searchDebounce);

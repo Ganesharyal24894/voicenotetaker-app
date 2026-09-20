@@ -87,6 +87,18 @@ enum AppGlyph {
 
   /// Two upright bars - pausing a download.
   pause,
+
+  // ---------------------------------------------------------------------
+  // Picking days on All notes, from `canvas-notes/*.dc.html`. Neither glyph
+  // existed before; both are drawn in the same 24-unit box at the same 1.7
+  // stroke as everything above.
+  // ---------------------------------------------------------------------
+
+  /// A month page with two rings - the calendar beside the search field.
+  calendar,
+
+  /// A cross - the x that drops one day from the filter.
+  close,
 }
 
 /// A stroke-based vector icon drawn with a [CustomPainter].
@@ -556,6 +568,34 @@ class _GlyphPainter extends CustomPainter {
           Path()
             ..moveTo(14.5, 5)
             ..lineTo(14.5, 19),
+        ];
+      case AppGlyph.calendar:
+        return <Path>[
+          Path()
+            ..addRRect(
+              RRect.fromRectAndRadius(
+                const Rect.fromLTRB(3.5, 5.5, 20.5, 20.5),
+                const Radius.circular(2.5),
+              ),
+            ),
+          Path()
+            ..moveTo(3.5, 10)
+            ..lineTo(20.5, 10),
+          Path()
+            ..moveTo(8.5, 3.5)
+            ..lineTo(8.5, 7),
+          Path()
+            ..moveTo(15.5, 3.5)
+            ..lineTo(15.5, 7),
+        ];
+      case AppGlyph.close:
+        return <Path>[
+          Path()
+            ..moveTo(6, 6)
+            ..lineTo(18, 18),
+          Path()
+            ..moveTo(18, 6)
+            ..lineTo(6, 18),
         ];
       case AppGlyph.play:
         return const <Path>[];

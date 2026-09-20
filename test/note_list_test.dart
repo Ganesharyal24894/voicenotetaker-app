@@ -158,6 +158,98 @@ void main() {
     });
   });
 
+  group('picked days', () {
+    NoteListItem said(DateTime at, String text) => NoteListItem.from(
+          _info(at),
+          status: TranscriptStatus.done,
+          transcript: _said(<(String, String?)>[(text, null)]),
+        );
+
+    final today = said(DateTime(2026, 9, 15, 9, 14), 'HR से बात');
+    final todayLater = said(DateTime(2026, 9, 15, 18, 5), 'शाम की मीटिंग');
+    final friday = said(DateTime(2026, 9, 11, 10), 'HR ने कहा');
+    final saturday = said(DateTime(2026, 9, 12, 10), 'गाड़ी की सर्विस');
+    final all = <NoteListItem>[today, todayLater, friday, saturday];
+
+    test('no days picked shows every day', () {
+      expect(
+        NoteList.filter(all, ''),
+        <NoteListItem>[todayLater, today, saturday, friday],
+      );
+    });
+
+    test('one day, then several, newest first', () {
+      expect(
+        NoteList.filter(all, '', days: <DateTime>{DateTime(2026, 9, 15)}),
+        <NoteListItem>[todayLater, today],
+      );
+      expect(
+        NoteList.filter(
+          all,
+          '',
+          days: <DateTime>{DateTime(2026, 9, 15), DateTime(2026, 9, 11)},
+        ),
+        <NoteListItem>[todayLater, today, friday],
+      );
+    });
+
+    test('a picked day with nothing on it shows nothing', () {
+      expect(
+        NoteList.filter(all, '', days: <DateTime>{DateTime(2026, 9, 14)}),
+        isEmpty,
+      );
+    });
+
+    test('days and search are BOTH applied - search stays inside the days',
+        () {
+      // "HR" is said on two days; only the picked one comes back.
+      expect(
+        NoteList.filter(all, 'HR', days: <DateTime>{DateTime(2026, 9, 15)}),
+        <NoteListItem>[today],
+      );
+      expect(
+        NoteList.filter(all, 'HR', days: <DateTime>{DateTime(2026, 9, 11)}),
+        <NoteListItem>[friday],
+      );
+      // A search that matches nothing inside the picked days finds nothing,
+      // even though it would match elsewhere.
+      expect(
+        NoteList.filter(
+          all,
+          'सर्विस',
+          days: <DateTime>{DateTime(2026, 9, 15)},
+        ),
+        isEmpty,
+      );
+    });
+
+    test('a picked day is the whole day, whatever the time', () {
+      expect(
+        NoteList.onDays(today, <DateTime>{DateTime(2026, 9, 15)}),
+        isTrue,
+      );
+      expect(
+        NoteList.onDays(todayLater, <DateTime>{DateTime(2026, 9, 15)}),
+        isTrue,
+      );
+      expect(NoteList.onDays(today, const <DateTime>{}), isTrue);
+    });
+
+    test('a heading says the day and how many rows are under it', () {
+      final groups = NoteList.group(
+        NoteList.filter(all, '', days: <DateTime>{DateTime(2026, 9, 15)}),
+        now: _now,
+      );
+      expect(groups.single.heading, 'Today · 2 notes');
+
+      final one = NoteList.group(
+        NoteList.filter(all, '', days: <DateTime>{DateTime(2026, 9, 11)}),
+        now: _now,
+      );
+      expect(one.single.heading, 'Friday · 1 note');
+    });
+  });
+
   group('a row', () {
     final at = DateTime(2026, 9, 15, 9, 14);
 

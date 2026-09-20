@@ -4,18 +4,22 @@ import 'package:flutter/material.dart';
 
 import '../controller/app_controller.dart';
 import '../controller/assistant_controller.dart';
+import '../model/note_days.dart';
 import '../model/recording_info.dart';
 import 'note_list.dart';
+import 'notes_calendar_sheet.dart';
 import 'theme.dart';
 import 'widgets/app_icons.dart';
 import 'widgets/common.dart';
 import 'widgets/edge_state.dart';
 
-/// Every note, newest first, transcript first - `AllNotes.dc.html`.
+/// Every note, newest first, transcript first - `AllNotes.dc.html` and
+/// `canvas-notes/AllNotesDates.dc.html`.
 ///
 /// Rows quote what was said, or say where the transcript stands. Search looks
-/// through every transcript and the times. Deleting lives on the note itself,
-/// so a mis-tap here can only ever open something.
+/// through every transcript and the times; the calendar beside it picks the
+/// days to show. Deleting lives on the note itself, so a mis-tap here can only
+/// ever open something.
 class AllNotesView extends StatefulWidget {
   const AllNotesView({
     required this.controller,
@@ -31,7 +35,14 @@ class AllNotesView extends StatefulWidget {
   /// Only so a row that was an instruction is quoted without the wake phrase
   /// in front of it. Null lists every note exactly as it was transcribed.
   final AssistantController? assistant;
-  final ValueChanged<RecordingInfo> onOpen;
+
+  /// Opens one note, and hands over the list it was opened FROM - every row
+  /// on screen, in the order they are shown. That list is what the note
+  /// screen swipes through, so a note opened from a filtered list swipes
+  /// through the filtered notes and nothing else.
+  final void Function(RecordingInfo recording, List<RecordingInfo> shown)
+      onOpen;
+
   final VoidCallback? onBack;
 
   /// Day headings are relative to this; the wall clock when null.
@@ -49,7 +60,32 @@ class _AllNotesViewState extends State<AllNotesView> {
   Timer? _debounce;
   String _query = '';
 
+  /// The days picked in the calendar; empty is every day.
+  ///
+  /// It lives with the screen, so leaving All notes and coming back shows
+  /// everything again. A filter you cannot see is a filter you forget about.
+  Set<DateTime> _days = <DateTime>{};
+
+  /// The day counts, and the listing they were counted from.
+  ///
+  /// [AppController.recordings] hands back the same list object until the
+  /// library is re-read, so this rebuilds exactly when the library changes -
+  /// never per frame, and never a stale count after a new note lands.
+  List<RecordingInfo>? _countedFrom;
+  NoteDayIndex _counts = NoteDayIndex.empty;
+
   AppController get _controller => widget.controller;
+
+  DateTime get _now => widget.now ?? DateTime.now();
+
+  NoteDayIndex get _dayCounts {
+    final recordings = _controller.recordings;
+    if (!identical(recordings, _countedFrom)) {
+      _countedFrom = recordings;
+      _counts = NoteDayIndex.of(recordings);
+    }
+    return _counts;
+  }
 
   @override
   void initState() {
@@ -81,6 +117,24 @@ class _AllNotesViewState extends State<AllNotesView> {
     });
   }
 
+  /// Opens the calendar and takes back whatever it decided. Dismissing it
+  /// changes nothing.
+  Future<void> _pickDays() async {
+    final picked = await showNotesCalendarSheet(
+      context,
+      index: _dayCounts,
+      selected: _days,
+      now: _now,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _days = picked);
+  }
+
+  void _dropDay(DateTime day) => setState(() => _days = <DateTime>{
+        for (final picked in _days)
+          if (picked != day) picked,
+      });
+
   List<NoteListItem> get _items {
     final controller = _controller;
     final writing = controller.writingNotePath;
@@ -104,9 +158,17 @@ class _AllNotesViewState extends State<AllNotesView> {
 
   @override
   Widget build(BuildContext context) {
+    final now = _now;
     final all = _items;
-    final matches = NoteList.filter(all, _query);
-    final groups = NoteList.group(matches, now: widget.now ?? DateTime.now());
+    // Days first, then search inside them: both are applied, always.
+    final matches = NoteList.filter(all, _query, days: _days);
+    final groups = NoteList.group(matches, now: now);
+    final filtering = _days.isNotEmpty || _query.isNotEmpty;
+    final shown = filtering ? matches.length : all.length;
+    // What the note screen swipes through: these rows, in this order.
+    final order = <RecordingInfo>[
+      for (final item in matches) item.recording,
+    ];
 
     return ScreenScaffold(
       child: Column(
@@ -133,7 +195,7 @@ class _AllNotesViewState extends State<AllNotesView> {
               const Expanded(child: Text('Notes', style: AppText.h1)),
               const SizedBox(width: 10),
               Text(
-                '${all.length} ${all.length == 1 ? 'note' : 'notes'}',
+                '$shown ${shown == 1 ? 'note' : 'notes'}',
                 style: AppText.meta13,
               ),
             ],
@@ -149,21 +211,63 @@ class _AllNotesViewState extends State<AllNotesView> {
             )
           else ...<Widget>[
             const SizedBox(height: 18),
-            _SearchField(controller: _search, onChanged: _onQueryChanged),
-            const SizedBox(height: 22),
+            SizedBox(
+              height: AppShape.minTapTarget,
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: _SearchField(
+                      controller: _search,
+                      onChanged: _onQueryChanged,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  _CalendarButton(
+                    lit: _days.isNotEmpty,
+                    onTap: () => unawaited(_pickDays()),
+                  ),
+                ],
+              ),
+            ),
+            if (_days.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 14),
+              _DayChips(days: _days, now: now, onDrop: _dropDay),
+            ],
+            SizedBox(height: _days.isEmpty ? 22 : 16),
             Expanded(
               child: matches.isEmpty
                   ? const Padding(
                       padding: EdgeInsets.only(top: 8),
                       child: Text('No notes match', style: AppText.meta13),
                     )
-                  : ListView.builder(
-                      padding: EdgeInsets.zero,
-                      itemCount: groups.length,
-                      itemBuilder: (context, index) => _GroupSection(
-                        group: groups[index],
-                        onOpen: widget.onOpen,
-                      ),
+                  : CustomScrollView(
+                      slivers: <Widget>[
+                        for (final group in groups)
+                          // Each day keeps its own heading: pinned while that
+                          // day's rows are on screen, pushed off by the next.
+                          SliverMainAxisGroup(
+                            slivers: <Widget>[
+                              SliverPersistentHeader(
+                                pinned: true,
+                                delegate: _DayHeading(group.heading),
+                              ),
+                              SliverList.builder(
+                                itemCount: group.items.length,
+                                itemBuilder: (context, i) => _NoteRow(
+                                  item: group.items[i],
+                                  last: i == group.items.length - 1,
+                                  onTap: () => widget.onOpen(
+                                    group.items[i].recording,
+                                    order,
+                                  ),
+                                ),
+                              ),
+                              const SliverToBoxAdapter(
+                                child: SizedBox(height: 22),
+                              ),
+                            ],
+                          ),
+                      ],
                     ),
             ),
           ],
@@ -173,31 +277,34 @@ class _AllNotesViewState extends State<AllNotesView> {
   }
 }
 
-class _GroupSection extends StatelessWidget {
-  const _GroupSection({required this.group, required this.onOpen});
+/// `TODAY · 12 NOTES`, pinned to the top of the list while that day runs.
+class _DayHeading extends SliverPersistentHeaderDelegate {
+  const _DayHeading(this.heading);
 
-  final NoteGroup group;
-  final ValueChanged<RecordingInfo> onOpen;
+  final String heading;
+
+  /// The caption plus the 8px the design leaves under it.
+  static const double height = 28;
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 22),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          SectionCaption(group.label),
-          const SizedBox(height: 8),
-          for (var i = 0; i < group.items.length; i++)
-            _NoteRow(
-              item: group.items[i],
-              last: i == group.items.length - 1,
-              onTap: () => onOpen(group.items[i].recording),
-            ),
-        ],
-      ),
+  double get minExtent => height;
+
+  @override
+  double get maxExtent => height;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlaps) {
+    return Container(
+      // Opaque, so the rows scroll UNDER the heading rather than through it.
+      color: AppColors.screen,
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.only(bottom: 8),
+      child: SectionCaption(heading),
     );
   }
+
+  @override
+  bool shouldRebuild(_DayHeading old) => old.heading != heading;
 }
 
 /// 42px well with a 44px hit area.
@@ -244,6 +351,116 @@ class _SearchField extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The way into the calendar: a 42px square beside search, lit while days are
+/// picked.
+class _CalendarButton extends StatelessWidget {
+  const _CalendarButton({required this.lit, required this.onTap});
+
+  final bool lit;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return TapTarget(
+      onTap: onTap,
+      semanticLabel: lit ? 'Change days' : 'Pick days',
+      child: Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          color: lit ? AppColors.purpleChipFill : null,
+          border: Border.all(
+            color: lit ? AppColors.purpleChipBorder : AppColors.border,
+          ),
+          borderRadius: AppShape.control,
+        ),
+        child: Center(
+          child: AppIcon(
+            AppGlyph.calendar,
+            size: 18,
+            color: lit ? AppColors.purpleText : AppColors.textSecondary,
+            strokeWidth: 1.7,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One chip per picked day, newest first, each with an x that drops it.
+class _DayChips extends StatelessWidget {
+  const _DayChips({
+    required this.days,
+    required this.now,
+    required this.onDrop,
+  });
+
+  final Set<DateTime> days;
+  final DateTime now;
+  final ValueChanged<DateTime> onDrop;
+
+  @override
+  Widget build(BuildContext context) {
+    final ordered = days.toList()..sort((a, b) => b.compareTo(a));
+    return SizedBox(
+      height: AppShape.minTapTarget,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.zero,
+        itemCount: ordered.length,
+        separatorBuilder: (context, _) => const SizedBox(width: 8),
+        itemBuilder: (context, i) => _DayChip(
+          label: NoteLabels.group(ordered[i], now: now),
+          onDrop: () => onDrop(ordered[i]),
+        ),
+      ),
+    );
+  }
+}
+
+class _DayChip extends StatelessWidget {
+  const _DayChip({required this.label, required this.onDrop});
+
+  final String label;
+  final VoidCallback onDrop;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: 'Stop showing $label',
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onDrop,
+        child: Center(
+          child: Container(
+            height: 30,
+            padding: const EdgeInsets.only(left: 12, right: 10),
+            decoration: BoxDecoration(
+              border: Border.all(color: AppColors.border),
+              borderRadius: AppShape.pill,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(label, style: AppText.label13),
+                const SizedBox(width: 7),
+                const AppIcon(
+                  AppGlyph.close,
+                  size: 11,
+                  color: AppColors.textTertiary,
+                  strokeWidth: 2,
+                ),
+              ],
+            ),
           ),
         ),
       ),
