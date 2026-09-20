@@ -32,20 +32,17 @@ enum AutoSleepDuration {
 
 /// What the recorder reported about auto-sleep.
 class AutoSleepSetting {
-  const AutoSleepSetting({required this.enabled, this.duration});
-
-  /// Firmware that only knows on/off (the one-byte form).
-  const AutoSleepSetting.legacy(this.enabled) : duration = null;
+  const AutoSleepSetting({required this.enabled, required this.duration});
 
   /// Whether the recorder sleeps by itself.
   final bool enabled;
 
-  /// The duration in force, or null when the firmware predates durations and
-  /// cannot be told one. [AutoSleepDuration.off] when off on new firmware.
-  final AutoSleepDuration? duration;
-
-  /// Whether this firmware takes a duration - the two-byte form.
-  bool get supportsDuration => duration != null;
+  /// The duration in force; [AutoSleepDuration.off] when [enabled] is false.
+  ///
+  /// The recorder keeps the duration the user chose even while off, but it
+  /// reports code 0 rather than that duration, so this is what it is DOING,
+  /// not what it would do if switched on.
+  final AutoSleepDuration duration;
 
   @override
   bool operator ==(Object other) =>
@@ -62,38 +59,32 @@ class AutoSleepSetting {
 
 /// Wire format of the `fe04` auto-sleep characteristic.
 ///
-/// TWO FORMS, and the READ LENGTH says which firmware this is:
+/// TWO BYTES, `[flags, code]`, each way: flags bit 0 must equal `code != 0`,
+/// every other flag bit is reserved, and the code is 0..4.
 ///
-///   * one byte - older firmware: bit 0 on/off, every other bit reserved;
-///   * two bytes `[flags, code]` - firmware with durations: flags bit 0 must
-///     equal `code != 0`, other flag bits reserved, code 0..4.
-///
-/// A value outside either form is refused rather than guessed at, because this
-/// setting decides whether the recorder puts itself to sleep.
+/// Anything else is refused rather than guessed at, because this setting
+/// decides whether the recorder puts itself to sleep.
 ///
 /// Pure data, like [StreamInfo.fromBytes]: this is the device protocol, not
 /// the BLE stack, so it lives in `model/` and survives a package swap.
 abstract final class AutoSleep {
-  /// Bit 0 of the (first) byte - auto-sleep enabled.
+  /// Bit 0 of the flags byte - auto-sleep enabled.
   static const int enabledBit = 0x01;
 
-  /// Every other bit of the (first) byte.
+  /// Every other bit of the flags byte.
   static const int reservedBits = 0xFE;
 
-  /// The legacy, on/off-only length.
-  static const int legacyBytes = 1;
+  /// The one length, read and written.
+  static const int wireBytes = 2;
 
-  /// The length that carries a duration.
-  static const int durationBytes = 2;
-
-  /// Reads a characteristic value in either form.
+  /// Reads a characteristic value.
   ///
   /// Throws [FormatException] on any other length, reserved bits, an unknown
   /// code, or flags that disagree with the code.
   static AutoSleepSetting fromBytes(List<int> bytes) {
-    if (bytes.length != legacyBytes && bytes.length != durationBytes) {
+    if (bytes.length != wireBytes) {
       throw FormatException(
-        'auto-sleep is $legacyBytes or $durationBytes bytes, got ${bytes.length}',
+        'auto-sleep is $wireBytes bytes, got ${bytes.length}',
       );
     }
     final flags = bytes.first;
@@ -104,7 +95,6 @@ abstract final class AutoSleep {
       );
     }
     final enabled = flags & enabledBit != 0;
-    if (bytes.length == legacyBytes) return AutoSleepSetting.legacy(enabled);
     final duration = AutoSleepDuration.fromCode(bytes[1]);
     if (duration == null) {
       throw FormatException('unknown auto-sleep code ${bytes[1]}');
@@ -117,12 +107,8 @@ abstract final class AutoSleep {
     return AutoSleepSetting(enabled: enabled, duration: duration);
   }
 
-  /// The legacy single byte: `0x01` to enable, `0x00` to disable. The
-  /// firmware keeps its stored duration.
-  static Uint8List toBytes(bool enabled) =>
-      Uint8List.fromList(<int>[enabled ? enabledBit : 0x00]);
-
-  /// The two-byte form for [duration].
+  /// The two bytes for [duration]. [AutoSleepDuration.off] turns auto-sleep
+  /// off; the recorder keeps the duration the user last chose.
   static Uint8List durationToBytes(AutoSleepDuration duration) =>
       Uint8List.fromList(<int>[
         duration == AutoSleepDuration.off ? 0x00 : enabledBit,

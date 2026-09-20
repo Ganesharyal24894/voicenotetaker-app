@@ -234,7 +234,12 @@ void main() {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => const AutoSleepSetting.legacy(false));
+          .thenAnswer(
+        (_) async => const AutoSleepSetting(
+          enabled: false,
+          duration: AutoSleepDuration.off,
+        ),
+      );
 
       await harness.connect(tester);
       await pumpScreen(tester, DeveloperView(controller: harness.controller));
@@ -247,7 +252,12 @@ void main() {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => const AutoSleepSetting.legacy(true));
+          .thenAnswer(
+        (_) async => const AutoSleepSetting(
+          enabled: true,
+          duration: AutoSleepDuration.seconds30,
+        ),
+      );
 
       await harness.connect(tester);
       await pumpScreen(tester, DeveloperView(controller: harness.controller));
@@ -280,7 +290,7 @@ void main() {
       await reveal(tester, 'On');
       await tester.tap(find.text('On'));
       await flush(tester);
-      verifyNever(() => harness.transport.setAutoSleep(any(), any()));
+      verifyNever(() => harness.transport.setAutoSleepDuration(any(), any()));
     });
 
     testWidgets('with nothing connected the control is unavailable',
@@ -299,7 +309,12 @@ void main() {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => const AutoSleepSetting.legacy(false));
+          .thenAnswer(
+        (_) async => const AutoSleepSetting(
+          enabled: false,
+          duration: AutoSleepDuration.off,
+        ),
+      );
 
       await harness.connect(tester);
       await pumpScreen(tester, DeveloperView(controller: harness.controller));
@@ -308,7 +323,8 @@ void main() {
       await tester.tap(find.text('On'));
       await flush(tester);
 
-      verify(() => harness.transport.setAutoSleep(knownDevice.id, true))
+      verify(() => harness.transport
+              .setAutoSleepDuration(knownDevice.id, AutoSleepDuration.seconds30))
           .called(1);
       expect(harness.controller.autoSleepEnabled, isTrue);
       expect(fillOf(tester, 'On'), AppColors.primaryFill);
@@ -318,7 +334,12 @@ void main() {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => const AutoSleepSetting.legacy(true));
+          .thenAnswer(
+        (_) async => const AutoSleepSetting(
+          enabled: true,
+          duration: AutoSleepDuration.seconds30,
+        ),
+      );
 
       await harness.connect(tester);
       await pumpScreen(tester, DeveloperView(controller: harness.controller));
@@ -327,7 +348,8 @@ void main() {
       await tester.tap(find.text('Off'));
       await flush(tester);
 
-      verify(() => harness.transport.setAutoSleep(knownDevice.id, false))
+      verify(() => harness.transport
+              .setAutoSleepDuration(knownDevice.id, AutoSleepDuration.off))
           .called(1);
       expect(fillOf(tester, 'Off'), AppColors.primaryFill);
     });

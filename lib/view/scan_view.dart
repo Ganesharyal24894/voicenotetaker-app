@@ -497,7 +497,7 @@ Future<void> explainPairing(BuildContext context) {
 /// The words under a recorder's address, and their colour. Null for firmware
 /// that does not pair, whose card stays exactly as it was.
 (String, Color)? pairingLabel(RecorderPairing pairing) => switch (pairing) {
-      RecorderPairing.legacy => null,
+      RecorderPairing.unknown => null,
       RecorderPairing.readyToPair => ('Ready to pair', AppColors.textTertiary),
       RecorderPairing.yours => ('Your recorder', AppColors.connected),
       RecorderPairing.pairedToAnother =>

@@ -65,14 +65,18 @@ void main() {
     expect(find.text('Connect your recorder to change this.'), findsOneWidget);
   });
 
-  testWidgets('auto-sleep: older firmware says to update', (tester) async {
+  testWidgets('auto-sleep: a recorder that did not answer says so',
+      (tester) async {
     final harness = ViewHarness();
     addTearDown(harness.dispose);
+    when(() => harness.transport.readAutoSleep(any())).thenThrow(
+      const BleTransportException('could not read the auto-sleep setting'),
+    );
     await harness.connect(tester);
     await pumpScreen(tester, screen(harness));
 
     expect(enabled(tester, '1 min'), isFalse);
-    expect(find.text('Update your recorder to change this.'), findsOneWidget);
+    expect(find.text("Couldn't read this from your recorder."), findsOneWidget);
   });
 
   testWidgets('auto-sleep: shows the recorder\'s choice and changes it',

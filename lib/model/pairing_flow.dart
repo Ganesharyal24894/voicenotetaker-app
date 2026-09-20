@@ -3,7 +3,7 @@
 /// ```
 /// connecting --connected--> bonding   (Android, recorder pairs, no bond yet)
 ///            \-connected--> securing  (recorder pairs: bonded, or iOS)
-///             \-connected-> done      (older firmware: nothing to secure)
+///             \-connected-> done      (nothing known: nothing to secure)
 /// bonding    --bonded-----> securing
 /// securing   --secured----> done (success)
 /// any        --failed-----> done (PairingOutcome.classify)

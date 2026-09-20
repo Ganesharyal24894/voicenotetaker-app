@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
+import 'package:voicenotetaker_app/model/auto_sleep.dart';
 import 'package:voicenotetaker_app/services/link_monitor.dart';
 
 import 'view/harness.dart' show MockBleTransport, knownDevice;
@@ -23,6 +24,7 @@ import 'view/harness.dart' show MockBleTransport, knownDevice;
 void main() {
   setUpAll(() {
     registerFallbackValue(AudioCodec.imaAdpcm);
+    registerFallbackValue(AutoSleepDuration.off);
   });
 
   late MockBleTransport transport;
@@ -103,7 +105,7 @@ void main() {
     await settle();
 
     verifyNever(() => transport.selectCodec(any(), any()));
-    verifyNever(() => transport.setAutoSleep(any(), any()));
+    verifyNever(() => transport.setAutoSleepDuration(any(), any()));
     expect(link.health.framesReceived, 1);
   });
 

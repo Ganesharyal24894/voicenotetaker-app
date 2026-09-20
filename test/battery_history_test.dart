@@ -48,8 +48,7 @@ void main() {
 
     final h = BatteryHistory.fromBytes(b.build());
 
-    expect(h.version, 1);
-    expect(h.newerLayout, isFalse);
+    expect(h.version, BatteryHistory.layoutVersion);
     expect(h.storeUsable, isTrue);
     expect(h.externalPower, isTrue);
     expect(h.charging, isTrue);
@@ -176,12 +175,16 @@ void main() {
       expect(() => BatteryHistory.fromBytes(<int>[]), throwsFormatException);
     });
 
-    test('version 0', () {
+    test('any layout version but this one', () {
       expect(() => BatteryHistory.fromBytes(HistoryBytes(version: 0).build()),
           throwsFormatException);
+      expect(() => BatteryHistory.fromBytes(HistoryBytes(version: 2).build()),
+          throwsFormatException,
+          reason: 'there is no layout 2, so a value claiming one is a bug '
+              'to see, not a value to half-read');
     });
 
-    test('sections shorter than layout 1', () {
+    test('sections shorter than this layout', () {
       expect(() => BatteryHistory.fromBytes(HistoryBytes(headerLength: 11).build()),
           throwsFormatException);
       expect(() => BatteryHistory.fromBytes(HistoryBytes(currentLength: 60).build()),
@@ -201,7 +204,7 @@ void main() {
       expect(() => BatteryHistory.fromBytes(b.build(truncateTo: 50)), throwsFormatException);
     });
 
-    test('more than eight ring entries in layout 1', () {
+    test('more than eight ring entries', () {
       final b = HistoryBytes()..current.addAll(HistoryBytes.onBattery());
       for (var i = 0; i < 9; i++) {
         b.ring.add(<int, (int, int)>{0: (4, i + 1), 4: (1, 1)});
@@ -215,9 +218,12 @@ void main() {
     });
   });
 
-  test('a newer layout with grown sections is read by its layout-1 prefix', () {
+  test('sections are read at the offsets the header gives, not at fixed ones',
+      () {
+    // The firmware publishes each section's length precisely so one can grow
+    // without every offset after it moving. This is that rule, exercised at
+    // the current layout version.
     final b = HistoryBytes(
-      version: 2,
       headerLength: 16,
       currentLength: 72,
       chargeLength: 36,
@@ -230,8 +236,7 @@ void main() {
       ..ring.add(<int, (int, int)>{0: (4, 40), 4: (1, 2)});
 
     final h = BatteryHistory.fromBytes(b.build());
-    expect(h.version, 2);
-    expect(h.newerLayout, isTrue);
+    expect(h.version, BatteryHistory.layoutVersion);
     expect(h.current.sessionId, 42);
     expect(h.current.lastPercent, 50);
     expect(h.lastCharge!.nextSessionId, 42);

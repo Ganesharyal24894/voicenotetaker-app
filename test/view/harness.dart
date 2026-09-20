@@ -196,9 +196,14 @@ class ViewHarness {
     when(() => transport.disconnect(any())).thenAnswer((_) async {});
     when(() => transport.selectCodec(any(), any())).thenAnswer((_) async {});
     // The device's own default: auto-sleep off. Tests that care re-stub this
-    // - including with a throw, which is what firmware without `fe04` does.
-    when(() => transport.readAutoSleep(any())).thenAnswer((_) async => const AutoSleepSetting.legacy(false));
-    when(() => transport.setAutoSleep(any(), any())).thenAnswer((_) async {});
+    // - including with a throw, which is what a recorder that does not answer
+    // `fe04` looks like from here.
+    when(() => transport.readAutoSleep(any())).thenAnswer(
+      (_) async => const AutoSleepSetting(
+        enabled: false,
+        duration: AutoSleepDuration.off,
+      ),
+    );
     when(() => transport.setAutoSleepDuration(any(), any()))
         .thenAnswer((_) async {});
     // Firmware without `fe09` unless a test says otherwise.

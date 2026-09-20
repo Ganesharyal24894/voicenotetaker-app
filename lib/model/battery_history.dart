@@ -9,11 +9,12 @@
 /// `battery_report.dart`. The byte layout is the firmware's
 /// `doc/battery-history.md`; every offset below is from there.
 ///
-/// SECTIONS ARE READ BY THE LENGTHS IN THE HEADER, never by the v1 constants,
-/// so a later layout that grows a section still parses: the v1 prefix of each
-/// section is read and the rest skipped. A layout that is SHORTER than v1, or a
-/// value that does not hold what its header promises, is refused rather than
-/// half-read.
+/// SECTIONS ARE READ BY THE LENGTHS IN THE HEADER, never by these constants.
+/// That is the protocol, not a concession: the firmware publishes the lengths
+/// precisely so a section can grow without every offset after it moving. A
+/// value whose version is not [layoutVersion], whose sections are shorter than
+/// this layout, or that does not hold what its header promises, is refused
+/// rather than half-read.
 library;
 
 abstract final class BatteryHistoryFlags {
@@ -352,19 +353,19 @@ class BatteryHistory {
     required this.sessions,
   });
 
-  /// The layout this build was written against.
+  /// The one layout there is. A value announcing any other is refused: the
+  /// field stays because a format that will grow is worth a version byte, but
+  /// nothing here branches on it.
   static const int layoutVersion = 1;
 
-  /// The v1 value is at most this long.
+  /// The value is at most this long.
   static const int maxBytes = 428;
 
   static const int headerLength = 12;
   static const int maxRingEntries = 8;
 
+  /// Always [layoutVersion]; anything else was refused at the door.
   final int version;
-
-  /// A layout newer than this build; read by its v1 prefix.
-  bool get newerLayout => version > layoutVersion;
 
   final bool storeUsable;
   final bool externalPower;
@@ -388,8 +389,8 @@ class BatteryHistory {
     }
     final header = _Reader(bytes, 0);
     final version = header.u8(0);
-    if (version == 0) {
-      throw const FormatException('battery history layout version 0');
+    if (version != layoutVersion) {
+      throw FormatException('battery history layout version $version');
     }
     final hdrLen = header.u8(1);
     final curLen = header.u8(2);
@@ -401,11 +402,11 @@ class BatteryHistory {
         chgLen < BatteryHistoryCharge.wireLength ||
         ringLen < BatteryHistorySession.wireLength) {
       throw FormatException(
-        'battery history sections shorter than layout 1: '
+        'battery history sections shorter than layout $layoutVersion: '
         '$hdrLen/$curLen/$chgLen/$ringLen',
       );
     }
-    if (version == layoutVersion && count > maxRingEntries) {
+    if (count > maxRingEntries) {
       throw FormatException('battery history ring of $count entries');
     }
     final needed = hdrLen + curLen + chgLen + count * ringLen;

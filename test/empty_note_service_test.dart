@@ -47,7 +47,6 @@ void main() {
       fileStore: store,
       directory: dir,
       transcripts: TranscriptStore(fileStore: store),
-      settingsDirectory: settingsDir,
     );
   });
 
@@ -93,8 +92,6 @@ void main() {
     expect(report.verdicts[path], EmptyNoteVerdict.delete);
     expect(filesOf(path), isEmpty);
     expect(store.files, contains('$dir/device-tests.json'));
-    // The marker sweep is not the one-time sweep.
-    expect(await service.isFullSweepDone(), isFalse);
   });
 
   test('markEmpty writes the marker the sweep acts on', () async {
@@ -105,37 +102,33 @@ void main() {
         <String>[path]);
   });
 
-  test('an unmarked empty note is left to the one-time sweep', () async {
+  test('an unmarked note is not a candidate: the marker is what is swept',
+      () async {
     final path = note('20260915-100000', text: '');
 
     expect((await service.sweep(useOf: (_) => idle, now: now)).verdicts,
         isEmpty);
     expect(store.files, contains(path));
 
-    final full =
-        await service.sweep(useOf: (_) => idle, now: now, allNotes: true);
-    expect(full.deleted, <String>[path]);
-    expect(await service.isFullSweepDone(), isTrue);
-    expect(store.files, contains('$settingsDir/${EmptyNoteService.sweepDoneFileName}'));
+    await service.markEmpty(path, now: now);
+    expect((await service.sweep(useOf: (_) => idle, now: now)).deleted,
+        <String>[path]);
   });
 
-  test('the one-time sweep leaves notes with words, none, or a failure',
-      () async {
-    final words = note('20260915-090000', text: 'ठीक है');
-    final untranscribed = note('20260915-091000');
-    final failed = note('20260915-092000', text: '');
+  test('a marked note with words, none, or a failure is left alone', () async {
+    final words = note('20260915-090000', text: 'ठीक है', marked: true);
+    final untranscribed = note('20260915-091000', marked: true);
+    final failed = note('20260915-092000', text: '', marked: true);
     store.put(RecordingNaming.transcriptFailurePathOf(failed), <int>[1]);
-    final damaged = note('20260915-093000');
+    final damaged = note('20260915-093000', marked: true);
     store.put(RecordingNaming.transcriptPathOf(damaged), utf8.encode('{'));
 
-    final report =
-        await service.sweep(useOf: (_) => idle, now: now, allNotes: true);
+    final report = await service.sweep(useOf: (_) => idle, now: now);
 
     expect(report.deleted, isEmpty);
     expect(report.verdicts[words], EmptyNoteVerdict.hasSpeech);
-    expect(report.verdicts.containsKey(untranscribed), isFalse);
-    // Filtered out by the listing: a failure is never a candidate.
-    expect(report.verdicts.containsKey(failed), isFalse);
+    expect(report.verdicts[untranscribed], EmptyNoteVerdict.noTranscript);
+    expect(report.verdicts[failed], EmptyNoteVerdict.failed);
     expect(report.verdicts[damaged], EmptyNoteVerdict.noTranscript);
     for (final path in <String>[words, untranscribed, failed, damaged]) {
       expect(store.files, contains(path));
@@ -165,16 +158,15 @@ void main() {
 
   test('an open note is deferred, remembered, and deleted once closed',
       () async {
-    final path = note('20260915-100000', text: '');
+    final path = note('20260915-100000', text: '', marked: true);
 
     final first = await service.sweep(
-        useOf: (p) => p == path ? opened : idle, now: now, allNotes: true);
+        useOf: (p) => p == path ? opened : idle, now: now);
     expect(first.deferred, <String>[path]);
     expect(first.verdicts[path], EmptyNoteVerdict.deferOpen);
     expect(store.files, contains(path));
-    // Marked, so a restart before it is closed still deletes it.
+    // Still marked, so a restart before it is closed still deletes it.
     expect(store.files, contains(RecordingNaming.emptyNotePathOf(path)));
-    expect(await service.isFullSweepDone(), isTrue);
 
     final second = await service.sweep(useOf: (_) => idle, now: now);
     expect(second.deleted, <String>[path]);
@@ -195,13 +187,12 @@ void main() {
   });
 
   test('opened between the judgment and the delete: not deleted', () async {
-    final path = note('20260915-100000', text: '');
+    final path = note('20260915-100000', text: '', marked: true);
     var calls = 0;
 
     final report = await service.sweep(
       useOf: (_) => ++calls == 1 ? idle : opened,
       now: now,
-      allNotes: true,
     );
 
     expect(report.deleted, isEmpty);
@@ -210,15 +201,19 @@ void main() {
   });
 
   test('marked Keep between the judgment and the delete: kept', () async {
-    final path = note('20260915-100000', text: '');
-    store.onWrite = (written) {
-      if (written == RecordingNaming.emptyNotePathOf(path)) {
-        store.put(RecordingNaming.keepAudioPathOf(path), <int>[1]);
-      }
-    };
+    final path = note('20260915-100000', text: '', marked: true);
+    var calls = 0;
 
-    final report =
-        await service.sweep(useOf: (_) => idle, now: now, allNotes: true);
+    final report = await service.sweep(
+      useOf: (_) {
+        // Between the first verdict and the re-check the user tapped Keep.
+        if (++calls == 1) {
+          store.put(RecordingNaming.keepAudioPathOf(path), <int>[1]);
+        }
+        return idle;
+      },
+      now: now,
+    );
 
     expect(report.verdicts[path], EmptyNoteVerdict.kept);
     expect(store.files, contains(path));
@@ -249,17 +244,14 @@ void main() {
     });
 
     test('a delete that throws leaves the marker for next time', () async {
-      final path = note('20260915-100000', text: '');
+      final path = note('20260915-100000', text: '', marked: true);
       store.failDeletes = <String>{RecordingNaming.transcriptPathOf(path)};
 
-      final report =
-          await service.sweep(useOf: (_) => idle, now: now, allNotes: true);
+      final report = await service.sweep(useOf: (_) => idle, now: now);
 
       expect(report.failed, <String>[path]);
       expect(store.files, isNot(contains(path)));
       expect(store.files, contains(RecordingNaming.emptyNotePathOf(path)));
-      // Not remembered as done: the one-time sweep runs again.
-      expect(await service.isFullSweepDone(), isFalse);
 
       store.failDeletes = <String>{};
       expect((await service.sweep(useOf: (_) => idle, now: now)).deleted,
@@ -284,8 +276,7 @@ void main() {
       fileStore: _ThrowingList(),
       directory: dir,
       transcripts: TranscriptStore(fileStore: store),
-      settingsDirectory: settingsDir,
-    ).sweep(useOf: (_) => idle, now: now, allNotes: true);
+    ).sweep(useOf: (_) => idle, now: now);
     expect(report.verdicts, isEmpty);
   });
 }

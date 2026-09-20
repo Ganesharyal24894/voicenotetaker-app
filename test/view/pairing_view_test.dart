@@ -212,7 +212,7 @@ void main() {
       expect(opened, isTrue);
     });
 
-    testWidgets('older firmware: no pairing section', (tester) async {
+    testWidgets('nothing known about pairing: no pairing section', (tester) async {
       final harness = await started(tester);
       await harness.controller.connect(recorder(knownDevice.id, null));
       await pumpScreen(tester, settings(harness), size: const Size(390, 1200));

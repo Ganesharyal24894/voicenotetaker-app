@@ -7,8 +7,10 @@ library;
 import 'pairing_advert.dart';
 
 enum RecorderPairing {
-  /// Older firmware: no pairing at all. Shown as it always was.
-  legacy,
+  /// The scan response carried no pairing field, so nothing is known: the
+  /// recorder is shown plainly and connecting is not blocked. A scan response
+  /// can arrive without it, so this is a "not yet" rather than a "no".
+  unknown,
 
   /// No owner yet: the first phone that pairs becomes it.
   readyToPair,
@@ -34,7 +36,7 @@ enum RecorderPairing {
     bool remembered = false,
     bool refusedHere = false,
   }) {
-    if (advert == null) return RecorderPairing.legacy;
+    if (advert == null) return RecorderPairing.unknown;
     final ours = (bonded ?? false) || remembered;
     if (advert.windowOpen) {
       return ours && advert.owned && !refusedHere

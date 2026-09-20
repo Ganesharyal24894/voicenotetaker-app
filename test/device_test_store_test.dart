@@ -44,7 +44,6 @@ void main() {
     expect(store.results, isEmpty);
     expect(store.latestOf(DeviceTestKind.sensitivity), isNull);
     expect(store.unreadRunCount, 0);
-    expect(store.retiredRunCount, 0);
   });
 
   test('until it is loaded it does not claim there is no history', () {
@@ -155,8 +154,6 @@ void main() {
     // Counted, not silently absent: a screen showing two of three runs has to be
     // able to say where the third went.
     expect(reopened.unreadRunCount, 1);
-    // From a future build, not a measurement this app used to take.
-    expect(reopened.retiredRunCount, 0);
   });
 
   test('a corrupt file leaves an empty history and does not throw', () async {
@@ -494,18 +491,17 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
-  // THE BASELINE MUST SURVIVE THE MEASUREMENTS THAT WERE REMOVED
+  // A ROW THIS BUILD CANNOT READ MUST SURVIVE A REWRITE
   //
-  // There is a phone with runs of the range walk, the link soak and
-  // wake-on-motion in it, taken on the bare board before the enclosure existed.
-  // This build cannot read any of the three. The file is REWRITTEN on every
-  // append, so the danger is not that those rows fail to display - it is that
-  // the next mic check silently erases them. These are the tests that say it
-  // does not.
+  // There is a phone with a bare-board baseline in it, taken before the
+  // enclosure existed, and those numbers cannot be taken again. The file is
+  // REWRITTEN on every append, so the danger is not that an unreadable row
+  // fails to display - it is that the next mic check silently erases it.
+  // These are the tests that say it does not.
   // -------------------------------------------------------------------------
-  group('runs of a retired measurement', () {
-    /// The file as the old build left it: acoustic runs this build reads,
-    /// interleaved with runs of the three measurements it does not.
+  group('rows this build cannot read', () {
+    /// A file with runs this build reads interleaved with rows whose shape it
+    /// does not recognise.
     Future<DeviceTestStore> baselineOn(MemoryFileStore files) async {
       final store = storeOn(files);
       Map<String, Object?> row(String kind, String at, num value) =>
@@ -548,9 +544,6 @@ void main() {
 
       expect(store.results, hasLength(2));
       expect(store.unreadRunCount, 3);
-      // All three are retired measurements, none is from a future build - which
-      // is the distinction the screen needs in order to explain itself.
-      expect(store.retiredRunCount, 3);
     });
 
     test('survive an append, byte for byte', () async {
@@ -580,8 +573,9 @@ void main() {
           'range',
         ],
       );
-      // Not just present - UNCHANGED. The wake run still carries the reading and
-      // the note it was written with, because nothing interpreted it.
+      // Not just present - UNCHANGED. The unreadable row still carries the
+      // reading and the note it was written with, because nothing interpreted
+      // it.
       final wake = rows[1];
       expect(wake['note'], 'from the bare board');
       expect(wake['startedAt'], '2026-09-13T14:05:00.000Z');
@@ -590,8 +584,8 @@ void main() {
         'value': 1.9,
         'unit': 'dBFS',
       });
-      // And the row the old build wrote for the range walk still has its
-      // `steps` key, which this build has no field for at all.
+      // And the last row still has its `steps` key, which this build has no
+      // field for at all.
       expect(rows.last.containsKey('steps'), isTrue);
     });
 
@@ -607,31 +601,6 @@ void main() {
 
       expect(reopened.results, hasLength(3));
       expect(reopened.unreadRunCount, 3);
-      expect(reopened.retiredRunCount, 3);
-    });
-
-    test('the retired names are the three that were removed, and nothing else',
-        () {
-      expect(
-        DeviceTestStore.retiredKinds,
-        <String>{'range', 'link-soak', 'wake-on-motion'},
-      );
-      // Documented rather than remembered: every one of them is a string that
-      // exists in a file somewhere.
-      for (final kind in DeviceTestKind.values) {
-        expect(
-          DeviceTestStore.retiredKinds.contains(kind.wireName),
-          isFalse,
-          reason: '${kind.wireName} is still taken',
-        );
-      }
-    });
-
-    test('the format version was NOT bumped for the removal', () {
-      // Bumping it would make this build refuse to read the baseline it most
-      // needs: the shape did not change, three values of one field simply
-      // stopped being produced.
-      expect(DeviceTestStore.formatVersion, 1);
     });
   });
 }

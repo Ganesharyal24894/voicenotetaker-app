@@ -47,7 +47,7 @@ void main() {
     await harness.controller.startScan();
     await settle();
     expect(harness.controller.pairingOf(harness.controller.devices.single),
-        RecorderPairing.legacy);
+        RecorderPairing.unknown);
 
     await harness.advertise(null, recorder(owned, bonded: false));
 
@@ -69,7 +69,7 @@ void main() {
     expect(harness.controller.pairedSince, isNotNull);
   });
 
-  test('older firmware connects exactly as before', () async {
+  test('a recorder that says nothing about pairing still connects', () async {
     final pairing = FakeBlePairing();
     final harness = await started(pairing);
 

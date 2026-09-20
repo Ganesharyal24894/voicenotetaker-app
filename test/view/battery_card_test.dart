@@ -129,7 +129,7 @@ void main() {
       expect(find.text(BatteryCopy.notConnected), findsOneWidget);
     });
 
-    testWidgets('older firmware says to update the recorder', (tester) async {
+    testWidgets('a recorder with no fe09 says so', (tester) async {
       final harness = ViewHarness();
       addTearDown(harness.dispose);
       await harness.connect(tester);

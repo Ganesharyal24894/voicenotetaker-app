@@ -84,7 +84,7 @@ void main() {
     expect(harness.controller.isRecording, isFalse);
   });
 
-  test('old firmware needs an update, and manual recording still works',
+  test('no fe08 needs an update, and manual recording still works',
       () async {
     final (harness, background) = await started(newFirmware: false);
 

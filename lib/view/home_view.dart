@@ -315,7 +315,8 @@ class _HomeHeader extends StatelessWidget {
 ///
 ///   * bars - the device measured a charge and said so;
 ///   * unknown because the device has no reading (`0xFF` on the wire);
-///   * unknown because there is no `fe05` at all - older firmware, a failed
+///   * unknown because there is no `fe05` at all - a board not running this
+///     firmware, a failed
 ///     read, or nothing connected.
 ///
 /// The last two draw an EMPTY SHELL with no slots in it at all, which is a

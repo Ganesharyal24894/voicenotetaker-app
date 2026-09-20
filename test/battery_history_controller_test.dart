@@ -64,7 +64,7 @@ void main() {
     verify(() => harness.transport.readBatteryHistory(knownDevice.id)).called(1);
   });
 
-  test('older firmware without fe09 is "not supported", not an error',
+  test('a recorder that does not answer fe09 is "not supported", not an error',
       () async {
     final harness = ViewHarness();
     addTearDown(harness.dispose);

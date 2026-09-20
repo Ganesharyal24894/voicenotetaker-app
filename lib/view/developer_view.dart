@@ -101,10 +101,10 @@ class _DeveloperViewState extends State<DeveloperView> {
       'rssi: ${Fmt.rssi(device?.rssi)}',
       'codec requested: ${_controller.preferredCodec.name}',
       // Reported as unknown when the device never told us, so a report from a
-      // board running older firmware cannot be misread as "auto-sleep off".
+      // board that did not answer cannot be misread as "auto-sleep off".
       'auto-sleep: ${_controller.autoSleepAvailable ? (_controller.autoSleepEnabled ? 'on' : 'off') : 'unknown'}',
       // Same rule: "unknown" rather than a number, so a report from a board
-      // running older firmware cannot be misread as a flat battery.
+      // that did not answer cannot be misread as a flat battery.
       'battery: ${_controller.batteryAvailable ? (_controller.batteryPercent == null ? 'unknown (0xFF)' : '${_controller.batteryPercent}%') : 'unavailable'}',
       // What Home was DRAWING at the time, beside the figure it came from:
       // a report that only carried the percentage could not explain a
@@ -442,7 +442,8 @@ class _BatteryCard extends StatelessWidget {
 ///
 /// UNAVAILABLE IS A REAL STATE, NOT A DEFAULT. When the device has not
 /// reported the flag - nothing is connected, the read failed, or the firmware
-/// predates `fe04` - NEITHER segment is selected and neither is tappable.
+/// did not answer `fe04` - NEITHER segment is selected and neither is
+/// tappable.
 /// Showing "Off" there would be a claim about a setting that can put the
 /// recorder to sleep, made without having read it.
 class _AutoSleepCard extends StatelessWidget {
@@ -595,12 +596,10 @@ String _temperatureLine(AppController controller) {
 List<String> _retiredRunLines(AppController controller) {
   final unread = controller.unreadDeviceTestRunCount;
   if (unread == 0) return const <String>[];
-  final retired = controller.retiredDeviceTestRunCount;
   return <String>[
     '',
-    'saved runs this build does not read: $unread '
-        '($retired of a retired measurement, ${unread - retired} from a newer '
-        'build). They are kept in the file untouched.',
+    'saved runs this build does not read: $unread. '
+        'They are kept in the file untouched.',
   ];
 }
 

@@ -10,7 +10,8 @@ import 'format.dart';
 abstract final class BatteryCopy {
   static const String notConnected = 'Connect your recorder to see its battery.';
   static const String notSupported = 'Update your recorder to see battery history.';
-  static const String unreadable = "Update the app to read this recorder's battery history.";
+  static const String unreadable =
+      "Couldn't read this recorder's battery history.";
   static const String reading = 'Reading…';
   static const String notEnoughData = 'Not enough data yet';
   static const String footnote =

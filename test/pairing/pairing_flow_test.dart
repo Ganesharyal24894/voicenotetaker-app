@@ -32,7 +32,7 @@ void main() {
       expect(flow.outcome, PairingOutcome.success);
     });
 
-    test('older firmware: nothing to bond or secure', () {
+    test('nothing known about pairing: nothing to bond or secure', () {
       final flow = PairingFlow(advert: null, systemBonds: true);
       expect(flow.recorderPairs, isFalse);
       expect(flow.connected(), PairingStep.done);
@@ -83,7 +83,7 @@ void main() {
   group('RecorderPairing.resolve', () {
     test('no status: older firmware', () {
       expect(RecorderPairing.resolve(advert: null, bonded: true),
-          RecorderPairing.legacy);
+          RecorderPairing.unknown);
     });
 
     test('flags 00: ready to pair', () {

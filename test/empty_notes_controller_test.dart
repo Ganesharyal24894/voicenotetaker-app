@@ -6,7 +6,6 @@ import 'package:voicenotetaker_app/model/language_router.dart';
 import 'package:voicenotetaker_app/model/recording_info.dart';
 import 'package:voicenotetaker_app/model/transcript.dart';
 import 'package:voicenotetaker_app/model/transcription.dart';
-import 'package:voicenotetaker_app/services/empty_note_service.dart';
 import 'package:voicenotetaker_app/services/library_service.dart';
 
 import 'view/harness.dart';
@@ -155,44 +154,30 @@ void main() {
   });
 
   group('at start', () {
-    test('existing empty transcripts are swept once', () async {
-      final (harness, empty) = await seeded(transcript: '  ');
-      final (_, spoken) = await seeded(reuse: harness, transcript: 'ठीक है');
-
-      await harness.controller.initialise();
-
-      expect(filesOf(harness, empty), isEmpty);
-      expect(harness.fileStore.files, contains(spoken));
-      expect(harness.controller.recordings.map((r) => r.path), <String>[spoken]);
-      expect(
-          harness.fileStore.files,
-          contains('${ViewHarness.recordingsDirectory}/'
-              '${EmptyNoteService.sweepDoneFileName}'));
-
-      // Once: a later start does not read every transcript again, so an
-      // empty transcript that is not marked (put there by hand) stays.
-      final restarted = ViewHarness();
-      addTearDown(restarted.dispose);
-      restarted.fileStore.files.addAll(harness.fileStore.files);
-      restarted.fileStore.files[RecordingNaming.transcriptPathOf(spoken)] =
-          transcriptJson('');
-      await restarted.controller.initialise();
-      expect(restarted.fileStore.files, contains(spoken));
-    });
-
     test('a marked note is finished at every start', () async {
       final (harness, path) = await seeded(transcript: '', marked: true);
-      harness.fileStore.files[
-          '${ViewHarness.recordingsDirectory}/'
-          '${EmptyNoteService.sweepDoneFileName}'] = <int>[1];
+      final (_, spoken) =
+          await seeded(reuse: harness, transcript: 'ठीक है', marked: true);
 
       await harness.controller.initialise();
 
       expect(filesOf(harness, path), isEmpty);
+      expect(harness.fileStore.files, contains(spoken));
+      expect(harness.controller.recordings.map((r) => r.path), <String>[spoken]);
+    });
+
+    test('an empty transcript that was never marked is left alone', () async {
+      // The marker is what the sweep acts on, and only this app writes it.
+      // An empty transcript put there by hand is not this app's to delete.
+      final (harness, path) = await seeded(transcript: '  ');
+
+      await harness.controller.initialise();
+
+      expect(harness.fileStore.files, contains(path));
     });
 
     test('a kept empty note survives the sweep', () async {
-      final (harness, path) = await seeded(transcript: '');
+      final (harness, path) = await seeded(transcript: '', marked: true);
       harness.fileStore.files[RecordingNaming.keepAudioPathOf(path)] = <int>[1];
 
       await harness.controller.initialise();

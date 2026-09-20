@@ -86,24 +86,16 @@ abstract class BleTransport {
   /// Writes [codec] to the `fe03` control characteristic.
   Future<void> selectCodec(String deviceId, AudioCodec codec);
 
-  /// Reads the `fe04` auto-sleep characteristic.
+  /// Reads the `fe04` auto-sleep characteristic: two bytes, `[flags, code]`.
   ///
-  /// Accepts both forms: one byte from firmware that only knows on/off, two
-  /// bytes `[flags, code]` from firmware with durations - the answer's
-  /// [AutoSleepSetting.supportsDuration] says which.
-  ///
-  /// Throws [BleTransportException] when the characteristic is absent - which
-  /// is what firmware older than `fe04` looks like from here - or when the
-  /// value is in neither form. Callers must treat that as "unknown", never as
-  /// "off".
+  /// Throws [BleTransportException] when the characteristic does not answer -
+  /// a board that is not running this firmware, or a link that dropped - or
+  /// when the value is malformed. Callers must treat that as "unknown", never
+  /// as "off".
   Future<AutoSleepSetting> readAutoSleep(String deviceId);
 
-  /// Writes [enabled] to `fe04` as the legacy single byte. The firmware keeps
-  /// its stored duration.
-  Future<void> setAutoSleep(String deviceId, bool enabled);
-
-  /// Writes [duration] to `fe04` as two bytes. Only for firmware whose read
-  /// was two bytes; older firmware refuses the length.
+  /// Writes [duration] to `fe04` as two bytes. [AutoSleepDuration.off] turns
+  /// auto-sleep off and leaves the recorder's stored duration alone.
   Future<void> setAutoSleepDuration(String deviceId, AutoSleepDuration duration);
 
   /// Reads the `fe09` battery-life history once, as its raw bytes.

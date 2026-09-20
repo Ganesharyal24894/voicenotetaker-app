@@ -22,12 +22,12 @@ abstract final class DeviceProfile {
   static const String controlCharacteristicUuid =
       '6e40fe03-b5a3-f393-e0a9-e50e24dcca9e';
 
-  /// `fe04` - READ + WRITE, the auto-sleep setting (see [AutoSleep]): one
-  /// byte on older firmware, `[flags, code]` with a duration on newer. The firmware persists it in flash, so it survives a
-  /// reboot and must be read rather than assumed.
+  /// `fe04` - READ + WRITE, the auto-sleep setting (see [AutoSleep]): two
+  /// bytes, `[flags, code]`. The firmware persists it in flash, so it
+  /// survives a reboot and must be read rather than assumed.
   ///
-  /// Firmware older than this characteristic simply does not have it; the app
-  /// treats the absence as "setting unavailable", never as "off".
+  /// A board that does not answer here is not running this firmware; the app
+  /// treats that as "setting unavailable", never as "off".
   static const String autoSleepCharacteristicUuid =
       '6e40fe04-b5a3-f393-e0a9-e50e24dcca9e';
 
@@ -47,8 +47,8 @@ abstract final class DeviceProfile {
   /// A DIE temperature, not an ambient one. The sensor is inside the same
   /// package as the CPU and the radio, so it reads above the room, and it
   /// reads higher again inside a plastic case with a cell underneath. Firmware
-  /// older than this characteristic simply does not have it; the app treats
-  /// the absence as "temperature unavailable", never as 0 °C.
+  /// A board that does not answer here is not running this firmware; the app
+  /// treats that as "temperature unavailable", never as 0 °C.
   static const String temperatureCharacteristicUuid =
       '6e40fe07-b5a3-f393-e0a9-e50e24dcca9e';
 
@@ -59,15 +59,20 @@ abstract final class DeviceProfile {
   ///
   /// THE LIVENESS CONTRACT RIDES ON IT TOO. The firmware drops a link that has
   /// seen no GATT activity from the phone for ten minutes, so while always
-  /// listening the app reads this characteristic every minute. Firmware older
-  /// than `fe08` simply does not have it; the app treats the absence as "needs
-  /// a firmware update", and manual recording keeps working.
+  /// listening the app reads this characteristic every minute.
+  ///
+  /// THE ONE CAPABILITY CHECK THE APP KEEPS. A board that does not answer
+  /// here is not running this firmware - most likely one that was never
+  /// flashed with it - and always-listening is the one feature that genuinely
+  /// cannot work without it. The app says "needs an update" and keeps manual
+  /// recording rather than crashing or pretending to listen.
   static const String captureCharacteristicUuid =
       '6e40fe08-b5a3-f393-e0a9-e50e24dcca9e';
 
   /// `fe09` - READ only, up to 428 bytes of battery-life history (see
   /// `BatteryHistory`). The device has no clock, so every read is stored with
-  /// the phone's time as an anchor. Older firmware does not have it.
+  /// the phone's time as an anchor. A board that does not answer here is not
+  /// running this firmware.
   static const String batteryHistoryCharacteristicUuid =
       '6e40fe09-b5a3-f393-e0a9-e50e24dcca9e';
 

@@ -50,12 +50,11 @@ abstract final class RecordingNaming {
   /// Suffix of the marker saying "keep this recording's audio".
   ///
   /// A SIDECAR, NOT A FIELD IN THE TRANSCRIPT: a recording can be kept before
-  /// it has a transcript, and adding a field to the transcript would mean a
-  /// format-version bump that makes every older transcript unreadable. Its
-  /// PRESENCE is the flag, so the library learns it from the directory
-  /// listing it already makes, a recording from before this existed simply
-  /// reads as not kept, and setting or clearing it is one create or one
-  /// delete - nothing half-written to parse after a kill.
+  /// it has a transcript at all, and transcribing again replaces the
+  /// transcript file whole. Its PRESENCE is the flag, so the library learns
+  /// it from the directory listing it already makes, and setting or clearing
+  /// it is one create or one delete - nothing half-written to parse after a
+  /// kill.
   static const String keepAudioSuffix = '.keep-audio.json';
 
   static String keepAudioPathOf(String audioPath) =>

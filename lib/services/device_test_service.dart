@@ -118,9 +118,6 @@ class DeviceTestService {
   /// looking as though runs were thrown away.
   int get unreadRunCount => _store.unreadRunCount;
 
-  /// How many of [unreadRunCount] are runs of a measurement that was retired.
-  int get retiredRunCount => _store.retiredRunCount;
-
   /// Every saved batch of [kind], newest first - what the screen compares.
   List<DeviceTestBatch> batchesOf(DeviceTestKind kind) =>
       _store.batchesOf(kind);

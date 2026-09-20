@@ -16,10 +16,10 @@ import '../model/device_test_result.dart';
 /// THE FILE IS ALSO A BASELINE SOMEBODY ALREADY PAID FOR. There is a phone with
 /// runs in it taken on the bare board, before the enclosure existed, and those
 /// numbers cannot be taken again - the board is going in a case. So this class
-/// keeps EVERY ROW IT FINDS, including rows it cannot read: see [_Row] and
-/// [retiredKinds]. The file is rewritten on every append, and a rewrite that
-/// quietly dropped what this build does not understand would destroy the very
-/// measurements the file exists for.
+/// keeps EVERY ROW IT FINDS, including rows it cannot read: see [_Row]. The
+/// file is rewritten on every append, and a rewrite that quietly dropped what
+/// this build does not understand would destroy the very measurements the file
+/// exists for.
 class DeviceTestStore {
   /// Private initializing formals keep the public parameter names
   /// (`fileStore:`, `directory:`) while assigning the private fields - the same
@@ -37,29 +37,11 @@ class DeviceTestStore {
 
   /// Bumped only if the shape changes incompatibly. A file from a NEWER
   /// version is not read, because this build cannot know what its fields mean.
-  ///
-  /// NOT BUMPED when the range walk, the link soak and the wake test were
-  /// retired, and deliberately: the shape did not change, three values of one
-  /// field simply stopped being produced. Bumping would have made this build
-  /// refuse to read the baseline it most needs.
   static const int formatVersion = 1;
 
   /// Runs kept, newest first. Well past a year of daily use, and small enough
   /// that the whole history fits in a diagnostics paste.
   static const int defaultMaxResults = 200;
-
-  /// Measurements this app used to take and no longer does.
-  ///
-  /// DOCUMENTED RATHER THAN FORGOTTEN. Rows with these kinds are still on disk
-  /// on any phone that ran the old build, they are still written back out
-  /// verbatim, and the screen says how many there are - which is the difference
-  /// between "ignored" and "quietly deleted". The reasons each was retired are
-  /// in the library comment of `model/device_test_result.dart`.
-  static const Set<String> retiredKinds = <String>{
-    'range',
-    'link-soak',
-    'wake-on-motion',
-  };
 
   final FileStore _fileStore;
   final String _directory;
@@ -79,19 +61,13 @@ class DeviceTestStore {
         _rows.map((row) => row.result).whereType<DeviceTestResult>(),
       );
 
-  /// Rows in the file this build does not read: runs of a retired measurement,
-  /// and anything written by a newer build.
+  /// Rows in the file this build does not read - anything whose shape it does
+  /// not recognise.
   ///
   /// Surfaced as a COUNT rather than hidden, so a history that shows 12 runs out
   /// of a file of 15 can say where the other three went instead of looking like
   /// data loss.
   int get unreadRunCount => _rows.where((row) => row.result == null).length;
-
-  /// How many of [unreadRunCount] are runs of a measurement that was retired,
-  /// as against rows from a future build.
-  int get retiredRunCount => _rows
-      .where((row) => row.result == null && row.isRetired)
-      .length;
 
   String get path => _fileStore.join(_directory, fileName);
 
@@ -198,8 +174,8 @@ class DeviceTestStore {
 /// One entry of the saved file: its JSON, and the result if this build can read
 /// it.
 ///
-/// THE JSON IS THE SOURCE OF TRUTH FOR WRITING, not the model. That is what lets
-/// a run of a retired measurement survive every future append: it is never
+/// THE JSON IS THE SOURCE OF TRUTH FOR WRITING, not the model. That is what
+/// lets a row this build cannot read survive every future append: it is never
 /// interpreted, only carried.
 class _Row {
   const _Row({required this.json, required this.result});
@@ -208,8 +184,7 @@ class _Row {
   factory _Row.of(DeviceTestResult result) =>
       _Row(json: result.toJson(), result: result);
 
-  /// A row out of the file. [result] is null when it cannot be read - a retired
-  /// kind, or anything a newer build invented.
+  /// A row out of the file. [result] is null when it cannot be read.
   factory _Row.read(Map<String, Object?> json) {
     try {
       return _Row(json: json, result: DeviceTestResult.fromJson(json));
@@ -222,10 +197,4 @@ class _Row {
 
   /// Null when this build does not understand the row.
   final DeviceTestResult? result;
-
-  /// True when the row is a run of a measurement this app used to take.
-  bool get isRetired {
-    final kind = json['kind'];
-    return kind is String && DeviceTestStore.retiredKinds.contains(kind);
-  }
 }

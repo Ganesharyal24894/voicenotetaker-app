@@ -27,8 +27,8 @@
 ///     auto-sleep into the device's flash and dropped the link, which is a
 ///     mutation with nothing trustworthy to show for it.
 ///
-/// Their wire names are listed in `DeviceTestStore.retiredKinds` and runs saved
-/// under them are KEPT IN THE FILE, untouched - see that class. This build just
+/// Runs saved under them are KEPT IN THE FILE, untouched - `DeviceTestStore`
+/// carries every row it cannot read rather than dropping it. This build just
 /// does not read them.
 ///
 /// Pure data, like [BatteryStatus] and [StreamInfo]: no I/O, no formatting.

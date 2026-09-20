@@ -44,7 +44,12 @@ void main() {
       (_) async => const BatteryStatus(percent: 64, charging: true),
     );
     when(() => harness.transport.readAutoSleep(any()))
-        .thenAnswer((_) async => const AutoSleepSetting.legacy(true));
+        .thenAnswer(
+      (_) async => const AutoSleepSetting(
+        enabled: true,
+        duration: AutoSleepDuration.seconds30,
+      ),
+    );
 
     await harness.controller.connect(knownDevice);
     expect(harness.controller.isConnected, isTrue);
@@ -104,12 +109,12 @@ void main() {
   test('a successful disconnect clears a stale error message', () async {
     final harness = ViewHarness();
     addTearDown(harness.dispose);
-    when(() => harness.transport.setAutoSleep(any(), any()))
+    when(() => harness.transport.setAutoSleepDuration(any(), any()))
         .thenThrow(const BleTransportException('write failed'));
 
     await harness.controller.connect(knownDevice);
     await harness.controller.setAutoSleep(true);
-    expect(harness.controller.errorMessage, 'write failed');
+    expect(harness.controller.errorMessage, 'Could not change auto-sleep.');
 
     await harness.controller.disconnect();
 

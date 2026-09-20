@@ -312,10 +312,6 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.textContaining('2 of a retired measurement'),
-      findsOneWidget,
-    );
-    expect(
       find.textContaining('kept in the file untouched'),
       findsOneWidget,
     );

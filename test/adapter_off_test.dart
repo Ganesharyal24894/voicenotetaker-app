@@ -62,7 +62,12 @@ void main() {
         (_) async => const BatteryStatus(percent: 64, charging: true),
       );
       when(() => harness.transport.readAutoSleep(any()))
-          .thenAnswer((_) async => const AutoSleepSetting.legacy(true));
+          .thenAnswer(
+        (_) async => const AutoSleepSetting(
+          enabled: true,
+          duration: AutoSleepDuration.seconds30,
+        ),
+      );
 
       await harness.begin(tester);
       await harness.connect(tester);

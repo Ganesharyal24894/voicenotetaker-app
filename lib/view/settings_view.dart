@@ -26,7 +26,7 @@ import 'widgets/motion.dart';
 /// the recorder's owner - and a row into Diagnostics.
 ///
 /// PAIRING IS HIDDEN UNTIL IT MEANS SOMETHING: a recorder that does not pair
-/// (older firmware), or one this phone has not paired with, has nothing to
+/// (nothing known), or one this phone has not paired with, has nothing to
 /// show there.
 ///
 /// CONNECT AND DISCONNECT live under the Listening card, and only while
@@ -552,7 +552,7 @@ class AlwaysListeningCard extends StatelessWidget {
 /// "Sleep when still for": 30 s, 1 min, 2 min, 5 min, Never.
 ///
 /// The choice is the recorder's, kept in its flash, so it is READ, never
-/// assumed: with no link, or firmware that cannot take a duration, nothing is
+/// assumed: with no link, or with a recorder that did not answer, nothing is
 /// selected, nothing can be tapped, and one plain line says why.
 ///
 /// A tap shows at once; if the recorder refuses, the old choice comes back and
@@ -576,13 +576,13 @@ class AutoSleepCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final usable = controller.isConnected && controller.autoSleepDurationSupported;
+    final usable = controller.isConnected && controller.autoSleepAvailable;
     final current = usable ? controller.autoSleepDuration : null;
     final String note;
     if (!controller.isConnected) {
       note = 'Connect your recorder to change this.';
     } else if (!usable) {
-      note = 'Update your recorder to change this.';
+      note = "Couldn't read this from your recorder.";
     } else {
       note = 'Wakes when you move. Longer uses more battery.';
     }

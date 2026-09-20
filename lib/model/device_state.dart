@@ -29,7 +29,7 @@ class DiscoveredDevice {
   final int? rssi;
 
   /// The pairing status from the scan response; null when the scan result
-  /// carried none - older firmware, or a result seen without its scan response
+  /// carried none - a result seen without its scan response, or a recorder
   /// yet, or a device made up from a remembered id.
   final PairingAdvert? pairing;
 

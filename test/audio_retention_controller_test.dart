@@ -221,9 +221,6 @@ void main() {
             .where((p) => p.startsWith(ViewHarness.recordingsDirectory)),
         unorderedEquals(<String>[
           '${ViewHarness.recordingsDirectory}/audio-retention-settings.json',
-          // The one-time empty-note sweep's record; settings live beside the
-          // recordings in this harness.
-          '${ViewHarness.recordingsDirectory}/empty-notes-sweep.json',
         ]));
   });
 }

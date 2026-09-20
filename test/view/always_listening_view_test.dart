@@ -143,8 +143,11 @@ void main() {
     await stopListening(tester, harness);
   });
 
-  testWidgets('old firmware says it needs an update and keeps Record',
-      (tester) async {
+  testWidgets('a recorder with no fe08 says it needs an update, and Record '
+      'still works', (tester) async {
+    // The one firmware check the app keeps: a board that does not answer fe08
+    // is not running this firmware, and always-listening is the one feature
+    // that genuinely cannot work without it.
     final harness = await connected(tester, fe08: false);
     await harness.controller.setContinuousEnabled(true);
     await pumpScreen(tester, home(harness));
@@ -152,7 +155,6 @@ void main() {
     expect(find.text('Not saving — recorder needs an update'), findsOneWidget);
     await openSheet(tester);
     expect(find.text('Not saving — recorder needs an update'), findsOneWidget);
-    expect(find.text('Update your recorder to change this.'), findsOneWidget);
     await stopListening(tester, harness);
   });
 

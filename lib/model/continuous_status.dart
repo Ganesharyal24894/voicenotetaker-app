@@ -21,8 +21,9 @@ enum ContinuousStatus {
   /// forgetting the recorder in the phone's Bluetooth settings fixes it.
   oldPairing('Pairing needs a reset'),
 
-  /// On and connected, but the firmware has no `fe08`. Manual recording still
-  /// works; always-listening cannot.
+  /// On and connected, but the recorder does not answer `fe08` - it is not
+  /// running this firmware. Manual recording still works; always-listening
+  /// genuinely cannot.
   needsFirmwareUpdate('Needs firmware update'),
 
   /// On, no link, and the recorder let the link go and stopped advertising:
@@ -61,7 +62,8 @@ enum ContinuousStatus {
   ///
   /// [captureSupported] is null while it has not been checked yet - a link
   /// that is still coming up - which reads as "listening" rather than as a
-  /// firmware problem nobody has found. [flags] is null until the device has
+  /// firmware problem nobody has found. Only a definite `false` accuses the
+  /// board of not being flashed. [flags] is null until the device has
   /// answered once, which reads the same way for the same reason.
   static ContinuousStatus resolve({
     required bool enabled,

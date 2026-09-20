@@ -39,7 +39,7 @@ void main() {
       expect(TranscriptLayout.speakers(loaded), isEmpty);
     });
 
-    test('no speaker writes no key, so older builds read it unchanged', () {
+    test('no speaker writes no key at all', () {
       final json = _transcript(<TranscriptSegment>[_seg(0, 8, 'हाँ')]).toJson();
       final segment = (json['segments']! as List<Object?>).single!
           as Map<String, Object?>;

@@ -61,17 +61,11 @@ class EmptyNoteService {
     required this._fileStore,
     required this._directory,
     required this._transcripts,
-    required String settingsDirectory,
-  }) : _sweepDonePath = _fileStore.join(settingsDirectory, sweepDoneFileName);
-
-  /// Written once every existing note has been looked at, so that full sweep
-  /// runs once; the marker sweep runs at every start.
-  static const String sweepDoneFileName = 'empty-notes-sweep.json';
+  });
 
   final FileStore _fileStore;
   final String _directory;
   final TranscriptStore _transcripts;
-  final String _sweepDonePath;
 
   /// Records that [audioPath]'s transcription found no speech. The next
   /// [sweep] deletes it when the rules allow.
@@ -84,25 +78,14 @@ class EmptyNoteService {
         })),
       );
 
-  /// Whether the one-time sweep of every note has run on this install.
-  Future<bool> isFullSweepDone() async {
-    try {
-      return await _fileStore.stat(_sweepDonePath) != null;
-    } on Object {
-      return false;
-    }
-  }
-
-  /// Looks at every marked note - and, with [allNotes], every note with a
-  /// saved transcript - and deletes those [EmptyNotePolicy] allows.
+  /// Looks at every marked note and deletes those [EmptyNotePolicy] allows.
   ///
   /// [useOf] is asked when a note is judged and again right before its files
   /// go, because the sweep awaits in between. Never throws; a failed delete
-  /// is reported. With [allNotes], a completed sweep is remembered.
+  /// is reported.
   Future<EmptyNoteSweepReport> sweep({
     required NoteUse Function(String audioPath) useOf,
     required DateTime now,
-    bool allNotes = false,
   }) async {
     final List<String> paths;
     try {
@@ -117,12 +100,7 @@ class EmptyNoteService {
           RecordingNaming.audioPathOfSidecar(
             path,
             RecordingNaming.emptyNoteSuffix,
-          )
-        else if (allNotes &&
-            path.toLowerCase().endsWith(RecordingNaming.extension) &&
-            present.contains(RecordingNaming.transcriptPathOf(path)) &&
-            !present.contains(RecordingNaming.transcriptFailurePathOf(path)))
-          path,
+          ),
     };
 
     final deleted = <String>[];
@@ -195,19 +173,6 @@ class EmptyNoteService {
         }
       } on Object {
         failed.add(audio);
-      }
-    }
-    if (allNotes && failed.isEmpty) {
-      try {
-        await _fileStore.writeBytes(
-          _sweepDonePath,
-          utf8.encode(jsonEncode(<String, Object?>{
-            'version': 1,
-            'doneAt': now.toUtc().toIso8601String(),
-          })),
-        );
-      } on Object {
-        // Runs again next start; it changes nothing twice.
       }
     }
     return EmptyNoteSweepReport(

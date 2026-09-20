@@ -365,26 +365,10 @@ class UniversalBleTransport implements BleTransport, BlePairing {
     } on FormatException catch (e) {
       throw BleTransportException('malformed auto-sleep setting', e);
     } catch (e) {
-      // Firmware without `fe04` fails here, and so does a link that dropped
-      // mid-read. Neither is worth telling apart: the setting is unknown.
+      // A board that answers no `fe04` fails here, and so does a link that
+      // dropped mid-read. Neither is worth telling apart: the setting is
+      // unknown, which is never the same as "off".
       throw BleTransportException('could not read the auto-sleep setting', e);
-    }
-  }
-
-  @override
-  Future<void> setAutoSleep(String deviceId, bool enabled) async {
-    try {
-      await ub.UniversalBle.write(
-        deviceId,
-        DeviceProfile.serviceUuid,
-        DeviceProfile.autoSleepCharacteristicUuid,
-        AutoSleep.toBytes(enabled),
-      );
-    } catch (e) {
-      throw BleTransportException(
-        'could not ${enabled ? 'enable' : 'disable'} auto-sleep',
-        e,
-      );
     }
   }
 

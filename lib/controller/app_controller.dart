@@ -88,7 +88,7 @@ enum BatteryHistoryStatus {
   /// Read and decoded; [AppController.batteryReport] has it.
   ready,
 
-  /// The recorder did not answer `fe09` - older firmware.
+  /// The recorder did not answer `fe09`.
   notSupported,
 
   /// The recorder answered with a layout this build cannot read.
@@ -1288,7 +1288,7 @@ class AppController extends ChangeNotifier {
   }
 
   /// The device's auto-sleep flag, or null when it is unknown: nothing is
-  /// connected, the read failed, or the firmware predates `fe04`.
+  /// connected, or the read failed.
   ///
   /// Null is a third state on purpose. The device persists this flag in
   /// flash, so a default of "off" would be a guess about a setting that can
@@ -1296,7 +1296,7 @@ class AppController extends ChangeNotifier {
   AutoSleepSetting? _autoSleep;
 
   /// The device's battery reading, or null when it is unknown: nothing is
-  /// connected, the read failed, or the firmware predates `fe05`.
+  /// connected, or the read failed.
   ///
   /// Null is the same kind of third state [_autoSleep] is, and for the same
   /// reason: there is no honest default for a measurement only the device can
@@ -1306,7 +1306,7 @@ class AppController extends ChangeNotifier {
   BatteryStatus? _battery;
 
   /// The device's die temperature, or null when it is unknown: nothing is
-  /// connected, the read failed, or the firmware predates `fe07`.
+  /// connected, or the read failed.
   ///
   /// The same third state [_autoSleep] and [_battery] have, for the same
   /// reason. And the same SECOND unknown nested inside it: a [DieTemperature]
@@ -1432,12 +1432,15 @@ class AppController extends ChangeNotifier {
   /// recorder. Meaningless unless [autoSleepAvailable] is true.
   bool get autoSleepEnabled => _autoSleep?.enabled ?? false;
 
-  /// Whether the connected firmware takes a duration (its `fe04` read was two
-  /// bytes). False on older firmware, and while nothing is known.
-  bool get autoSleepDurationSupported => _autoSleep?.supportsDuration ?? false;
-
-  /// The duration in force, or null when unknown or not supported.
+  /// The duration in force, or null while nothing has been read.
   AutoSleepDuration? get autoSleepDuration => _autoSleep?.duration;
+
+  /// The last duration auto-sleep was actually SET to on this link, so that
+  /// the developer screen's ON button restores the user's own choice rather
+  /// than the shortest option. `fe04` reports code 0 while off, so the
+  /// recorder's stored duration is not readable back; this is the app's own
+  /// memory of it and is dropped with the link.
+  AutoSleepDuration? _chosenSleepDuration;
 
   /// Whether the connected device reported a battery status at all.
   ///
@@ -1491,16 +1494,12 @@ class AppController extends ChangeNotifier {
   /// The reading itself, for callers that want the raw decidegrees.
   DieTemperature? get dieTemperature => _temperature;
 
-  /// Runs in the saved file this build does not read - see
-  /// [DeviceTestStore.retiredKinds]. They are kept in the file untouched.
+  /// Runs in the saved file this build does not read. They are kept in the
+  /// file untouched.
   ///
   /// Surfaced so a screen showing twelve runs out of a file of fifteen can
   /// account for the other three rather than looking as though it lost them.
   int get unreadDeviceTestRunCount => _tests.unreadRunCount;
-
-  /// How many of [unreadDeviceTestRunCount] are runs of a retired measurement,
-  /// as against rows a newer build wrote.
-  int get retiredDeviceTestRunCount => _tests.retiredRunCount;
 
   /// Why the mic check cannot run right now, or null when it can.
   ///
@@ -1591,7 +1590,7 @@ class AppController extends ChangeNotifier {
     _ensureContinuousLink();
     notifyListeners();
     await _sweepAudio();
-    await _sweepEmptyNotes(allNotes: !await _emptyNotes.isFullSweepDone());
+    await _sweepEmptyNotes();
     // Off screen too where the platform keeps the process alive - a process
     // Android restarted headless for always-listening picks its queue back
     // up, as the policy allows.
@@ -1899,7 +1898,7 @@ class AppController extends ChangeNotifier {
           : DiscoveredDevice(id: ownerId, name: device.name),
     );
     // From the discovery the connect already did - no radio time. This is what
-    // tells old firmware ("needs a firmware update") from a read that failed.
+    // tells a board with no fe08 ("needs an update") from a read that failed.
     try {
       _captureSupported = await _transport.supportsCapture(device.id);
     } on BleTransportException {
@@ -2337,45 +2336,47 @@ class AppController extends ChangeNotifier {
   /// Re-reads the auto-sleep flag from the connected device.
   ///
   /// A failure is not an app error: it leaves the setting unknown and the
-  /// control unavailable, which is all older firmware without `fe04` can
-  /// honestly be reported as.
+  /// control unavailable, which is the only honest thing to show when the
+  /// recorder did not answer.
   Future<void> _readAutoSleep(String deviceId) async {
     try {
       _autoSleep = await _transport.readAutoSleep(deviceId);
+      final read = _autoSleep?.duration;
+      if (read != null && read != AutoSleepDuration.off) {
+        _chosenSleepDuration = read;
+      }
     } on BleTransportException {
       _autoSleep = null;
     }
     notifyListeners();
   }
 
-  /// Writes the auto-sleep flag to the connected device, as the legacy byte.
+  /// Turns auto-sleep on or off without choosing a duration. The developer
+  /// screen's two buttons; the settings screen picks a duration directly.
+  ///
+  /// Turning it ON has to name a duration, because `fe04` takes one: the one
+  /// in force if there is one, otherwise the shortest option, which is also
+  /// what the recorder itself defaults to. Turning it OFF writes code 0, and
+  /// the recorder keeps the duration the user chose.
   ///
   /// Does nothing unless the device reported the setting in the first place:
-  /// a write to firmware that has no `fe04` would fail anyway, and writing a
-  /// value the app never read would be writing a guess.
+  /// writing a value the app never read would be writing a guess.
   Future<void> setAutoSleep(bool enabled) async {
-    final device = _connectedDevice;
     final current = _autoSleep;
-    if (device == null || current == null || enabled == current.enabled) {
+    if (_connectedDevice == null || current == null ||
+        enabled == current.enabled) {
       return;
     }
-    try {
-      await _transport.setAutoSleep(device.id, enabled);
-    } on BleTransportException catch (e) {
-      // The device kept its old setting, so the app keeps showing it. This is
-      // not a phase change: the link is fine and the recorder still works.
-      _errorMessage = e.message;
+    final wanted = enabled
+        ? (_chosenSleepDuration ?? AutoSleepDuration.seconds30)
+        : AutoSleepDuration.off;
+    if (!await setAutoSleepDuration(wanted)) {
+      // These two buttons have no plain-words slot of their own, so the
+      // refusal goes in the error message. setAutoSleepDuration has already
+      // put the shown state back.
+      _errorMessage = 'Could not change auto-sleep.';
       notifyListeners();
-      return;
     }
-    if (current.supportsDuration) {
-      // The one-byte write keeps the stored duration, which only the device
-      // knows: read it back rather than guess.
-      await _readAutoSleep(device.id);
-      return;
-    }
-    _autoSleep = AutoSleepSetting.legacy(enabled);
-    notifyListeners();
   }
 
   /// Sets how long the recorder waits, still, before it sleeps.
@@ -2386,10 +2387,11 @@ class AppController extends ChangeNotifier {
   Future<bool> setAutoSleepDuration(AutoSleepDuration duration) async {
     final device = _connectedDevice;
     final previous = _autoSleep;
-    if (device == null || previous == null || !previous.supportsDuration) {
+    if (device == null || previous == null) {
       return false;
     }
     if (previous.duration == duration) return true;
+    if (duration != AutoSleepDuration.off) _chosenSleepDuration = duration;
     _autoSleep = AutoSleepSetting(
       enabled: duration != AutoSleepDuration.off,
       duration: duration,
@@ -2507,6 +2509,7 @@ class AppController extends ChangeNotifier {
     _connectedDevice = null;
     _captureSupported = null;
     _autoSleep = null;
+    _chosenSleepDuration = null;
     // These readings described a link that is gone; keeping the last percentage
     // or the last temperature on screen would be showing a stale measurement as
     // a live one.
@@ -2581,7 +2584,7 @@ class AppController extends ChangeNotifier {
   // screens show and what always-listening does about a refusal.
   //
   // Without a pairing driver none of this runs and every recorder is
-  // [RecorderPairing.legacy].
+  // [RecorderPairing.unknown].
   // -------------------------------------------------------------------------
 
   /// The pairing problem the scan screen is showing, or null.
@@ -2625,7 +2628,7 @@ class AppController extends ChangeNotifier {
         device,
         refusedHere: _refusedIds.contains(device.id.toLowerCase()),
       ) ??
-      RecorderPairing.legacy;
+      RecorderPairing.unknown;
 
   /// The recorder Settings is about: the one connected, else the remembered
   /// one.
@@ -3284,15 +3287,14 @@ class AppController extends ChangeNotifier {
   // Never while it is written, while a manual recording runs, while it is open
   // in the note screen (or playing), or while it is transcribed: deferred,
   // and tried again when that ends. The rules are [EmptyNotePolicy]'s; the
-  // marker-first deletion is [EmptyNoteService]'s. At start, marked notes are
-  // swept, and on the first start with this build every saved transcript is.
+  // marker-first deletion is [EmptyNoteService]'s. Marked notes are swept at
+  // every start, and again whenever one stops being in use.
   // -------------------------------------------------------------------------
 
   late final EmptyNoteService _emptyNotes = EmptyNoteService(
     fileStore: _fileStore,
     directory: _recordingsDirectory,
     transcripts: _transcripts,
-    settingsDirectory: _settingsDirectory,
   );
 
   /// How many note screens show each recording, by path.
@@ -3338,7 +3340,7 @@ class AppController extends ChangeNotifier {
     if (_emptyNotesPending) await _sweepEmptyNotes();
   }
 
-  Future<void> _sweepEmptyNotes({bool allNotes = false}) async {
+  Future<void> _sweepEmptyNotes() async {
     if (_emptySweeping) {
       _emptySweepAgain = true;
       return;
@@ -3349,7 +3351,6 @@ class AppController extends ChangeNotifier {
         _emptySweepAgain = false;
         final report = await _emptyNotes.sweep(
           now: _now(),
-          allNotes: allNotes,
           useOf: (path) => (
             writing: path == writingNotePath,
             // The capture's own path is not known here, so every note waits
@@ -3360,7 +3361,6 @@ class AppController extends ChangeNotifier {
             transcribing: path == _transcribingPath,
           ),
         );
-        allNotes = false;
         _lastEmptyNoteSweep = report;
         _emptyNotesPending =
             report.deferred.isNotEmpty || report.failed.isNotEmpty;

@@ -73,7 +73,7 @@ void main() {
     expect(await service.reconnectId('UUID-1'), 'UUID-1');
   });
 
-  test('older firmware is neither bonded, secured nor remembered', () async {
+  test('no pairing field: neither bonded, secured nor remembered', () async {
     final driver = FakeBlePairing();
     final (service, _) = build(driver);
 
@@ -82,7 +82,7 @@ void main() {
 
     expect(driver.calls, isEmpty);
     expect(service.isOwner('AA'), isFalse);
-    expect(service.stateOf(recorder('AA', null)), RecorderPairing.legacy);
+    expect(service.stateOf(recorder('AA', null)), RecorderPairing.unknown);
   });
 
   test('a refused pairing forgets the recorder', () async {

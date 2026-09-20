@@ -204,7 +204,7 @@ void main() {
           kind: BleFailureKind.disconnected,
         ),
         PairingOutcome.failed,
-        reason: 'older firmware, or no scan: a drop is just a drop',
+        reason: 'no pairing field, or no scan: a drop is just a drop',
       );
       expect(
         PairingOutcome.classify(

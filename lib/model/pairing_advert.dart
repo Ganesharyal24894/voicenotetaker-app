@@ -12,9 +12,10 @@
 /// | `[4]`  | format `0x01`                                            |
 /// | `[5]`  | flags: bit 0 has an owner, bit 1 pairing window open     |
 ///
-/// Reserved flag bits are ignored. NO FIELD, or a format other than 1, is
-/// older firmware with no pairing at all: [parse] answers null and the app
-/// connects exactly as it always did.
+/// Reserved flag bits are ignored. NO FIELD, or a format other than 1, means
+/// nothing is known about this recorder's pairing: [parse] answers null and
+/// the app connects without blocking. An advert can reach the phone without
+/// its scan response, so absence is never taken as proof of anything.
 ///
 /// See the firmware's `doc/pairing.md` and `model/pairing_model.h`.
 class PairingAdvert {
@@ -53,7 +54,7 @@ class PairingAdvert {
   }
 
   /// The first recognisable status among all manufacturer fields a scan
-  /// result carried, or null (older firmware).
+  /// result carried, or null when it carried none.
   static PairingAdvert? parse(Iterable<(int, List<int>)> manufacturerData) {
     for (final (company, payload) in manufacturerData) {
       final advert = fromManufacturer(company, payload);

@@ -37,20 +37,18 @@ class Transcript {
   /// Bumped when the saved shape changes incompatibly. A file with another
   /// version is treated as absent, so the recording can be transcribed again.
   ///
-  /// Still 1 after segments gained an optional `speaker`: the key is written
-  /// only when there is one, an older file without it reads as "no speakers",
-  /// and an older build reading a newer file ignores the key it does not know.
-  /// Nothing that could be read before became unreadable, so nothing is
-  /// transcribed twice.
-  ///
-  /// Still 1 after language routing, for the same reason: segments gained
-  /// optional `lang` and `model`, the transcript an optional
-  /// `englishModelMissing`, and `language` may now also read `en` or `auto`
-  /// - all strings an older build already accepts.
+  /// THINK BEFORE BUMPING IT. There is no migration and there will not be
+  /// one: a bump means every transcript on the phone is thrown away and every
+  /// recording is decoded again, which for the notes already taken is an hour
+  /// of work to arrive back where it started - and only if the audio is still
+  /// there, which the retention sweep does not promise. Optional keys
+  /// (`speaker`, `lang`, `model`, `englishModelMissing`) are written only
+  /// when they have a value and read as absent when they do not, which is
+  /// what has kept this at 1 through three features.
   static const int formatVersion = 1;
 
   /// `hi` or `en` when the whole transcript is that language, `auto` when its
-  /// segments mix the two. `hi` in every transcript from before routing.
+  /// segments mix the two.
   final String languageCode;
 
   /// Which model produced it - [SpeechModel.id], or two ids joined with `+`.

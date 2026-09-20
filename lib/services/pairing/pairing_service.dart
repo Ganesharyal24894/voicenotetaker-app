@@ -15,7 +15,7 @@ import 'pairing_store.dart';
 /// The controller connects with the transport as always, then hands the link
 /// to [PairingAttempt.afterConnect]: bond (Android), read `fe02` (the
 /// encryption proof, and iOS's pairing trigger), then carry on with the usual
-/// session setup. Recorders that do not pair - older firmware - skip straight
+/// session setup. Recorders that say nothing about pairing skip straight
 /// through.
 class PairingService {
   PairingService({
