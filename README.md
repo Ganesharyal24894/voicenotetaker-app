@@ -62,6 +62,23 @@ block instead of desynchronising the decoder for the rest of the stream.
 The same four-layer scheme the firmware uses. Dependencies point one way only:
 `view → controller → services → drivers → model`.
 
+**The 300-line rule, from 2026-09-20:** *a file past ~300 lines of CODE
+probably needs breaking up.* Comments and blank lines are excluded — both repos
+comment heavily on purpose. Count it the same way every time:
+
+```sh
+grep -vc '^\s*\(\*\|/\*\|//\)\|^\s*$' <file>
+```
+
+It is a prompt to look for the seam, not an automatic refactor. The worst
+offender here by a wide margin is `lib/controller/app_controller.dart` — **2242
+code lines** of 3678 — whose seams are already drawn as banner comments inside
+it. That is row **C1** in the firmware repo's `nrf52840-sense/doc/todo.md`, and
+it is **paused** with the rest of the app work. Several view files are over the
+line too (`note_view.dart` 1082, `models_view.dart` 948,
+`assistant_view.dart` 926, `ble_transport_universal.dart` 739); they are not
+tracked individually until the app comes off pause.
+
 ```
 lib/
   model/       Pure DATA. Classes and enums for stream info, codec, frames,
