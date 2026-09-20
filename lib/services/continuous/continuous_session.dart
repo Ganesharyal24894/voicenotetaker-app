@@ -164,8 +164,9 @@ class ContinuousSession {
   /// Ends the session: subscriptions down, the open note closed.
   ///
   /// [linkUp] says whether the device can still be talked to. When it can, it
-  /// is told to stop gating, which is its own default and what a manual
-  /// recording expects. Never throws.
+  /// is told to stop gating, which is what a manual recording expects; the
+  /// recorder's own default is the other way round, so this is a real change
+  /// and not a tidy-up. Never throws.
   Future<void> stop({required bool linkUp}) async {
     final deviceId = _deviceId;
     if (deviceId == null) return;
@@ -190,7 +191,7 @@ class ContinuousSession {
       try {
         await _transport.writeCapture(deviceId, CaptureCommand.gateDisabled);
       } on BleTransportException {
-        // The device returns to its default on the next connect anyway.
+        // A manual recording asks for itself; this is only a courtesy.
       }
     }
     _enqueue((writer) => writer.finish());

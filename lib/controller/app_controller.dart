@@ -3394,13 +3394,15 @@ class AppController extends ChangeNotifier {
     // single frame subscription.
     if (device == null || isRecording || _session != null) return;
     _errorMessage = null;
-    // A device that knows about speech-only is told to stream everything, which
-    // is what a recording the user started expects.
+    // The recorder's default is speech only, so a recording the user started
+    // has to ask for everything.
     if (_captureSupported == true) {
       try {
         await _transport.writeCapture(device.id, CaptureCommand.gateDisabled);
       } on BleTransportException {
-        // Its default after a connect is the same, so the capture still works.
+        // The gate stays where it was. The recording still happens; if the
+        // gate was shut, what arrives is speech rather than everything -
+        // worse than asked for, and better than refusing to record.
       }
     }
     _level = null;
