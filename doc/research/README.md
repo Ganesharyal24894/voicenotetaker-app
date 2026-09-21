@@ -27,6 +27,7 @@ paused**.
 | `stt-on-device-and-window.md` | Why `lib/model/decode_window.dart` is 16 s: the largest measured accuracy win, and it costs 43–48 % *fewer* decodes. Also why `STT_VAD` stays off, and why Dolphin is ruled out |
 | `language-router.md` | What is wrong with the shipped English test, the ~90-line fix that is written but **not merged**, and exactly what blocks it (ten hand-typed gold clips) |
 | `diarization.md` | Speaker turns beat the fixed grid by ~4 WER and cost RTF 0.016–0.031 — but the threshold that suits a 4-minute note gives **27 speakers** on a one-hour one |
+| `window-silence-skip.md` | Why `lib/model/speech_presence.dart` skips almost nothing: the app's 44.6 % empty segments are **not silence**, and no cheap check separates them from the windows that produced words |
 | `speech-gate-and-noise.md` | **Do not ship a denoiser.** GTCRN made the transcript worse in 15 of 16 noisy cells and wrecks clean audio outright |
 | `opus-vs-adpcm.md` | What the app would have to decode if the device ever offers Opus on `fe03`, and the packet-loss concealment neither side has built |
 | `ios-background-and-sidestore.md` | What iOS actually permits in the background, and why state restoration is deliberately not built |

@@ -4,9 +4,11 @@ import 'dart:isolate';
 
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
+import '../model/speech_presence.dart';
 import '../model/speech_windows.dart';
 import '../model/transcription.dart';
 import 'keep_warm_recognizer.dart';
+import 'note_noise_floor.dart';
 import 'process_memory.dart';
 import 'speech_recognizer.dart';
 
@@ -33,6 +35,13 @@ import 'speech_recognizer.dart';
 /// the other model (Hindi then English in one note) makes
 /// [KeepWarmSpeechRecognizer] shut this worker down - native free, allocator
 /// purge, isolate exit - before a new one loads.
+///
+/// SILENCE IS NOT DECODED. Before the first window, the worker measures the
+/// note's own noise floor once ([measureNoiseFloor]); a window that never
+/// rises above it is answered with the same "" a decode would have produced
+/// ([SpeechPresence]). Measured on the owner's 13.6 hours of recordings that
+/// is 0 windows - their empty segments are audible, not silent - so this is a
+/// floor under the cost of dead air, not a saving to plan around.
 ///
 /// LIFETIME. One worker serves consecutive jobs with one load, and frees the
 /// model and exits after [idleTimeout] without work, on [releaseModel], or
@@ -383,6 +392,16 @@ Future<void> _workerMain(_WorkerStart start) async {
             replies.send(_Tagged(id, RecognitionWindowsPlanned(planned)));
           }
         }
+        // The note's own noise floor, measured once, so a window holding
+        // nothing but it can be answered without a decode. Null means "not
+        // measured": then nothing is skipped.
+        final floor = await measureNoiseFloor(
+          audio: audio,
+          dataOffset: job.dataOffset,
+          totalSamples: windows.isEmpty ? 0 : windows.last.end,
+          sampleRateHz: job.sampleRateHz,
+          stop: () => cancelled.contains(id) || shuttingDown,
+        );
         for (var index = 0; index < windows.length; index++) {
           // Yield so a cancel message sent while the last window was decoding
           // is delivered before the next one starts.
@@ -393,6 +412,28 @@ Future<void> _workerMain(_WorkerStart start) async {
           final clock = Stopwatch()..start();
           audio.setPositionSync(job.dataOffset + window.start * 2);
           final samples = pcm16leToFloat32(audio.readSync(window.length * 2));
+
+          // NOTHING BUT THE FLOOR: hand back the same "" the recognizer would
+          // have taken a full decode to produce. Indistinguishable downstream
+          // - an empty window is an empty window however it was reached.
+          if (!SpeechPresence.canContainSpeech(
+            samples: samples,
+            sampleRateHz: job.sampleRateHz,
+            noiseFloorDbfs: floor,
+          )) {
+            clock.stop();
+            replies.send(
+              _Tagged(
+                id,
+                RecognitionWindowDecoded(
+                  index: index,
+                  text: '',
+                  decodeTime: clock.elapsed,
+                ),
+              ),
+            );
+            continue;
+          }
 
           final stream = recognizer.createStream();
           try {
