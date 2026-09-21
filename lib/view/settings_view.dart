@@ -18,6 +18,8 @@ import 'widgets/app_icons.dart';
 import 'widgets/common.dart';
 import 'widgets/home_widgets.dart';
 import 'widgets/motion.dart';
+import 'widgets/privacy_mode_card.dart';
+import 'widgets/status_tone.dart';
 
 /// Recorder settings - `Settings.dc.html`.
 ///
@@ -104,6 +106,7 @@ class SettingsView extends StatelessWidget {
                 children: <Widget>[
                   const _Section('Listening'),
                   AlwaysListeningCard(controller: controller),
+                  PrivacyModeCard(controller: controller),
                   ..._linkAction(context),
                   const SizedBox(height: 16),
                   const _Section('Auto-sleep'),
@@ -450,7 +453,7 @@ class AlwaysListeningCard extends StatelessWidget {
                   children: <Widget>[
                     if (enabled) ...<Widget>[
                       BreathingDot(
-                        color: toneColor(status.tone),
+                        color: StatusToneColors.dot(status.tone),
                         breathing: status.tone == HomeStatusTone.good,
                       ),
                       const SizedBox(width: 7),
@@ -493,14 +496,6 @@ class AlwaysListeningCard extends StatelessWidget {
       ],
     );
   }
-
-  /// The dot beside the status: green while saving, amber while not, grey
-  /// when nothing is wrong and nothing is happening.
-  static Color toneColor(HomeStatusTone tone) => switch (tone) {
-        HomeStatusTone.good => AppColors.connected,
-        HomeStatusTone.warning => AppColors.warning,
-        HomeStatusTone.idle => AppColors.disconnected,
-      };
 
   Future<void> _toggle(BuildContext context, bool on) async {
     if (!on) {

@@ -2828,6 +2828,28 @@ class AppController extends ChangeNotifier {
   NotesSaving get notesSaving =>
       NotesSaving.from(continuousStatus, storage: recorderStorage);
 
+  /// Whether privacy mode can be set from here: always listening is running
+  /// on a live link, so the recorder's answer on `fe08` will be heard.
+  bool get canSetPrivacyMode => _session != null && isConnected;
+
+  /// Asks the recorder for privacy mode. Nothing on screen changes until the
+  /// recorder reports it on `fe08` - see [notesSaving].
+  Future<void> turnPrivacyModeOn() => _writePrivacy(CaptureCommand.mute);
+
+  /// Asks the recorder to resume listening; the same rule as
+  /// [turnPrivacyModeOn].
+  Future<void> turnPrivacyModeOff() => _writePrivacy(CaptureCommand.unmute);
+
+  Future<void> _writePrivacy(CaptureCommand command) async {
+    final device = _connectedDevice;
+    if (device == null || !canSetPrivacyMode) return;
+    try {
+      await _transport.writeCapture(device.id, command);
+    } on BleTransportException {
+      // The recorder did not change, so neither does the screen.
+    }
+  }
+
   /// Whether the not-saving alert is showing (notification and buzz sent).
   bool get notSavingAlerting => _savingAlert.alerting;
 

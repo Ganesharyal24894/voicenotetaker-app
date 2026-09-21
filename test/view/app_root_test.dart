@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/model/battery_status.dart';
@@ -86,6 +87,8 @@ void main() {
     await tester.tap(find.bySemanticsLabel('Settings'));
     await settleRoute(tester);
     expect(find.byType(SettingsView), findsOneWidget);
+    await tester.scrollUntilVisible(find.bySemanticsLabel('Diagnostics'), 200,
+        scrollable: find.descendant(of: find.byType(SettingsView), matching: find.byType(Scrollable)).first);
     await tester.tap(find.bySemanticsLabel('Diagnostics'));
     await settleRoute(tester);
 

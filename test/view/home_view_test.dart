@@ -586,6 +586,8 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
+    await tester.scrollUntilVisible(find.bySemanticsLabel('Diagnostics'), 200,
+        scrollable: find.descendant(of: find.byType(SettingsView), matching: find.byType(Scrollable)).first);
     await tester.tap(find.bySemanticsLabel('Diagnostics'));
     await tester.pump();
     expect(opened, isTrue);

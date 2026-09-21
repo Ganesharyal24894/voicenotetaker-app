@@ -48,6 +48,9 @@ void main() {
     expect(find.text('Transcripts are kept. Notes you mark Keep are never deleted.'),
         findsOneWidget);
 
+    // Below the fold now that Listening holds two cards.
+    await tester.scrollUntilVisible(find.bySemanticsLabel('Diagnostics'), 200,
+        scrollable: find.descendant(of: find.byType(SettingsView), matching: find.byType(Scrollable)).first);
     await tester.tap(find.bySemanticsLabel('Diagnostics'));
     expect(diagnostics, isTrue);
   });

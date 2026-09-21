@@ -17,7 +17,7 @@ void main() {
   test('on but not saving is amber, and says why in plain words', () {
     expect(resolve(ContinuousStatus.notConnected, connected: false),
         const HomeStatus('Not saving — recorder disconnected', HomeStatusTone.warning));
-    expect(resolve(ContinuousStatus.privacyMode).tone, HomeStatusTone.warning);
+    expect(resolve(ContinuousStatus.privacyMode), const HomeStatus('Privacy mode on', HomeStatusTone.privacy));
     expect(resolve(ContinuousStatus.needsFirmwareUpdate).label, 'Not saving — recorder needs an update');
     expect(resolve(ContinuousStatus.micOff),
         const HomeStatus('Not saving — mic off to save battery', HomeStatusTone.warning));

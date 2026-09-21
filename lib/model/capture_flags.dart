@@ -127,8 +127,8 @@ enum CaptureCommand {
   /// Stream speech only. Always listening.
   gateEnabled(1),
 
-  /// Turn privacy mode on (firmware `CAPTURE_CMD_MUTE`). The wearer normally
-  /// does this with a double tap; the app has no control for it yet.
+  /// Turn privacy mode on (firmware `CAPTURE_CMD_MUTE`). The wearer does
+  /// this with a double tap, or with the Privacy mode switch in the app.
   mute(2),
 
   /// Turn privacy mode off (firmware `CAPTURE_CMD_UNMUTE`).

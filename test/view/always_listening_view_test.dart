@@ -5,14 +5,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
 import 'package:voicenotetaker_app/model/capture_flags.dart';
-import 'package:voicenotetaker_app/model/home_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/view/app_root.dart';
 import 'package:voicenotetaker_app/view/connection_lost_view.dart';
 import 'package:voicenotetaker_app/view/home_view.dart';
 import 'package:voicenotetaker_app/view/scan_view.dart';
 import 'package:voicenotetaker_app/view/settings_view.dart';
-import 'package:voicenotetaker_app/view/theme.dart';
 
 import 'harness.dart';
 import 'home_harness.dart';
@@ -215,12 +213,6 @@ void main() {
     // app" is no longer the whole truth - and the line must not say it is.
     expect(AlwaysListeningCard.iosNote, contains('keep saving'));
     expect(AlwaysListeningCard.iosNote, contains('charger'));
-  });
-
-  testWidgets('the dot colours are the theme\'s status colours', (tester) async {
-    expect(AlwaysListeningCard.toneColor(HomeStatusTone.good), AppColors.connected);
-    expect(AlwaysListeningCard.toneColor(HomeStatusTone.warning), AppColors.warning);
-    expect(AlwaysListeningCard.toneColor(HomeStatusTone.idle), AppColors.disconnected);
   });
 
   testWidgets('a dropped link stays on Home, saying the device is not '

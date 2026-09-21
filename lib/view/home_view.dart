@@ -20,6 +20,8 @@ import 'widgets/app_icons.dart';
 import 'widgets/common.dart';
 import 'widgets/home_widgets.dart';
 import 'widgets/motion.dart';
+import 'widgets/privacy_banner.dart';
+import 'widgets/status_tone.dart';
 
 /// Screen 2 - home: two tabs under one header.
 ///
@@ -138,6 +140,7 @@ class _HomeViewState extends State<HomeView> {
               ),
             ),
             const SizedBox(height: 14),
+            if (_tab == HomeView.todayTab) PrivacyBanner(controller: controller),
             Expanded(
               child: IndexedStack(
                 index: _tab,
@@ -204,11 +207,6 @@ class _HomeHeader extends StatelessWidget {
       storage: controller.recorderStorage,
     );
     final canRecord = connected && !controller.continuousActive;
-    final Color dot = switch (status.tone) {
-      HomeStatusTone.good => AppColors.connected,
-      HomeStatusTone.warning => AppColors.warning,
-      HomeStatusTone.idle => AppColors.disconnected,
-    };
     return Row(
       children: <Widget>[
         Expanded(
@@ -238,18 +236,17 @@ class _HomeHeader extends StatelessWidget {
                     height: AppShape.minTapTarget,
                     child: Row(
                       children: <Widget>[
-                        BreathingDot(breathing: status.tone == HomeStatusTone.good, color: dot),
+                        BreathingDot(
+                          breathing: status.tone == HomeStatusTone.good,
+                          color: StatusToneColors.dot(status.tone),
+                        ),
                         const SizedBox(width: 7),
                         Flexible(
                           child: Text(
                             status.label,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: AppText.body13.copyWith(
-                              color: status.tone == HomeStatusTone.warning
-                                  ? AppColors.warning
-                                  : AppColors.textSecondary,
-                            ),
+                            style: AppText.body13.copyWith(color: StatusToneColors.label(status.tone)),
                           ),
                         ),
                         if (onStatus != null) ...<Widget>[

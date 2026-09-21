@@ -264,6 +264,8 @@ void main() {
         ),
       );
 
+      await tester.scrollUntilVisible(find.text('Export notes'), 200,
+          scrollable: find.descendant(of: find.byType(SettingsView), matching: find.byType(Scrollable)).first);
       expect(find.text('Export notes'), findsOneWidget);
       expect(find.text('One zip of your recordings and transcripts'),
           findsOneWidget);
@@ -283,6 +285,8 @@ void main() {
         ),
       );
 
+      await tester.scrollUntilVisible(find.text('Diagnostics'), 200,
+          scrollable: find.descendant(of: find.byType(SettingsView), matching: find.byType(Scrollable)).first);
       expect(find.text('Export notes'), findsNothing);
       expect(find.text('Diagnostics'), findsOneWidget);
     });
