@@ -30,6 +30,21 @@ void main() {
     test('wire values match the firmware control byte', () {
       expect(AudioCodec.pcmS16le.wireValue, 0);
       expect(AudioCodec.imaAdpcm.wireValue, 1);
+      expect(AudioCodec.opusCelt.wireValue, 2);
+    });
+
+    test('codecs are appended, never renumbered', () {
+      // The firmware and the host tooling share these numbers. A new codec
+      // goes on the end; the order of the enum IS the order of the wire.
+      expect(
+        AudioCodec.values.map((c) => c.wireValue).toList(),
+        [for (var i = 0; i < AudioCodec.values.length; i++) i],
+      );
+    });
+
+    test('the Opus codec byte is the one the firmware sends', () {
+      // AUDIO_CODEC_OPUS_CELT = 2 in the firmware's model/audio_format.h.
+      expect(AudioCodec.fromWire(2), AudioCodec.opusCelt);
     });
 
     test('fromWire round-trips every known codec', () {
@@ -39,7 +54,7 @@ void main() {
     });
 
     test('an unknown codec byte maps to null rather than a wrong codec', () {
-      expect(AudioCodec.fromWire(2), isNull);
+      expect(AudioCodec.fromWire(3), isNull);
       expect(AudioCodec.fromWire(255), isNull);
     });
   });

@@ -45,6 +45,7 @@ import '../model/language_router.dart';
 import '../model/transcript.dart';
 import '../model/transcript_paragraphs.dart';
 import '../model/transcription.dart';
+import '../services/codec/frame_decoder.dart';
 import '../services/audio_retention_service.dart';
 import '../services/battery_anchor_store.dart';
 import '../services/empty_note_service.dart';
@@ -143,6 +144,7 @@ class AppController extends ChangeNotifier {
     this._continuousKeepalive = ContinuousSession.defaultKeepaliveInterval,
     this._asleepRetryDelay = ReconnectBackoff.asleepDelay,
     AudioCodec preferredCodec = AudioCodec.imaAdpcm,
+    this._decoders = const FrameDecoders(),
     // The public parameter name `preferredCodec:` is part of the existing API,
     // while the field behind it is private because it is now reached through a
     // notifying setter - so an initializing formal is not available here.
@@ -199,7 +201,11 @@ class AppController extends ChangeNotifier {
               directory: _recordingsDirectory,
             ),
         _recorder = recordingService ??
-            RecordingService(transport: transport, fileStore: fileStore);
+            RecordingService(
+              transport: transport,
+              fileStore: fileStore,
+              decoders: _decoders,
+            );
 
   /// Told about a transcript the moment it is saved: the path, when the note
   /// was recorded, and the words. The ONLY way anything in this app learns
@@ -210,6 +216,11 @@ class AppController extends ChangeNotifier {
 
   final BleTransport _transport;
   final FileStore _fileStore;
+
+  /// How every audio stream is decoded - the manual recorder, always-listening
+  /// and the mic check all open their decoder here, so they cannot disagree.
+  /// `main.dart` wires libopus in; tests that never see Opus leave it out.
+  final FrameDecoders _decoders;
 
   /// Pairing to one phone. Null in a build without it - every test that is
   /// not about pairing - which connects exactly as the app did before.
@@ -240,6 +251,7 @@ class AppController extends ChangeNotifier {
           fileStore: _fileStore,
           directory: _recordingsDirectory,
         ),
+        decoders: _decoders,
       );
 
   /// The live link watcher - the signal, and the frames the phone received.
@@ -3011,6 +3023,7 @@ class AppController extends ChangeNotifier {
       fileStore: _fileStore,
       directory: _recordingsDirectory,
       keepaliveInterval: _continuousKeepalive,
+      decoders: _decoders,
     );
     _session = session;
     _sessionChanges = session.changes.listen((_) {

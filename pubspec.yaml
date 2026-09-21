@@ -90,6 +90,24 @@ dependencies:
   # `SecretStore` seam so no test ever touches a keystore.
   flutter_secure_storage: ^11.2.0
 
+  # The libopus 1.5.2 DECODER, for codec 2 (Opus) on `fe03`. Vendored
+  # unmodified in packages/opus_native/third_party/libopus and compiled from
+  # source by a Dart build hook for every target - the NDK on Android, Xcode on
+  # iOS, the host compiler under `flutter test` - so the decoder the tests run
+  # is the decoder the phone runs. BSD-3-Clause, the same library and version
+  # the firmware vendors. Not a pub.dev package, deliberately: `opus_flutter`'s
+  # Android plugin does not build as published, bundles ~10 MB of web and
+  # Windows binaries into every APK, and is a CocoaPods prebuilt on iOS, where
+  # this app is Swift Package Manager only; `flutter_opus` cannot run under
+  # `flutter test` and has no loss concealment. Named in
+  # lib/drivers/opus_library_native.dart and nowhere else.
+  opus_native:
+    path: packages/opus_native
+
+  # Native memory for that driver's buffers. The Dart team's own package
+  # (BSD-3-Clause), already in the lock file as a transitive dependency.
+  ffi: ^2.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

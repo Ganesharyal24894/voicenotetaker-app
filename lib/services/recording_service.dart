@@ -9,6 +9,7 @@ import '../model/level_reading.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
 import 'codec/frame_decoder.dart';
+import 'codec/stream_decoder.dart';
 import 'frame_reassembler.dart';
 import 'level_meter.dart';
 import 'wav_writer.dart';
@@ -38,12 +39,20 @@ class RecordingService {
     required this._fileStore,
     DateTime Function()? clock,
     LevelMeter? levelMeter,
+    this._decoders = const FrameDecoders(),
   })  : _clock = clock ?? DateTime.now,
         _levelMeter = levelMeter ?? LevelMeter();
 
   final BleTransport _transport;
   final FileStore _fileStore;
   final DateTime Function() _clock;
+
+  /// Where a decoder for the stream's codec comes from. One is opened per
+  /// capture and released in [stop] and [abort], because an Opus decoder
+  /// holds state across frames and native memory with it.
+  final FrameDecoders _decoders;
+
+  StreamDecoder? _decoder;
 
   /// Measures the PCM on its way to the file. Costs one pass over bytes that
   /// are already decoded and in memory, so the live meter needs no second
@@ -120,6 +129,22 @@ class RecordingService {
       );
     }
 
+    _decoder?.dispose();
+    _decoder = null;
+    final StreamDecoder decoder;
+    try {
+      decoder = _decoders.open(
+        codec: info.codec!,
+        sampleRateHz: info.sampleRateHz,
+        channels: info.channels,
+      );
+    } on Object catch (e) {
+      // A build without libopus, or a format libopus refuses: the same
+      // refusal as an unsupported codec, and said before a file exists.
+      throw RecordingException('cannot decode $info', e);
+    }
+    _decoder = decoder;
+
     _reassembler.reset();
     _levelMeter.reset();
     _decodedBytes = 0;
@@ -129,7 +154,15 @@ class RecordingService {
     _path = path;
     _startedAt = _clock();
 
-    final sink = await _fileStore.openWrite(path);
+    final FileSink sink;
+    try {
+      sink = await _fileStore.openWrite(path);
+    } on Object {
+      // No capture started, so nothing else will close the decoder.
+      decoder.dispose();
+      _decoder = null;
+      rethrow;
+    }
     _sink = sink;
 
     // Provisional header; the two length fields are patched on stop().
@@ -167,6 +200,8 @@ class RecordingService {
     _frames = null;
     _sink = null;
     _deviceId = null;
+    _decoder?.dispose();
+    _decoder = null;
 
     try {
       await _transport.unsubscribeFrames(deviceId);
@@ -219,6 +254,8 @@ class RecordingService {
     }
     _sink = null;
     _deviceId = null;
+    _decoder?.dispose();
+    _decoder = null;
   }
 
   Future<void> dispose() async {
@@ -253,7 +290,7 @@ class RecordingService {
   }
 
   Uint8List _decode(AudioFrame frame) =>
-      FrameDecoder.decode(_streamInfo!.codec!, frame);
+      _decoder?.decode(frame) ?? Uint8List(0);
 
   void _emitStats() {
     if (!_statsController.isClosed) {

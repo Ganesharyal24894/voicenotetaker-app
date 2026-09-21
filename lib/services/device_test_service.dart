@@ -7,7 +7,8 @@ import '../model/device_test_aggregate.dart';
 import '../model/device_test_result.dart';
 import '../model/recording_metadata.dart';
 import '../model/stream_info.dart';
-import 'codec/adpcm_decoder.dart';
+import 'codec/frame_decoder.dart';
+import 'codec/stream_decoder.dart';
 import 'device_test_store.dart';
 import 'frame_reassembler.dart';
 import 'level_meter.dart';
@@ -58,11 +59,17 @@ class DeviceTestService {
     this.noiseFloorWindow = const Duration(seconds: 10),
     this.sensitivityWindow = const Duration(seconds: 10),
     this.tick = const Duration(milliseconds: 250),
+    this._decoders = const FrameDecoders(),
   }) : _clock = clock ?? DateTime.now;
 
   final BleTransport _transport;
   final DeviceTestStore _store;
   final DateTime Function() _clock;
+
+  /// Where a decoder for the stream's codec comes from. Each `_Capture` owns
+  /// one and closes it, so a check that runs Opus does not leave native state
+  /// behind between samples.
+  final FrameDecoders _decoders;
 
   final Duration noiseFloorWindow;
   final Duration sensitivityWindow;
@@ -589,14 +596,30 @@ class DeviceTestService {
           'audio cannot be decoded and any level from it would be invented';
       return null;
     }
-    if (info.codec == null || info.bitsPerSample != 16) {
+    if (info.codec == null ||
+        info.bitsPerSample != 16 ||
+        !_decoders.supports(info.codec!)) {
       _openWasUnavailable = true;
       _openFailure = 'the device reported a format this build cannot decode '
           '(${info.toString()})';
       return null;
     }
 
-    final capture = _Capture(deviceId: deviceId, info: info);
+    final StreamDecoder decoder;
+    try {
+      decoder = _decoders.open(
+        codec: info.codec!,
+        sampleRateHz: info.sampleRateHz,
+        channels: info.channels,
+      );
+    } on Object catch (e) {
+      _openWasUnavailable = true;
+      _openFailure =
+          'the device reported a format this build cannot decode '
+          '(${info.toString()}): $e';
+      return null;
+    }
+    final capture = _Capture(deviceId: deviceId, info: info, decoder: decoder);
     try {
       capture.frames = _transport.subscribeFrames(deviceId).listen(
             capture.accept,
@@ -604,6 +627,7 @@ class DeviceTestService {
           );
     } on BleTransportException catch (e) {
       // The exclusive frame subscription - a capture, or the live link view.
+      capture.decoder.dispose();
       _openFailure = e.message;
       return null;
     }
@@ -617,6 +641,7 @@ class DeviceTestService {
     if (capture == null) return;
     _liveStats = capture.reassembler.stats;
     await capture.frames?.cancel();
+    capture.decoder.dispose();
     try {
       await _transport.unsubscribeFrames(capture.deviceId);
     } on BleTransportException {
@@ -662,10 +687,13 @@ class DeviceTestService {
 
 /// One open audio stream, with the counters and the level window that read it.
 class _Capture {
-  _Capture({required this.deviceId, required this.info});
+  _Capture({required this.deviceId, required this.info, required this.decoder});
 
   final String deviceId;
   final StreamInfo info;
+
+  /// This stream's decoder, disposed by `_closeCapture`.
+  final StreamDecoder decoder;
 
   final FrameReassembler reassembler = FrameReassembler();
   StreamSubscription<Uint8List>? frames;
@@ -678,13 +706,13 @@ class _Capture {
   void accept(Uint8List notification) {
     final frame = reassembler.accept(notification);
     if (frame == null) return;
-    final codec = info.codec;
-    if (codec == null) return;
-    final pcm = switch (codec) {
-      AudioCodec.pcmS16le => frame.payload,
-      AudioCodec.imaAdpcm =>
-        AdpcmDecoder.decodeBlockToPcmBytes(frame.payload),
-    };
+    final Uint8List pcm;
+    try {
+      pcm = decoder.decode(frame);
+    } on Object {
+      // One block this build cannot decode costs that block, not the check.
+      return;
+    }
     level.addPcmS16le(pcm);
   }
 }

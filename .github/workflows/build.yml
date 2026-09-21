@@ -51,6 +51,9 @@ jobs:
 
       - run: flutter pub get
       - run: flutter analyze
+      # Compiles packages/opus_native's libopus with the runner's clang first;
+      # the golden test then decodes with it. No ccache shim on this image, so
+      # tool/flutter_test.sh is not needed here.
       - run: flutter test
 
   ios:
@@ -260,6 +263,23 @@ jobs:
           strings -a "$APP/Runner" > /tmp/runner-strings.txt
           grep -q 'universal_ble' /tmp/runner-strings.txt || {
             echo "::error::universal_ble is not linked into Runner"; exit 1; }
+
+          # The Opus decoder is not a plugin: packages/opus_native compiles
+          # libopus in a Dart build hook, and Flutter embeds the result as a
+          # framework of its own. If that ever stops happening the app still
+          # builds and installs, and fails only when a recorder sends Opus -
+          # so look for libopus's version string in whichever framework holds
+          # it rather than trusting the build. File, not pipe: see above.
+          OPUS_FW=""
+          for fw in "$APP"/Frameworks/*.framework; do
+            bin="$fw/$(basename "$fw" .framework)"
+            [ -f "$bin" ] || continue
+            strings -a "$bin" > /tmp/fw-strings.txt
+            if grep -qx 'libopus 1.5.2' /tmp/fw-strings.txt; then OPUS_FW="$fw"; fi
+          done
+          test -n "$OPUS_FW" || {
+            echo "::error::no embedded framework carries libopus 1.5.2 (packages/opus_native)"; exit 1; }
+          echo "libopus embedded in $(basename "$OPUS_FW")"
 
           # Apple's Developer Portal derives the App ID name from CFBundleName
           # and accepts ONLY letters, digits and spaces. Flutter's default is

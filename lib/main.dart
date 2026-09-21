@@ -19,6 +19,7 @@ import 'drivers/file_store.dart';
 import 'drivers/hashing_crypto.dart';
 import 'drivers/haptics_channel.dart';
 import 'drivers/network_status_connectivity.dart';
+import 'drivers/opus_library_native.dart';
 import 'drivers/phone_power_battery_plus.dart';
 import 'drivers/secret_store_secure.dart';
 import 'drivers/platform_settings_channel.dart';
@@ -27,6 +28,7 @@ import 'drivers/speaker_diarizer_sherpa.dart';
 import 'drivers/speech_recognizer_sherpa.dart';
 import 'drivers/undo_notification_channel.dart';
 import 'services/assistant/undo_notifier.dart';
+import 'services/codec/frame_decoder.dart';
 import 'services/export/note_export_service.dart';
 import 'services/summary/day_summary_store.dart';
 import 'services/transcription/model_download_service.dart';
@@ -99,6 +101,12 @@ Future<void> main() async {
     // notification `backgroundMode` posts is the whole alert.
     haptics: android ? const MethodChannelHaptics() : null,
     phonePower: BatteryPlusPhonePower(),
+    // Codec 2 on `fe03`. Wired here so every stream - a manual recording,
+    // always-listening, the mic check - opens its decoder in the one place
+    // that knows how, and none of them can disagree about Opus. libopus is
+    // compiled into the app by packages/opus_native, and nothing calls into it
+    // until the device actually reports Opus.
+    decoders: const FrameDecoders(opus: NativeOpusLibrary()),
     // Android only: its foreground service keeps this isolate alive with the
     // screen off, so a queued transcript simply carries on running. iOS makes
     // no such promise - there the queue runs when the app is opened, or inside

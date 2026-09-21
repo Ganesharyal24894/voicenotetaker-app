@@ -1,0 +1,21 @@
+name: opus_native
+description: >-
+  libopus 1.5.2's decoder, vendored unmodified and compiled from source by a
+  Dart build hook, for voicenotetaker_app. Not published.
+version: 1.5.2
+publish_to: none
+
+environment:
+  sdk: ^3.13.3
+
+dependencies:
+  # The build-hook API. Already in the app's lock file through objective_c,
+  # whose own hook compiles native code for iOS - so hooks were running in this
+  # app's builds before this package existed.
+  code_assets: ^1.2.1
+  hooks: ^2.0.2
+  # Drives the platform's own C compiler: the NDK's clang for Android, Xcode's
+  # for iOS, the host's for `flutter test`. Pinned exactly: it is build
+  # tooling, and a silent minor bump is a different compiler invocation.
+  native_toolchain_c: 0.19.3
+  logging: ^1.2.0

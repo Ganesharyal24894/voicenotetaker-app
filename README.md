@@ -57,6 +57,22 @@ per block → 164 bytes on air. Decoded output is 16 kHz, 16-bit, mono. Because
 each block carries its own predictor state, a dropped packet costs exactly one
 block instead of desynchronising the decoder for the rest of the stream.
 
+**Codec 2 — Opus**, CELT only. The firmware's standard `opus_encoder` API in
+`OPUS_APPLICATION_RESTRICTED_LOWDELAY`: 16 kHz mono, 20 ms frames, 24 kbps
+unconstrained VBR (≈ 20.6 kbps and 45–61 bytes a packet on real speech). One
+self-contained packet per notification, like ADPCM, and a **standard** Opus
+bitstream — the firmware chose that API over `opus_custom` so that any
+compliant decoder reads it. Unlike ADPCM, a lost packet is not simply missing
+audio: the sequence gap tells the decoder, and libopus conceals the frame.
+The device only sends Opus when asked; ADPCM stays its default.
+
+The decoder is libopus 1.5.2 — the version the firmware vendors — compiled
+from unmodified source in `packages/opus_native/` by a Dart build hook, for
+every target including the host `flutter test` runs on. It is built in
+**float**, although the firmware encodes in fixed point: libopus's fixed-point
+concealment turns a lost speech frame into near-silence at 84 of 230 positions
+in real speech, float at 0 of 230. See `packages/opus_native/hook/build.dart`.
+
 ## Architecture
 
 The same four-layer scheme the firmware uses. Dependencies point one way only:
@@ -119,10 +135,22 @@ lib/
                                                live"
                  secret_store_secure.dart      Keychain / AndroidKeyStore
                                                implementation
+                 opus_library.dart             abstract libopus decoder: open,
+                                               decode or conceal, close
+                 opus_library_native.dart      the vendored libopus in
+                                               packages/opus_native, over FFI
 
   services/    Domain logic on top of the driver interfaces. No package
                imports, no dart:io.
 
+                 codec/frame_decoder.dart  opens THE decoder for a stream,
+                                           whichever codec; every capture
+                                           path goes through it
+                 codec/stream_decoder.dart one stream's decoder, with a
+                                           lifecycle (Opus holds state)
+                 codec/opus_stream_decoder.dart  Opus: concealment for the
+                                           sequence gaps, a bad packet costs
+                                           one frame
                  codec/adpcm_decoder.dart  pure Dart IMA ADPCM decoder
                  frame_reassembler.dart    strips the sequence header,
                                            detects gaps, counts loss
@@ -174,6 +202,13 @@ lib/
                  widgets/              icons (CustomPainter, no icon font),
                                        waveforms, shared chrome
   main.dart    Minimal; wires concrete drivers in and hands off.
+
+packages/
+  opus_native/ libopus 1.5.2's decoder, vendored UNMODIFIED under
+               third_party/libopus (provenance in its README.md), compiled by
+               hook/build.dart with native_toolchain_c: the NDK's clang on
+               Android, Xcode's on iOS, the host's under `flutter test`. No
+               CocoaPods, no prebuilt binary, no system libopus.
 ```
 
 ### Why `drivers/` is the swap layer
@@ -210,13 +245,26 @@ the swap layer exists to prevent.
 ```sh
 source ~/development/flutter-env.sh
 flutter pub get
-flutter analyze     # must be clean
-flutter test        # must be all green
+flutter analyze        # must be clean
+tool/flutter_test.sh   # must be all green - `flutter test`, minus one PATH trap
 ```
+
+**Why the wrapper.** `packages/opus_native` compiles libopus in a build hook,
+and under `flutter test` that hook finds its compiler with `which clang`. A
+shell with Debian's `/usr/lib/ccache` shim ahead of `/usr/bin` hands it the
+ccache binary, and the whole suite fails to build. The hook says exactly that
+when it happens; `tool/flutter_test.sh` takes the shim off PATH and runs
+`flutter test` with whatever arguments it is given. Plain `flutter test` is
+fine on any PATH without the shim, CI's included. The first run compiles
+libopus (≈ 4 s); later runs reuse it.
 
 | File | Covers |
 |---|---|
 | `test/adpcm_decoder_test.dart` | cross-language golden vectors + edge cases |
+| `test/codec/opus_golden_test.dart` | the vendored libopus against the firmware's real bitstream: the silicon's exact byte counts, 320 samples a packet, ≤ 1 LSB from the reference decode, two streams interleaved without contaminating each other, concealment that is not silence at any of 230 loss positions |
+| `test/codec/opus_native_driver_test.dart` | the same library under abuse: truncated, impossible and random packets, an empty packet refused, libm linked for Android, and 10,000 decoders opened and closed without growing the process |
+| `test/codec/opus_stream_decoder_test.dart` | the Opus rules against a fake libopus: how much to conceal, the cap on a long outage, a bad packet costing one frame, dispose |
+| `test/codec/frame_decoders_test.dart`, `decoder_lifecycle_test.dart`, `decoder_refusal_test.dart` | one decoder per stream, closed when the recorder, always-listening or the mic check stops — and when starting fails part-way; a new stream in another codec never inherits the old decoder; a build without libopus, or a format libopus refuses, is refused in each service's own terms rather than recorded as silence |
 | `test/frame_reassembler_test.dart` | sequence gaps, 16-bit wraparound, loss counting |
 | `test/wav_writer_test.dart` | exact 44-byte header, field by field at its offset |
 | `test/recording_service_test.dart` | orchestration against a `mocktail` fake transport |
@@ -264,6 +312,24 @@ The vectors specifically cover:
   which is padding),
 * **block independence** — identical nibbles under different headers must decode
   differently, and decoding one block must not affect the next.
+
+### The Opus golden test
+
+`test/fixtures/opus_vectors.json` is the firmware's real bitstream, not a
+lookalike. It is generated outside git, in
+`notetaker-data/opus-golden/` (`make_app_fixture.c`, then
+`add_float_decoder.py`; `build.sh` builds both), from a fixed-point libopus
+1.5.2 compiled from **exactly** the firmware's file list and defines, set up
+with **exactly** `opus_codec.c`'s CTLs in its order, encoding the same 5 s of
+`voicenote.wav` the silicon bench encoded. The result reproduces the silicon's
+measurement to the byte — 12,906 bytes, 51.62 per packet, 45–61, 20,649 bps —
+and the test asserts those numbers, so a fixture regenerated from a drifted
+encoder fails before anything is decoded.
+
+The expected PCM is the fixed-point decode, and the app decodes in float, so
+PCM is compared within 1 LSB — the measured float-vs-fixed difference on these
+packets — and concealment is compared by energy rather than by bytes, since
+float concealment is not bit-exact across CPUs.
 
 ## The UI layer
 

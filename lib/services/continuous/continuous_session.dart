@@ -7,6 +7,7 @@ import '../../model/audio_codec.dart';
 import '../../model/capture_flags.dart';
 import '../../model/stream_info.dart';
 import '../codec/frame_decoder.dart';
+import '../codec/stream_decoder.dart';
 import '../frame_reassembler.dart';
 import 'note_writer.dart';
 
@@ -40,6 +41,7 @@ class ContinuousSession {
     required this._directory,
     DateTime Function()? clock,
     this.keepaliveInterval = defaultKeepaliveInterval,
+    this._decoders = const FrameDecoders(),
   }) : _clock = clock ?? DateTime.now;
 
   /// THE LIVENESS CONTRACT. The firmware drops a link that has had no GATT
@@ -57,13 +59,19 @@ class ContinuousSession {
   final DateTime Function() _clock;
   final Duration keepaliveInterval;
 
+  /// Where a decoder for the link's codec comes from. One per session, opened
+  /// in [start] and released in [stop]: an Opus decoder carries state from one
+  /// frame to the next and native memory with it.
+  final FrameDecoders _decoders;
+
+  StreamDecoder? _decoder;
+
   final FrameReassembler _reassembler = FrameReassembler();
   final StreamController<void> _changes = StreamController<void>.broadcast();
   final StreamController<NoteChange> _notes =
       StreamController<NoteChange>.broadcast();
 
   String? _deviceId;
-  StreamInfo? _format;
   ContinuousNoteWriter? _writer;
   CaptureFlags? _flags;
   StreamSubscription<Uint8List>? _frames;
@@ -117,14 +125,29 @@ class ContinuousSession {
     if (format.codec == null || format.bitsPerSample != 16) {
       throw ContinuousSessionException('unsupported audio format: $format');
     }
+    final StreamDecoder decoder;
+    try {
+      decoder = _decoders.open(
+        codec: format.codec!,
+        sampleRateHz: format.sampleRateHz,
+        channels: format.channels,
+      );
+    } on Object catch (e) {
+      // A codec this build cannot open is the same kind of refusal as a format
+      // it cannot write: say so now rather than record an empty day.
+      throw ContinuousSessionException('cannot decode $format', e);
+    }
     try {
       await _transport.writeCapture(deviceId, CaptureCommand.gateEnabled);
     } on BleTransportException catch (e) {
+      // Not yet the session's, so `stop` cannot reach it: close it here.
+      decoder.dispose();
       throw ContinuousSessionException('the device refused speech-only', e);
     }
 
     _deviceId = deviceId;
-    _format = format;
+    _decoder?.dispose();
+    _decoder = decoder;
     _reassembler.reset();
     _writer = ContinuousNoteWriter(
       fileStore: _fileStore,
@@ -198,6 +221,8 @@ class ContinuousSession {
     await _work;
     _writer = null;
     _flags = null;
+    _decoder?.dispose();
+    _decoder = null;
     _notify();
   }
 
@@ -208,13 +233,13 @@ class ContinuousSession {
   }
 
   void _onNotification(Uint8List notification) {
-    final format = _format;
-    if (format == null) return;
+    final decoder = _decoder;
+    if (decoder == null) return;
     final frame = _reassembler.accept(notification);
     if (frame == null) return;
     final Uint8List pcm;
     try {
-      pcm = FrameDecoder.decode(format.codec!, frame);
+      pcm = decoder.decode(frame);
     } on Object {
       // One block this build cannot decode costs that block, not a day of
       // listening: an error thrown out of a stream listener has nowhere to go.
