@@ -15,8 +15,8 @@ import 'pairing_store.dart';
 /// The controller connects with the transport as always, then hands the link
 /// to [PairingAttempt.afterConnect]: bond (Android), read `fe02` (the
 /// encryption proof, and iOS's pairing trigger), then carry on with the usual
-/// session setup. Recorders that say nothing about pairing skip straight
-/// through.
+/// session setup. Recorders that say nothing about pairing are secured too,
+/// but quietly - see [PairingAttempt.afterConnect].
 class PairingService {
   PairingService({
     required this._driver,
@@ -156,8 +156,17 @@ class PairingAttempt {
   }
 
   /// The link is up: bond and secure as this recorder needs. Never throws.
+  ///
+  /// A recorder that said nothing about pairing - its scan response never
+  /// reached the phone, which is usual on a first pairing - is still bonded
+  /// and secured, but QUIETLY: a failure there is not a pairing problem and
+  /// the outcome stays success, as it always was. It still has to happen
+  /// here. Every value on the recorder needs encryption, so otherwise the
+  /// first read after connect (auto-sleep) is what starts pairing, and it
+  /// fails or times out behind the prompt and is never read again.
   Future<PairingOutcome> afterConnect() async {
     _connectedAt = _service._now();
+    if (!flow.recorderPairs) await _secureQuietly();
     var step = flow.connected();
     try {
       if (step == PairingStep.bonding) {
@@ -193,5 +202,18 @@ class PairingAttempt {
       await _service.forget(device.id);
     }
     return outcome;
+  }
+
+  /// Bonds (Android, where not already bonded) and reads `fe02`, ignoring
+  /// failure: whatever this could not do, the reads after it find out.
+  Future<void> _secureQuietly() async {
+    try {
+      if (_driver.systemBonds && !flow.bondedBefore) {
+        await _driver.bond(device.id, timeout: PairingService.promptTimeout);
+      }
+      await _driver.secure(device.id, timeout: PairingService.promptTimeout);
+    } on Object catch (error) {
+      debugPrint('Could not secure a recorder with no pairing status: $error');
+    }
   }
 }

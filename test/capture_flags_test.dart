@@ -32,9 +32,55 @@ void main() {
       );
     });
 
+    test('bits 4 and 5 are what the recorder believes about being worn', () {
+      expect(CaptureFlags.fromBytes(<int>[0x00]).wear, WearState.unknown);
+      expect(CaptureFlags.fromBytes(<int>[0x10]).wear, WearState.worn);
+      expect(CaptureFlags.fromBytes(<int>[0x20]).wear, WearState.notWorn);
+    });
+
+    test('both wear bits, which the recorder never sends, read as unknown', () {
+      expect(CaptureFlags.fromBytes(<int>[0x30]).wear, WearState.unknown);
+      expect(CaptureFlags.fromBytes(<int>[0x3F]).wear, WearState.unknown);
+    });
+
+    test('the wear bits do not disturb the others', () {
+      expect(
+        CaptureFlags.fromBytes(<int>[0x11]),
+        const CaptureFlags(
+          privacyMode: true,
+          speechOpen: false,
+          gateEnabled: false,
+          wear: WearState.worn,
+        ),
+      );
+      expect(CaptureFlags.fromBytes(<int>[0x11]).privacyMode, isTrue);
+      expect(
+        CaptureFlags.fromBytes(<int>[0x2C]),
+        const CaptureFlags(
+          privacyMode: false,
+          speechOpen: false,
+          gateEnabled: true,
+          micOff: true,
+          wear: WearState.notWorn,
+        ),
+      );
+    });
+
+    test('wear is part of equality', () {
+      expect(
+        CaptureFlags.fromBytes(<int>[0x14]),
+        isNot(CaptureFlags.fromBytes(<int>[0x24])),
+      );
+      expect(
+        CaptureFlags.fromBytes(<int>[0x14]).hashCode,
+        CaptureFlags.fromBytes(<int>[0x14]).hashCode,
+      );
+    });
+
     test('reserved bits are refused rather than half-read', () {
-      expect(() => CaptureFlags.fromBytes(<int>[0x10]), throwsFormatException);
+      expect(() => CaptureFlags.fromBytes(<int>[0x40]), throwsFormatException);
       expect(() => CaptureFlags.fromBytes(<int>[0x80]), throwsFormatException);
+      expect(() => CaptureFlags.fromBytes(<int>[0x51]), throwsFormatException);
       expect(() => CaptureFlags.fromBytes(<int>[0xFF]), throwsFormatException);
     });
   });

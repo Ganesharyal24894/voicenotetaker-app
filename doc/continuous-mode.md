@@ -62,7 +62,7 @@ service, and the app behaves as it did before the mode existed.
 
 | Direction | Value |
 |---|---|
-| READ / NOTIFY, 1 byte | bit0 privacy mode (`muted` on the wire), bit1 audio flowing, bit2 speech gate enabled, bit3 mic off for power (no `fe01` subscriber for 2 min on a recorder without storage; clears on subscribe); bits 4-7 reserved (a value with one set is refused, as for `fe04`/`fe05`) |
+| READ / NOTIFY, 1 byte | bit0 privacy mode (`muted` on the wire), bit1 audio flowing, bit2 speech gate enabled, bit3 mic off for power (no `fe01` subscriber for 2 min on a recorder without storage; clears on subscribe); bits 4-5 wear state (`00` unknown, `01` worn, `10` not worn, `11` never sent and read as unknown; parsed, not shown yet); bits 6-7 reserved (a value with one set is refused, as for `fe04`/`fe05`) |
 | WRITE, 1 byte | `0` gate disabled (stream everything), `1` speech only, `2` privacy mode on (`CAPTURE_CMD_MUTE`), `3` privacy mode off (`CAPTURE_CMD_UNMUTE`). `4..255` -> ATT `0x13`, wrong length -> `0x0D` |
 
 As implemented by the firmware, and relied on here:

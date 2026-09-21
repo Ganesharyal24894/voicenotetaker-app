@@ -73,16 +73,56 @@ void main() {
     expect(await service.reconnectId('UUID-1'), 'UUID-1');
   });
 
-  test('no pairing field: neither bonded, secured nor remembered', () async {
+  // A first pairing whose scan response never arrived. Without this the
+  // first read after connect is what starts pairing, fails behind the prompt,
+  // and auto-sleep says "Couldn't read this from your recorder."
+  test('no pairing field: still bonded and secured, but not remembered',
+      () async {
     final driver = FakeBlePairing();
     final (service, _) = build(driver);
 
     final attempt = await service.begin(recorder('AA', null));
     expect(await attempt.afterConnect(), PairingOutcome.success);
 
-    expect(driver.calls, isEmpty);
+    expect(driver.calls, <String>['bond AA', 'secure AA']);
     expect(service.isOwner('AA'), isFalse);
     expect(service.stateOf(recorder('AA', null)), RecorderPairing.unknown);
+  });
+
+  test('no pairing field on iOS: the read alone, which is the alert',
+      () async {
+    final driver = FakeBlePairing(systemBonds: false);
+    final (service, _) = build(driver);
+
+    final attempt = await service.begin(recorder('UUID-1', null));
+    expect(await attempt.afterConnect(), PairingOutcome.success);
+
+    expect(driver.calls, <String>['secure UUID-1']);
+  });
+
+  test('no pairing field, already bonded: secured without bonding again',
+      () async {
+    final driver = FakeBlePairing(bondedIds: <String>{'AA'});
+    final (service, _) = build(driver);
+
+    final attempt = await service.begin(recorder('AA', null));
+    expect(await attempt.afterConnect(), PairingOutcome.success);
+
+    expect(driver.calls, <String>['secure AA']);
+  });
+
+  test('no pairing field: a failure to secure is not a pairing problem',
+      () async {
+    final driver = FakeBlePairing()
+      ..bondError = const BleTransportException('refused')
+      ..failureKind = BleFailureKind.pairingRejected;
+    final (service, _) = build(driver);
+
+    final attempt = await service.begin(recorder('AA', null));
+    expect(await attempt.afterConnect(), PairingOutcome.success);
+
+    expect(driver.calls, <String>['bond AA']);
+    expect(service.isOwner('AA'), isFalse);
   });
 
   test('a refused pairing forgets the recorder', () async {

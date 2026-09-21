@@ -21,11 +21,16 @@ import 'dart:typed_data';
 ///     recorder without storage). Clears as soon as `fe01` is subscribed.
 ///     This is POWER saving and nothing else: the device decided it, the
 ///     wearer did not, and it is a different thing from privacy mode.
+///   * bits 4 and 5 - [wear]: what the device believes about being worn.
+///     `00` unknown (at boot, and on a unit whose motion sensor did not come
+///     up), `01` worn (bit 4), `10` not worn (bit 5). `11` is never sent and
+///     is read as unknown rather than picking one. Unknown is a real answer:
+///     it is not the same as not worn.
 ///
 /// Changes are sampled every 20 ms on the device (100 ms in privacy mode); two
 /// within one tick arrive as one notification carrying the final state.
 ///
-/// Every other bit is reserved and must be zero. A value with one set is a
+/// Bits 6 and 7 are reserved and must be zero. A value with one set is a
 /// firmware newer than this build and is refused rather than half-read, the
 /// same rule `AutoSleep` and `BatteryStatus` follow.
 ///
@@ -37,6 +42,7 @@ class CaptureFlags {
     required this.speechOpen,
     required this.gateEnabled,
     this.micOff = false,
+    this.wear = WearState.unknown,
   });
 
   /// `fe08` bit 0. The wire name is "muted"; the feature the wearer sees
@@ -47,8 +53,12 @@ class CaptureFlags {
   static const int gateEnabledBit = 0x04;
   static const int micOffBit = 0x08;
 
+  /// Bits 4 and 5, read together - see [WearState].
+  static const int wornBit = 0x10;
+  static const int notWornBit = 0x20;
+
   /// Every other bit.
-  static const int reservedBits = 0xF0;
+  static const int reservedBits = 0xC0;
 
   /// The characteristic is exactly this long, in both directions.
   static const int valueBytes = 1;
@@ -65,6 +75,9 @@ class CaptureFlags {
 
   /// The microphone is off to save battery - see the class comment.
   final bool micOff;
+
+  /// What the device believes about being worn - see the class comment.
+  final WearState wear;
 
   /// The speech gate is enabled and open: the device is hearing speech now.
   bool get hearingSpeech => gateEnabled && speechOpen && !privacyMode;
@@ -91,6 +104,7 @@ class CaptureFlags {
       speechOpen: value & speechOpenBit != 0,
       gateEnabled: value & gateEnabledBit != 0,
       micOff: value & micOffBit != 0,
+      wear: WearState._fromBits(value & (wornBit | notWornBit)),
     );
   }
 
@@ -100,15 +114,37 @@ class CaptureFlags {
       other.privacyMode == privacyMode &&
       other.speechOpen == speechOpen &&
       other.gateEnabled == gateEnabled &&
-      other.micOff == micOff;
+      other.micOff == micOff &&
+      other.wear == wear;
 
   @override
-  int get hashCode => Object.hash(privacyMode, speechOpen, gateEnabled, micOff);
+  int get hashCode =>
+      Object.hash(privacyMode, speechOpen, gateEnabled, micOff, wear);
 
   @override
   String toString() => 'CaptureFlags(privacyMode: $privacyMode, '
       'speechOpen: $speechOpen, '
-      'gateEnabled: $gateEnabled, micOff: $micOff)';
+      'gateEnabled: $gateEnabled, micOff: $micOff, wear: ${wear.name})';
+}
+
+/// What the recorder believes about being worn: `fe08` bits 4 and 5.
+enum WearState {
+  /// The device has not decided - at boot, on a unit without a working
+  /// motion sensor, and for the `11` encoding it never sends. Not the same
+  /// as [notWorn].
+  unknown,
+
+  /// Bit 4.
+  worn,
+
+  /// Bit 5.
+  notWorn;
+
+  static WearState _fromBits(int bits) => switch (bits) {
+        CaptureFlags.wornBit => worn,
+        CaptureFlags.notWornBit => notWorn,
+        _ => unknown,
+      };
 }
 
 /// What the app may WRITE to `fe08`: one byte, one of four commands.

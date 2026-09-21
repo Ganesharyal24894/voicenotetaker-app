@@ -114,6 +114,40 @@ void main() {
     expect(notes(), hasLength(1));
   });
 
+  test('the recorder deciding it is worn neither ends the note nor hides '
+      'a double tap into privacy mode', () async {
+    await session.start(deviceId);
+    await speak(3);
+
+    const worn = CaptureFlags(
+      privacyMode: false,
+      speechOpen: true,
+      gateEnabled: true,
+      wear: WearState.worn,
+    );
+    harness.captureFlags = worn;
+    harness.capture.add(worn);
+    await pumpEventQueue();
+    await session.idle;
+    expect(session.flags, worn);
+    expect(session.currentNotePath, isNotNull);
+
+    const privacyMode = CaptureFlags(
+      privacyMode: true,
+      speechOpen: false,
+      gateEnabled: true,
+      wear: WearState.worn,
+    );
+    harness.captureFlags = privacyMode;
+    harness.capture.add(privacyMode);
+    await pumpEventQueue();
+    await session.idle;
+
+    expect(session.currentNotePath, isNull);
+    expect(session.flags!.privacyMode, isTrue);
+    expect(notes(), hasLength(1));
+  });
+
   test('the keep-alive reads fe08 every interval', () async {
     await session.start(deviceId);
     clearInteractions(harness.transport);

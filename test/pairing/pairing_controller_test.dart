@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:voicenotetaker_app/controller/app_controller.dart';
 import 'package:voicenotetaker_app/drivers/ble_transport.dart';
+import 'package:voicenotetaker_app/model/auto_sleep.dart';
 import 'package:voicenotetaker_app/model/continuous_status.dart';
 import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/model/pairing_advert.dart';
@@ -75,9 +76,48 @@ void main() {
 
     await harness.controller.connect(recorder(null));
 
-    expect(pairing.calls, isEmpty);
     expect(harness.controller.isConnected, isTrue);
     expect(harness.controller.pairedToThisPhone, isFalse);
+  });
+
+  // A first pairing whose scan response never reached the phone. Every value
+  // needs encryption, so the link is secured BEFORE the reads at connect -
+  // otherwise auto-sleep is the read that starts pairing, fails behind the
+  // prompt and shows "Couldn't read this from your recorder." until the app
+  // is restarted.
+  test('with no pairing status, the link is secured before auto-sleep is read',
+      () async {
+    final pairing = FakeBlePairing();
+    final harness = await started(pairing);
+    when(() => harness.transport.readAutoSleep(any())).thenAnswer((_) async {
+      pairing.calls.add('read auto-sleep');
+      return const AutoSleepSetting(
+        enabled: true,
+        duration: AutoSleepDuration.seconds30,
+      );
+    });
+
+    await harness.controller.connect(recorder(null));
+
+    expect(pairing.calls, <String>[
+      'bond ${knownDevice.id}',
+      'secure ${knownDevice.id}',
+      'read auto-sleep',
+    ]);
+    expect(harness.controller.autoSleepAvailable, isTrue);
+  });
+
+  test('with no pairing status, a link that cannot be secured still connects',
+      () async {
+    final pairing = FakeBlePairing()
+      ..secureError = const BleTransportException('insufficient encryption')
+      ..failureKind = BleFailureKind.insufficientEncryption;
+    final harness = await started(pairing);
+
+    await harness.controller.connect(recorder(null));
+
+    expect(harness.controller.isConnected, isTrue);
+    expect(harness.controller.pairingProblem, isNull);
   });
 
   test('Android, paired to another phone: instructions with no radio time',
