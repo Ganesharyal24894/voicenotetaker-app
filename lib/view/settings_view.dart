@@ -31,9 +31,11 @@ import 'widgets/status_tone.dart';
 /// (nothing known), or one this phone has not paired with, has nothing to
 /// show there.
 ///
-/// CONNECT AND DISCONNECT live under the Listening card, and only while
-/// always-listening is off - the one place the old recorder sheet offered
-/// them. With it on, the link is the app's to keep.
+/// CONNECT AND DISCONNECT live under the Listening card - the one place the
+/// old recorder sheet offered them. Disconnect only while always-listening is
+/// off: with it on, the link is the app's to keep. Connect whenever nothing
+/// is connected, always listening or not: the app reconnecting on its own
+/// cannot help a recorder it has never met, or one that no longer pairs.
 class SettingsView extends StatelessWidget {
   const SettingsView({
     required this.controller,
@@ -56,8 +58,7 @@ class SettingsView extends StatelessWidget {
   final VoidCallback? onBack;
   final VoidCallback? onOpenDiagnostics;
 
-  /// Goes to pairing; offered while nothing is connected and listening is
-  /// off. Null hides it.
+  /// Goes to pairing; offered while nothing is connected. Null hides it.
   final VoidCallback? onConnect;
 
   /// Opens the "Pair a new phone" instructions. Null pushes them from here.
@@ -213,10 +214,10 @@ class SettingsView extends StatelessWidget {
   }
 
   List<Widget> _linkAction(BuildContext context) {
-    if (controller.continuousEnabled) return const <Widget>[];
     final connected =
         controller.isConnected && controller.connectedDevice != null;
     if (connected) {
+      if (controller.continuousEnabled) return const <Widget>[];
       return <Widget>[
         const SizedBox(height: 8),
         Center(

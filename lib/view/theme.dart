@@ -99,6 +99,10 @@ abstract final class AppColors {
   /// `rgba(167, 139, 250, 0.30)` - the Transcribe chip hairline.
   static const Color purpleChipBorder = Color(0x4DA78BFA);
 
+  /// `rgba(251, 191, 36, 0.28)` - the hairline of the Today card that says
+  /// notes are not being saved: [purpleChipBorder]'s amber twin.
+  static const Color warningCardBorder = Color(0x47FBBF24);
+
   /// `rgba(251, 191, 36, 0.14)` - the DEBUG ONLY badge fill.
   /// Outline for a destructive control. The full-strength [error] would
   /// shout next to the record button; this is the same hue at a border's

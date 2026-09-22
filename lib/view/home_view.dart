@@ -18,6 +18,7 @@ import 'recording_entry.dart';
 import 'theme.dart';
 import 'widgets/app_icons.dart';
 import 'widgets/common.dart';
+import 'widgets/connect_banner.dart';
 import 'widgets/home_widgets.dart';
 import 'widgets/motion.dart';
 import 'widgets/privacy_banner.dart';
@@ -37,6 +38,7 @@ class HomeView extends StatefulWidget {
     required this.onOpenRecording,
     this.assistant,
     this.onOpenSettings,
+    this.onConnect,
     super.key,
   });
 
@@ -54,6 +56,10 @@ class HomeView extends StatefulWidget {
   /// in RELEASE builds too; Diagnostics is one row further in. Null hides the
   /// menu and makes the status line plain text.
   final VoidCallback? onOpenSettings;
+
+  /// Opens the scan screen over Home, from the card Today shows while always
+  /// listening has no recorder. Null leaves the card out.
+  final VoidCallback? onConnect;
 
   static const int todayTab = 0;
   static const int notesTab = 1;
@@ -140,7 +146,12 @@ class _HomeViewState extends State<HomeView> {
               ),
             ),
             const SizedBox(height: 14),
-            if (_tab == HomeView.todayTab) PrivacyBanner(controller: controller),
+            // One slot, two cards that never show together: privacy mode
+            // needs a live link, and the connect card needs none.
+            if (_tab == HomeView.todayTab) ...<Widget>[
+              PrivacyBanner(controller: controller),
+              ConnectBanner(controller: controller, onConnect: widget.onConnect),
+            ],
             Expanded(
               child: IndexedStack(
                 index: _tab,

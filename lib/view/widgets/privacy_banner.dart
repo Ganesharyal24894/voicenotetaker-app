@@ -5,7 +5,7 @@ import 'package:flutter/widgets.dart';
 import '../../controller/app_controller.dart';
 import '../../model/notes_saving.dart';
 import '../theme.dart';
-import 'common.dart';
+import 'notice_card.dart';
 
 /// Today, in privacy mode: one card under the header saying the recorder is
 /// not listening, with Resume. From `canvas-privacy/Main.dc.html`.
@@ -27,70 +27,12 @@ class PrivacyBanner extends StatelessWidget {
     if (controller.notesSaving != NotesSaving.privacyMode) {
       return const SizedBox.shrink();
     }
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(AppShape.gutter, 0, AppShape.gutter, 14),
-      child: AppCard(
-        borderColor: AppColors.purpleChipBorder,
-        padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
-        child: Row(
-          children: <Widget>[
-            const ShieldIcon(),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  const Text(title, style: AppText.rowTitle),
-                  const SizedBox(height: 3),
-                  Text(
-                    meta,
-                    style: AppText.rowMeta.copyWith(color: AppColors.textSecondary),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            _ResumeButton(
-              onTap: () => unawaited(controller.turnPrivacyModeOff()),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// A 44 px primary pill that sizes to its label.
-class _ResumeButton extends StatelessWidget {
-  const _ResumeButton({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      label: PrivacyBanner.resume,
-      onTap: onTap,
-      container: true,
-      excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          height: AppShape.minTapTarget,
-          padding: const EdgeInsets.symmetric(horizontal: 18),
-          alignment: Alignment.center,
-          decoration: const BoxDecoration(
-            color: AppColors.primaryFill,
-            borderRadius: BorderRadius.all(Radius.circular(22)),
-          ),
-          child: Text(
-            PrivacyBanner.resume,
-            style: AppText.buttonLabel.copyWith(fontSize: 14),
-          ),
-        ),
-      ),
+    return NoticeCard(
+      icon: const ShieldIcon(),
+      title: title,
+      meta: meta,
+      action: resume,
+      onAction: () => unawaited(controller.turnPrivacyModeOff()),
     );
   }
 }

@@ -102,6 +102,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   /// while there are notes to read - see [_buildPages].
   bool _pairing = false;
 
+  /// Settings' "Connect a recorder" and the card on Today both come here.
+  void _askToPair() {
+    if (mounted) setState(() => _pairing = true);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -281,9 +286,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           (context) =>
               PairNewPhoneView(onBack: () => Navigator.of(context).pop()),
         ),
-        onConnect: () {
-          if (mounted) setState(() => _pairing = true);
-        },
+        onConnect: _askToPair,
         onExportNotes: widget.newExportController == null
             ? null
             : () => _exportNotes(context),
@@ -352,14 +355,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     //
     // HOME WITH NOTES AND NO LINK. Someone who has notes can read and
     // summarize them without a recorder in range, so Home stays up for them
-    // too - unless they asked to pair (Settings' "Connect a recorder"), or a link dropped by itself, which keeps its own screen.
+    // too - unless a link dropped by itself, which keeps its own screen.
     // With no notes, pairing is the only useful thing, and the scan screen is
     // still where the app starts.
     if (connected) _pairing = false;
     final hasNotes = controller.recordings.isNotEmpty;
-    // Pairing asked for from Home: the scan screen goes ON TOP of Home, so
-    // Back - the system gesture or the screen's own - returns to it.
-    final pairingFromHome = _pairing && hasNotes;
     final home = connected ||
         controller.continuousEnabled ||
         (hasNotes && controller.linkOutcome != LinkOutcome.connectionLost);
@@ -369,6 +369,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     final lost = !home &&
         !recording &&
         controller.linkOutcome == LinkOutcome.connectionLost;
+    // Pairing asked for from Home (Settings' "Connect a recorder", or the
+    // card on Today): the scan screen goes ON TOP of Home, so Back - the
+    // system gesture or the screen's own - returns to it. Whatever keeps Home
+    // up - notes, or always listening - the scan screen still comes.
+    final pairingFromHome = _pairing && home && !connected && !recording;
     final instant = AppMotion.isReduced(context);
 
     return HeroControllerScope(
@@ -414,10 +419,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                   // on Settings; the debug gate is one tap further in again,
                   // on Developer options.
                   onOpenSettings: () => _openSettings(context),
+                  onConnect: _askToPair,
                 ),
               ),
             ),
-          if (home && pairingFromHome && !connected && !recording)
+          if (pairingFromHome)
             _DockPage(
               key: _pairingKey,
               instant: instant,
