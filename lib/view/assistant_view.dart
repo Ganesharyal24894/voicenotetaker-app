@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 
 import '../controller/assistant_controller.dart';
 import '../model/assistant/assistant_send.dart';
+import 'assistant/assistant_failure_copy.dart';
 import 'format.dart';
 import 'note_list.dart';
 import 'theme.dart';

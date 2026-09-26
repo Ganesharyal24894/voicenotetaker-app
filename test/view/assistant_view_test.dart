@@ -13,6 +13,7 @@ import 'package:voicenotetaker_app/services/transcription/transcript_store.dart'
 import 'package:voicenotetaker_app/view/all_notes_view.dart';
 import 'package:voicenotetaker_app/view/note_view.dart';
 import 'package:voicenotetaker_app/services/assistant/assistant_account_store.dart';
+import 'package:voicenotetaker_app/view/assistant/assistant_failure_copy.dart';
 import 'package:voicenotetaker_app/view/assistant_view.dart';
 import 'package:voicenotetaker_app/view/settings_view.dart';
 import 'package:voicenotetaker_app/view/widgets/common.dart';
@@ -585,7 +586,7 @@ void main() {
       await pumpScreen(tester, mark(controller));
 
       expect(find.text(AssistantCopy.failedMark), findsOneWidget);
-      expect(controller.failureMessageFor(note), isNotNull);
+      expect(controller.failureFor(note)?.message, isNotNull);
 
       await tester.tap(find.text(AssistantCopy.failedMark));
       await tester.pump();
@@ -613,7 +614,7 @@ void main() {
           controller: harness.controller,
           assistant: controller,
           onBack: () {},
-          onOpenInstinct: () {},
+          onOpenAssistant: () {},
         ),
       );
       await tester.scrollUntilVisible(find.text(AssistantCopy.title), 120);
@@ -629,6 +630,46 @@ void main() {
       await tester.pump();
 
       expect(find.text(AssistantCopy.rowOn), findsOneWidget);
+
+      controller.dispose();
+    });
+
+    testWidgets('an account with the switch off says Off, not Not set up',
+        (tester) async {
+      // Set up, then switched off, then the app restarted: the launch reads
+      // nothing but the settings file, so the row has to ask for the account
+      // itself.
+      final first = build();
+      await first.initialise();
+      await first.saveAccount(
+        address: fakes.testAccount.address,
+        password: fakes.testAccount.password,
+      );
+      await first.setEnabled(true);
+      await first.setEnabled(false);
+      first.dispose();
+
+      final harness = ViewHarness();
+      addTearDown(harness.dispose);
+      final controller = build();
+      await controller.initialise();
+      expect(controller.hasAccount, isFalse, reason: 'nothing read at launch');
+
+      await pumpScreen(
+        tester,
+        SettingsView(
+          controller: harness.controller,
+          assistant: controller,
+          onBack: () {},
+          onOpenAssistant: () {},
+        ),
+      );
+      await tester.scrollUntilVisible(find.text(AssistantCopy.title), 120);
+      await tester.pumpAndSettle();
+
+      expect(find.text(AssistantCopy.rowOff), findsOneWidget);
+      expect(find.text(AssistantCopy.rowNotSetUp), findsNothing);
+      expect(controller.isReady, isTrue);
 
       controller.dispose();
     });

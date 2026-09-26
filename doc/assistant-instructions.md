@@ -49,6 +49,8 @@ phone" is something anyone can check in one file.
 | Settings file | `lib/services/assistant/assistant_settings_store.dart` |
 | Account, in the keystore | `lib/services/assistant/assistant_account_store.dart` |
 | Controller (everything the UI touches) | `lib/controller/assistant_controller.dart` |
+| Screens | `lib/view/assistant_view.dart` |
+| The row in Recorder settings, and the failure sentences | `lib/view/assistant/` |
 | SMTP seam / implementation | `lib/drivers/email_sender.dart`, `email_sender_mailer.dart` |
 | Keystore seam / implementation | `lib/drivers/secret_store.dart`, `secret_store_secure.dart` |
 
@@ -127,15 +129,31 @@ carries the password. Nothing in this feature calls `debugPrint`.
 **Removing it all:** `AssistantController.forgetEverything()` - off, account
 deleted from the keystore, outbox emptied.
 
+**Off is inert.** A launch with the switch off reads
+`assistant-settings.json` and stops there - that file is how the switch is
+known. The keystore is not opened, the outbox file is not read, no
+connectivity subscription is taken out and no timer is set.
+`AssistantController.prepare()` reads the account and the outbox when one of
+the feature's own screens needs them (the row in Recorder settings has to tell
+"Off" from "Not set up"), without starting anything; `setEnabled(true)` does
+the rest, including sending whatever was left queued. `setEnabled(false)`
+cancels the subscription and drops the timer. **Queued instructions are kept,
+not sent:** the file is left alone and they go out when the feature is on
+again, because off has to mean nothing leaves the phone. `AssistantUndoNotifier`
+likewise does not claim the Android `/assistant` channel until the feature has
+been on.
+
 ## What the screens have to do
 
-The screens are built. They are all in `lib/view/assistant_view.dart`, and
-every one of them reads `AssistantController` and nothing else - no store, no
-service and no `AppController` field is touched.
+The screens are built. They are in `lib/view/assistant_view.dart` and in
+`lib/view/assistant/` - the row in Recorder settings, and the sentence a failed
+send shows - and every one of them reads `AssistantController` and nothing else
+- no store, no service and no `AppController` field is touched. Nothing outside
+those files, and outside `main.dart`, knows the feature's name.
 
 | Screen | Where it is | What it is |
 |---|---|---|
-| The row into it | `settings_view.dart`, foot of Recorder settings | Not set up / On / Off |
+| The row into it | `view/assistant/assistant_settings_row.dart`, put at the foot of Recorder settings by `settings_view.dart` | Not set up / On / Off |
 | Setup, and the settled state | `AssistantView` | One screen: the form until there is an account, the switch and the history after |
 | The Undo banner | `AssistantUndoBanner`, above Home's tab bar | The instruction, a countdown, Undo |
 | The same thing with the app closed | `AssistantUndoNotifier` over `drivers/undo_notification.dart`, drawn by `android/.../UndoNotification.kt` | Android only |
@@ -174,7 +192,7 @@ with `AssistantController.defaultSenderAddress`,
 banner must then say it has gone rather than claim it was stopped.
 
 **A note row or note screen.** `statusFor(noteId)` gives the badge;
-`failureMessageFor(noteId)` gives one plain sentence when there is something
+`failureFor(noteId)?.message` gives one plain sentence when there is something
 wrong, and `retry(noteId)` is the tap. `titleFor(transcript)` is what the
 title should read - the wake phrase stripped - while the transcript on disk and
 on the note screen keeps every word that was said.

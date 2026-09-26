@@ -347,16 +347,6 @@ void main() {
         <AssistantFailure>[AssistantFailure.network, AssistantFailure.server],
       );
     });
-
-    test('every reason has a plain sentence with no code, host or address', () {
-      for (final value in AssistantFailure.values) {
-        expect(value.message, isNotEmpty, reason: value.name);
-        expect(value.message, isNot(contains('@')), reason: value.name);
-        expect(value.message, isNot(contains('.com')), reason: value.name);
-        expect(value.message, isNot(contains('smtp')), reason: value.name);
-        expect(value.message, isNot(matches(RegExp(r'\d'))), reason: value.name);
-      }
-    });
   });
 
   group('JSON', () {

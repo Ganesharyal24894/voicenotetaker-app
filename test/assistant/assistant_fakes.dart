@@ -5,6 +5,7 @@ import 'package:voicenotetaker_app/drivers/email_sender.dart';
 import 'package:voicenotetaker_app/drivers/file_store.dart';
 import 'package:voicenotetaker_app/drivers/haptics.dart';
 import 'package:voicenotetaker_app/drivers/network_status.dart';
+import 'package:voicenotetaker_app/drivers/secret_store.dart';
 import 'package:voicenotetaker_app/model/assistant/assistant_message.dart';
 
 /// An [EmailSender] that never opens a socket and remembers everything it was
@@ -54,6 +55,53 @@ class RecordingEmailSender implements EmailSender {
   }
 }
 
+/// A [SecretStore] in memory that remembers every call it was asked to make.
+///
+/// The counters are the point: "a launch with the feature off does not open the
+/// keystore" is a claim about calls that did NOT happen, and
+/// [MemorySecretStore] cannot show that.
+class RecordingSecretStore implements SecretStore {
+  RecordingSecretStore([Map<String, String>? initial])
+      : _values = <String, String>{...?initial};
+
+  final Map<String, String> _values;
+
+  final List<String> reads = <String>[];
+  final List<String> writes = <String>[];
+  final List<String> deletes = <String>[];
+
+  /// What is held, for a test to assert on.
+  Map<String, String> get values => Map<String, String>.unmodifiable(_values);
+
+  /// Whether anything at all has been asked of the keystore.
+  bool get wasTouched =>
+      reads.isNotEmpty || writes.isNotEmpty || deletes.isNotEmpty;
+
+  void forgetCalls() {
+    reads.clear();
+    writes.clear();
+    deletes.clear();
+  }
+
+  @override
+  Future<String?> read(String key) async {
+    reads.add(key);
+    return _values[key];
+  }
+
+  @override
+  Future<void> write(String key, String value) async {
+    writes.add(key);
+    _values[key] = value;
+  }
+
+  @override
+  Future<void> delete(String key) async {
+    deletes.add(key);
+    _values.remove(key);
+  }
+}
+
 /// A [NetworkStatus] a test can switch by hand.
 class FakeNetwork implements NetworkStatus {
   FakeNetwork([this.kind = NetworkKind.unmetered]);
@@ -61,6 +109,10 @@ class FakeNetwork implements NetworkStatus {
   NetworkKind kind;
   final StreamController<NetworkKind> _changes =
       StreamController<NetworkKind>.broadcast();
+
+  /// Whether anything is subscribed. "A feature that is off leaves no live
+  /// connectivity subscription behind" is a claim about exactly this.
+  bool get isWatched => _changes.hasListener;
 
   void go(NetworkKind next) {
     kind = next;
@@ -97,6 +149,10 @@ class MemoryFileStore implements FileStore {
   /// Paths whose writes throw, for "the disk is full" .
   final Set<String> unwritable = <String>{};
 
+  /// Every path anything was asked about, in order - `read`, `stat` and
+  /// `exists` alike. For asserting which files a launch does NOT open.
+  final List<String> reads = <String>[];
+
   String? textOf(String path) {
     final bytes = files[path];
     return bytes == null ? null : String.fromCharCodes(bytes);
@@ -113,6 +169,7 @@ class MemoryFileStore implements FileStore {
 
   @override
   Future<Uint8List> read(String path) async {
+    reads.add(path);
     final bytes = files[path];
     if (bytes == null) throw const FileSystemExceptionStub('no such file');
     return bytes;
@@ -120,6 +177,7 @@ class MemoryFileStore implements FileStore {
 
   @override
   Future<FileInfo?> stat(String path) async {
+    reads.add(path);
     final bytes = files[path];
     if (bytes == null) return null;
     return FileInfo(
@@ -130,7 +188,10 @@ class MemoryFileStore implements FileStore {
   }
 
   @override
-  Future<bool> exists(String path) async => files.containsKey(path);
+  Future<bool> exists(String path) async {
+    reads.add(path);
+    return files.containsKey(path);
+  }
 
   @override
   Future<void> delete(String path) async {

@@ -15,10 +15,18 @@ class FakeUndoNotifications implements UndoNotifications {
   int hides = 0;
   void Function(String noteId)? tap;
 
+  /// How many times the platform channel was claimed. On Android [listen] sets
+  /// a method-call handler and makes a `takePendingUndo` round trip, so "it was
+  /// never called" is a real claim about a feature that is off.
+  int listens = 0;
+
   bool get isUp => shown.length > hides;
 
   @override
-  void listen(void Function(String noteId) onUndo) => tap = onUndo;
+  void listen(void Function(String noteId) onUndo) {
+    listens++;
+    tap = onUndo;
+  }
 
   @override
   Future<void> show({
@@ -185,6 +193,65 @@ void main() {
     await pumpEventQueue();
 
     expect(controller.statusFor(note), AssistantSendStatus.pendingUndo);
+  });
+
+  test('nothing is installed while the feature is off', () async {
+    final controller = AssistantController(
+      fileStore: files,
+      directory: directory,
+      sender: sender,
+      secrets: secrets,
+      network: network,
+      clock: clock.call,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialise();
+
+    final notifier = AssistantUndoNotifier(
+      assistant: controller,
+      notifications: notifications,
+    );
+    addTearDown(notifier.dispose);
+
+    // The channel is not claimed and no `takePendingUndo` round trip is made
+    // for a feature nobody has turned on.
+    expect(notifications.listens, 0);
+    expect(notifications.tap, isNull);
+
+    await controller.setEnabled(true);
+
+    expect(notifications.listens, 1);
+    expect(notifications.tap, isNotNull);
+  });
+
+  test('it is claimed once, however often the switch is flipped', () async {
+    final controller = await ready();
+    final notifier = AssistantUndoNotifier(
+      assistant: controller,
+      notifications: notifications,
+    );
+    addTearDown(notifier.dispose);
+
+    await controller.setEnabled(false);
+    await controller.setEnabled(true);
+
+    expect(notifications.listens, 1);
+  });
+
+  test('switching the feature off takes the notification down', () async {
+    final controller = await ready();
+    final notifier = AssistantUndoNotifier(
+      assistant: controller,
+      notifications: notifications,
+    );
+    addTearDown(notifier.dispose);
+    notifier.setForeground(false);
+    await speak(controller);
+    expect(notifications.isUp, isTrue);
+
+    await controller.setEnabled(false);
+
+    expect(notifications.isUp, isFalse);
   });
 
   test('being disposed takes it down', () async {

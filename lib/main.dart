@@ -73,11 +73,35 @@ Future<void> main() async {
     modelsDirectory: fileStore.join(support, 'models'),
   );
 
-  // Speaking to the assistant. Declared before the recorder controller
-  // because the recorder hands it every finished transcript, and filled in
-  // just below - the closure does not run until a note is transcribed, by
-  // which time this is set.
-  late final AssistantController assistant;
+  // "Instinct, ...": a note that begins with the wake phrase is emailed to the
+  // user's assistant. OFF until the user turns it on and puts in a sending
+  // account; with it off, nothing here opens a socket, reads the keystore or
+  // touches the outbox - see `AssistantController.initialise`.
+  //
+  // BUILT BEFORE THE RECORDER, because the recorder is handed a closure over
+  // it. A `late` field filled in afterwards would make the order a runtime
+  // matter: deleting one half of the pair would fail with a
+  // LateInitializationError on the first transcribed note instead of failing
+  // to compile.
+  final assistant = AssistantController(
+    fileStore: fileStore,
+    // App data, beside the other settings - and the outbox, which must
+    // survive the app being killed.
+    directory: support,
+    // The one thing in this app that sends. See `MailerEmailSender` for why
+    // SMTP and not a provider's API.
+    sender: const MailerEmailSender(),
+    // Keychain on iOS, hardware-backed keystore on Android. The app password
+    // never goes in a settings file.
+    secrets: const SecureSecretStore(),
+    // So an instruction spoken underground goes out when the phone surfaces,
+    // instead of failing to the user.
+    network: ConnectivityPlusNetworkStatus(),
+    // Android only, for the same reason as below: iOS cannot vibrate from the
+    // background, and the settings screen says so rather than pretending.
+    haptics: android ? const MethodChannelHaptics() : null,
+  );
+  unawaited(assistant.initialise());
 
   final controller = AppController(
     transport: ble,
@@ -145,6 +169,10 @@ Future<void> main() async {
     // turned it on and set up a sending account. Everything about whether a
     // note is an instruction, and whether anything is sent, is behind this
     // one call - see `doc/assistant-instructions.md`.
+    //
+    // AN ANONYMOUS HOOK, by design: `AppController` knows it hands every
+    // finished transcript to something, and nothing about what. Deleting the
+    // assistant is deleting this argument.
     onTranscriptSaved: (path, recordedAt, transcript) => unawaited(
       assistant.noteTranscribed(
         noteId: path,
@@ -154,29 +182,6 @@ Future<void> main() async {
       ),
     ),
   );
-
-  // "Instinct, ...": a note that begins with the wake phrase is emailed to the
-  // user's assistant. OFF until the user turns it on and puts in a sending
-  // account; with it off, nothing here opens a socket.
-  assistant = AssistantController(
-    fileStore: fileStore,
-    // App data, beside the other settings - and the outbox, which must
-    // survive the app being killed.
-    directory: support,
-    // The one thing in this app that sends. See `MailerEmailSender` for why
-    // SMTP and not a provider's API.
-    sender: const MailerEmailSender(),
-    // Keychain on iOS, hardware-backed keystore on Android. The app password
-    // never goes in a settings file.
-    secrets: const SecureSecretStore(),
-    // So an instruction spoken underground goes out when the phone surfaces,
-    // instead of failing to the user.
-    network: ConnectivityPlusNetworkStatus(),
-    // Android only, for the same reason as above: iOS cannot vibrate from the
-    // background, and the settings screen says so rather than pretending.
-    haptics: android ? const MethodChannelHaptics() : null,
-  );
-  unawaited(assistant.initialise());
 
   // The Undo notification, for the five seconds before an instruction goes
   // when the app is not on screen. ANDROID ONLY: an iPhone gets the in-app

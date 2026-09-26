@@ -3,10 +3,10 @@ import 'package:voicenotetaker_app/controller/assistant_controller.dart';
 import 'package:voicenotetaker_app/drivers/email_sender.dart';
 import 'package:voicenotetaker_app/drivers/haptics.dart';
 import 'package:voicenotetaker_app/drivers/network_status.dart';
-import 'package:voicenotetaker_app/drivers/secret_store.dart';
 import 'package:voicenotetaker_app/model/assistant/assistant_send.dart';
 import 'package:voicenotetaker_app/model/assistant/assistant_settings.dart';
 import 'package:voicenotetaker_app/services/assistant/assistant_settings_store.dart';
+import 'package:voicenotetaker_app/view/assistant/assistant_failure_copy.dart';
 
 import 'assistant_fakes.dart';
 
@@ -19,7 +19,7 @@ import 'assistant_fakes.dart';
 void main() {
   late MemoryFileStore files;
   late RecordingEmailSender sender;
-  late MemorySecretStore secrets;
+  late RecordingSecretStore secrets;
   late FakeNetwork network;
   late FakeHaptics haptics;
 
@@ -29,6 +29,8 @@ void main() {
     backoff: <Duration>[Duration(milliseconds: 20)],
   );
   const directory = '/support';
+  const settingsPath = '$directory/assistant-settings.json';
+  const outboxPath = '$directory/assistant-outbox.json';
   const note = '/recordings/2026-09-18T14-32-00.wav';
   final spokenAt = DateTime(2026, 9, 18, 14, 32);
 
@@ -64,7 +66,7 @@ void main() {
   setUp(() {
     files = MemoryFileStore();
     sender = RecordingEmailSender();
-    secrets = MemorySecretStore();
+    secrets = RecordingSecretStore();
     network = FakeNetwork();
     haptics = FakeHaptics();
   });
@@ -131,6 +133,173 @@ void main() {
     });
   });
 
+  group('off means inert', () {
+    /// A phone that has been set up and then switched off: an account in the
+    /// keystore, a settings file that says off.
+    Future<void> setUpThenSwitchOff() async {
+      final first = await readyController();
+      await first.setEnabled(false);
+      first.dispose();
+      files.reads.clear();
+      secrets.forgetCalls();
+    }
+
+    test('a launch with the feature off reads the settings file and nothing '
+        'else', () async {
+      await setUpThenSwitchOff();
+
+      final controller = makeController();
+      await controller.initialise();
+      await pumpEventQueue();
+
+      // THE KEYSTORE IS NOT OPENED.
+      expect(secrets.wasTouched, isFalse);
+      // NOR IS THE OUTBOX FILE - only the settings, which is how the switch
+      // was known to be off in the first place.
+      expect(files.reads, isNotEmpty);
+      expect(files.reads, everyElement(settingsPath));
+      // NO CONNECTIVITY SUBSCRIPTION AND NO TIMER.
+      expect(network.isWatched, isFalse);
+      expect(controller.enabled, isFalse);
+      expect(controller.isLoaded, isTrue);
+      expect(controller.isReady, isFalse);
+      controller.dispose();
+    });
+
+    test('a fresh install, which is also off, is the same', () async {
+      final controller = makeController();
+      await controller.initialise();
+      await pumpEventQueue();
+
+      expect(secrets.wasTouched, isFalse);
+      expect(files.reads, everyElement(settingsPath));
+      expect(network.isWatched, isFalse);
+      controller.dispose();
+    });
+
+    test('prepare tells Off apart from Not set up, and starts nothing',
+        () async {
+      await setUpThenSwitchOff();
+      final controller = makeController();
+      await controller.initialise();
+      expect(controller.hasAccount, isFalse, reason: 'nothing read yet');
+
+      await controller.prepare();
+
+      expect(controller.hasAccount, isTrue);
+      expect(controller.isReady, isTrue);
+      expect(controller.enabled, isFalse);
+      // Looking at a feature that is off is not turning it on.
+      expect(network.isWatched, isFalse);
+      expect(sender.sendCount, 0);
+      controller.dispose();
+    });
+
+    test('two screens asking at once open the keystore once', () async {
+      await setUpThenSwitchOff();
+      final controller = makeController();
+      await controller.initialise();
+
+      await Future.wait(<Future<void>>[
+        controller.prepare(),
+        controller.prepare(),
+      ]);
+
+      expect(secrets.reads, hasLength(1));
+      controller.dispose();
+    });
+
+    test('turning it on later does the work the off launch skipped, and the '
+        'next note goes', () async {
+      await setUpThenSwitchOff();
+      final controller = makeController();
+      await controller.initialise();
+
+      await controller.setEnabled(true);
+
+      expect(controller.hasAccount, isTrue);
+      expect(controller.isReady, isTrue);
+      expect(network.isWatched, isTrue);
+
+      await controller.noteTranscribed(
+        noteId: note,
+        transcript: 'Instinct, remind me at six',
+        spokenAt: spokenAt,
+      );
+      await settle();
+
+      expect(sender.sendCount, 1);
+      expect(controller.statusFor(note), AssistantSendStatus.sent);
+      controller.dispose();
+    });
+
+    test('turning it off leaves no live connectivity subscription', () async {
+      final controller = await readyController();
+      expect(network.isWatched, isTrue);
+
+      await controller.setEnabled(false);
+
+      expect(network.isWatched, isFalse);
+      controller.dispose();
+    });
+
+    test('a queued instruction is kept when the switch goes off, is not sent, '
+        'and goes when it comes back on', () async {
+      network.go(NetworkKind.none);
+      final controller = await readyController();
+      await controller.noteTranscribed(
+        noteId: note,
+        transcript: 'Instinct, remind me at six',
+        spokenAt: spokenAt,
+      );
+      await settle();
+      expect(controller.statusFor(note), AssistantSendStatus.queued);
+
+      await controller.setEnabled(false);
+      // The connection comes back while the feature is off: nothing goes.
+      network.go(NetworkKind.unmetered);
+      await settle();
+
+      expect(sender.sendCount, 0);
+      // NOTHING IS DROPPED: it is still on disk, word for word.
+      expect(files.textOf(outboxPath), contains('remind me at six'));
+
+      await controller.setEnabled(true);
+      await settle();
+
+      expect(sender.sendCount, 1);
+      expect(controller.statusFor(note), AssistantSendStatus.sent);
+      controller.dispose();
+    });
+
+    test('forgetEverything leaves nothing running either', () async {
+      final controller = await readyController();
+      await controller.forgetEverything();
+
+      expect(network.isWatched, isFalse);
+      expect(controller.enabled, isFalse);
+      controller.dispose();
+    });
+
+    test('a note offered while it is off still touches no keystore', () async {
+      await setUpThenSwitchOff();
+      final controller = makeController();
+
+      final entry = await controller.noteTranscribed(
+        noteId: note,
+        transcript: 'Instinct, remind me at six',
+        spokenAt: spokenAt,
+      );
+      await settle();
+
+      expect(entry, isNull);
+      expect(secrets.wasTouched, isFalse);
+      expect(files.reads, everyElement(settingsPath));
+      expect(sender.sendCount, 0);
+      controller.dispose();
+    });
+  });
+
   group('a note that is an instruction', () {
     test('is queued, buzzes once, and goes when the undo window closes',
         () async {
@@ -144,7 +313,7 @@ void main() {
 
       expect(entry, isNotNull);
       expect(controller.statusFor(note), AssistantSendStatus.pendingUndo);
-      expect(haptics.buzzes, <BuzzPattern>[BuzzPattern.assistantHeard]);
+      expect(haptics.buzzes, <BuzzPattern>[BuzzPattern.confirm]);
       expect(sender.sendCount, 0);
 
       await settle();
@@ -324,7 +493,7 @@ void main() {
 
       expect(controller.statusFor(note), AssistantSendStatus.failed);
       expect(controller.entryFor(note)!.failure, AssistantFailure.signIn);
-      expect(controller.failureMessageFor(note), isNotEmpty);
+      expect(controller.failureFor(note)?.message, isNotEmpty);
       controller.dispose();
     });
 
@@ -345,7 +514,7 @@ void main() {
       await settle();
 
       expect(controller.statusFor(note), AssistantSendStatus.sent);
-      expect(controller.failureMessageFor(note), isNull);
+      expect(controller.failureFor(note), isNull);
       controller.dispose();
     });
 
@@ -368,7 +537,7 @@ void main() {
 
       expect(sender.sendCount, 0);
       expect(controller.statusFor(note), AssistantSendStatus.queued);
-      expect(controller.failureMessageFor(note), isNotEmpty);
+      expect(controller.failureFor(note)?.message, isNotEmpty);
 
       network.go(NetworkKind.unmetered);
       await settle();

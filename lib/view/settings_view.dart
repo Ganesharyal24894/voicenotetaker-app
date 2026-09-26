@@ -9,13 +9,14 @@ import '../controller/models_controller.dart';
 import '../model/auto_sleep.dart';
 import '../model/home_status.dart';
 import '../model/model_download.dart';
-import 'assistant_view.dart';
+import 'assistant/assistant_settings_row.dart';
 import 'format.dart';
 import 'models_view.dart';
 import 'pair_new_phone_view.dart';
 import 'theme.dart';
 import 'widgets/app_icons.dart';
 import 'widgets/common.dart';
+import 'widgets/end_row.dart';
 import 'widgets/home_widgets.dart';
 import 'widgets/motion.dart';
 import 'widgets/privacy_mode_card.dart';
@@ -45,15 +46,17 @@ class SettingsView extends StatelessWidget {
     this.onConnect,
     this.onPairNewPhone,
     this.onOpenModels,
-    this.onOpenInstinct,
+    this.onOpenAssistant,
     this.onExportNotes,
     super.key,
   });
 
   final AppController controller;
 
-  /// "Send to Instinct". Null hides the row, which is the honest state for a
-  /// build without the feature and for a screen pumped on its own in a test.
+  /// The personal assistant, if this build has one. Null hides its row, which
+  /// is the honest state for a build without the feature and for a screen
+  /// pumped on its own in a test. Nothing else here knows what the feature is
+  /// called or what its row says - see [AssistantSettingsRow].
   final AssistantController? assistant;
   final VoidCallback? onBack;
   final VoidCallback? onOpenDiagnostics;
@@ -67,8 +70,8 @@ class SettingsView extends StatelessWidget {
   /// Opens "Speech models". Null pushes it from here.
   final VoidCallback? onOpenModels;
 
-  /// Opens "Send to Instinct". Null pushes it from here.
-  final VoidCallback? onOpenInstinct;
+  /// Opens the assistant's screen. Null lets its row push it.
+  final VoidCallback? onOpenAssistant;
 
   /// Opens "Export notes" - one zip of the recordings and transcripts, handed
   /// to the share sheet. Null hides the row, which is what a build with no
@@ -136,30 +139,33 @@ class SettingsView extends StatelessWidget {
                               ),
                     ),
                   ],
-                  // Three plain rows at the bottom, no section caption
-                  // between them: each is a door out of Settings rather than a
-                  // setting, and each draws its own hairline so they stack.
-                  if (assistant != null ||
-                      onExportNotes != null ||
-                      onOpenDiagnostics != null)
-                    const SizedBox(height: 16),
-                  if (assistant != null)
-                    _InstinctRow(
-                      assistant: assistant!,
-                      onTap: onOpenInstinct ?? () => _openInstinct(context),
-                    ),
-                  if (onExportNotes != null)
-                    _EndRow(
-                      title: 'Export notes',
-                      meta: 'One zip of your recordings and transcripts',
-                      onTap: onExportNotes!,
-                    ),
-                  if (onOpenDiagnostics != null)
-                    _EndRow(
-                      title: 'Diagnostics',
-                      meta: 'Battery, connection, mic check',
-                      onTap: onOpenDiagnostics!,
-                    ),
+                  // The plain rows at the bottom, no section caption between
+                  // them: each is a door out of Settings rather than a setting,
+                  // and each draws its own hairline so they stack. The group
+                  // owns the gap above itself, so a row can be added or taken
+                  // away - the assistant's, the day it is deleted - without
+                  // touching anything the other rows depend on.
+                  _EndRows(
+                    rows: <Widget>[
+                      if (assistant != null)
+                        AssistantSettingsRow(
+                          assistant: assistant!,
+                          onTap: onOpenAssistant,
+                        ),
+                      if (onExportNotes != null)
+                        EndRow(
+                          title: 'Export notes',
+                          meta: 'One zip of your recordings and transcripts',
+                          onTap: onExportNotes!,
+                        ),
+                      if (onOpenDiagnostics != null)
+                        EndRow(
+                          title: 'Diagnostics',
+                          meta: 'Battery, connection, mic check',
+                          onTap: onOpenDiagnostics!,
+                        ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -195,20 +201,6 @@ class SettingsView extends StatelessWidget {
                 models: models,
                 onBack: () => Navigator.of(context).pop(),
               ),
-      ),
-    );
-  }
-
-  /// "Send to Instinct" is a page under this screen, the way Diagnostics is.
-  void _openInstinct(BuildContext context) {
-    final assistant = this.assistant;
-    if (assistant == null) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (context) => AssistantView(
-          assistant: assistant,
-          onBack: () => Navigator.of(context).pop(),
-        ),
       ),
     );
   }
@@ -658,89 +650,26 @@ class _AudioCard extends StatelessWidget {
   }
 }
 
-/// "Send to Instinct", as a row at the foot of Recorder settings: not set up,
-/// off, or on.
+/// The stack of [EndRow]s at the foot of the screen, and the gap above it.
 ///
-/// It follows the controller, because turning the feature on lives one screen
-/// further in and the row must not still say "Not set up" when the user comes
-/// back.
-class _InstinctRow extends StatelessWidget {
-  const _InstinctRow({required this.assistant, required this.onTap});
+/// WHY A WIDGET AND NOT A CONDITION. The gap belongs to the group, not to the
+/// row above it: with the rows spelled out in the list, "is there anything down
+/// here at all" became one `if` that named three unrelated things, and deleting
+/// any one of them meant editing an expression the other two depended on. Here
+/// a row is one `if` inside a list, and an empty list draws nothing.
+class _EndRows extends StatelessWidget {
+  const _EndRows({required this.rows});
 
-  final AssistantController assistant;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: assistant,
-      builder: (context, _) => _EndRow(
-        title: AssistantCopy.title,
-        meta: !assistant.hasAccount
-            ? AssistantCopy.rowNotSetUp
-            : assistant.enabled
-                ? AssistantCopy.rowOn
-                : AssistantCopy.rowOff,
-        onTap: onTap,
-      ),
-    );
-  }
-}
-
-/// A plain row at the foot of the screen: a title, a line of meta, a chevron
-/// and a hairline above it. Export notes and Diagnostics are both one of
-/// these, which is what makes them read as a pair rather than as two
-/// unrelated buttons that happen to be adjacent.
-class _EndRow extends StatelessWidget {
-  const _EndRow({
-    required this.title,
-    required this.meta,
-    required this.onTap,
-  });
-
-  final String title;
-  final String meta;
-  final VoidCallback onTap;
+  final List<Widget> rows;
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      label: title,
-      container: true,
-      excludeSemantics: true,
-      onTap: onTap,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          constraints: const BoxConstraints(minHeight: AppShape.minTapTarget),
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: const BoxDecoration(
-            border: Border(top: BorderSide(color: AppColors.raised)),
-          ),
-          child: Row(
-            children: <Widget>[
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(title, style: AppText.rowTitle),
-                    const SizedBox(height: 4),
-                    Text(meta, style: AppText.rowMeta),
-                  ],
-                ),
-              ),
-              const AppIcon(
-                AppGlyph.chevronRight,
-                size: 17,
-                color: AppColors.textTertiary,
-                strokeWidth: 1.7,
-              ),
-            ],
-          ),
-        ),
-      ),
+    if (rows.isEmpty) return const SizedBox.shrink();
+    return Column(
+      // Stretch, not start: each row draws a full-width hairline, which is
+      // what makes them read as a stack.
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[const SizedBox(height: 16), ...rows],
     );
   }
 }

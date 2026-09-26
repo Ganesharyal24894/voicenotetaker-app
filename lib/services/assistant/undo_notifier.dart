@@ -16,13 +16,21 @@ import '../../model/assistant/assistant_send.dart';
 /// IT DECIDES NOTHING. Whether the window is open comes from
 /// [AssistantController.undoRemaining], and an Undo tap is handed straight to
 /// [AssistantController.undo] - which is what says whether it was in time.
+///
+/// NOTHING IS INSTALLED WHILE THE FEATURE IS OFF. Listening claims the Android
+/// `/assistant` method channel and makes a `takePendingUndo` round trip, and a
+/// feature the user has switched off has no undo to collect. The handler goes
+/// in the first time [AssistantController.enabled] is true, and the controller
+/// is what tells this it has changed.
 class AssistantUndoNotifier {
   AssistantUndoNotifier({
     required this.assistant,
     required this.notifications,
   }) {
-    assistant.addListener(_sync);
-    notifications.listen(_undo);
+    // Free: an in-process listener, no channel and no I/O. It is what notices
+    // the user turning the feature on.
+    assistant.addListener(_onAssistantChanged);
+    _listenWhenEnabled();
   }
 
   final AssistantController assistant;
@@ -35,6 +43,11 @@ class AssistantUndoNotifier {
   bool _foreground = true;
   bool _disposed = false;
 
+  /// Whether the platform channel has been claimed. Once, and only once the
+  /// feature has been on: [UndoNotifications] has no way to stop listening, and
+  /// needs none - with the feature off nothing is ever posted.
+  bool _listening = false;
+
   /// Told by the app root as it comes and goes.
   void setForeground(bool value) {
     if (_foreground == value) return;
@@ -45,13 +58,27 @@ class AssistantUndoNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    assistant.removeListener(_sync);
+    assistant.removeListener(_onAssistantChanged);
     if (_showing != null) unawaited(notifications.hide());
     _showing = null;
   }
 
+  void _onAssistantChanged() {
+    _listenWhenEnabled();
+    _sync();
+  }
+
+  void _listenWhenEnabled() {
+    if (_listening || _disposed || !assistant.enabled) return;
+    _listening = true;
+    notifications.listen(_undo);
+  }
+
   /// The one entry whose undo window is still open, or null.
   AssistantSend? get _open {
+    // A feature that is off sends nothing, so there is nothing to undo - and
+    // switching it off takes down whatever was on the shade.
+    if (!assistant.enabled) return null;
     for (final send in assistant.recentSends(5)) {
       if (send.status == AssistantSendStatus.pendingUndo &&
           assistant.undoRemaining(send.noteId) > Duration.zero) {

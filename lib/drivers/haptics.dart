@@ -23,12 +23,15 @@ enum BuzzPattern {
   /// Saving again: one short tick.
   resumed,
 
-  /// The assistant heard its name in a note: one short buzz, so the user knows
-  /// the instruction was recognised without looking at the phone.
+  /// Something the user just said or did was recognised: one short buzz, so
+  /// they know without looking at the phone. Short on purpose - it confirms,
+  /// it does not alert.
+  ///
+  /// NAMED FOR THE BUZZ, NOT FOR THE CALLER. A driver enum is shared, and a
+  /// value called after one feature would have to be renamed the day that
+  /// feature is deleted or a second caller wants the same 120 ms.
   ///
   /// iOS gets nothing, for the reason in the class comment above: an app in
-  /// the background cannot vibrate on its own. There the Undo banner on the
-  /// next glance at the screen is the whole feedback, and the settings screen
-  /// says so rather than pretending.
-  assistantHeard,
+  /// the background cannot vibrate on its own.
+  confirm,
 }

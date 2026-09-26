@@ -56,23 +56,11 @@ enum AssistantFailure {
   gaveUp,
 }
 
-extension AssistantFailureMessage on AssistantFailure {
-  /// One plain sentence for a screen. No error codes, no host names.
-  String get message => switch (this) {
-        AssistantFailure.notConfigured =>
-          'Set up the sending account before speaking to your assistant.',
-        AssistantFailure.signIn =>
-          "Gmail didn't accept the app password. Add it again in Settings.",
-        AssistantFailure.address =>
-          "The assistant's email address was refused. Check it in Settings.",
-        AssistantFailure.network =>
-          'No connection. This will go as soon as you are back online.',
-        AssistantFailure.server =>
-          'The mail server would not take it just now. Trying again.',
-        AssistantFailure.gaveUp =>
-          "This didn't get through. Tap to try again.",
-      };
-
+/// WHAT THE USER READS IS NOT HERE. The sentence for each of these lives in
+/// `lib/view/assistant/assistant_failure_copy.dart`, with the feature's other
+/// copy: two of them name Gmail and "the mail server", and a pure model has no
+/// business holding words a screen shows.
+extension AssistantFailureRetry on AssistantFailure {
   /// Whether waiting and trying again could change the answer.
   bool get isWorthRetrying =>
       this == AssistantFailure.network || this == AssistantFailure.server;

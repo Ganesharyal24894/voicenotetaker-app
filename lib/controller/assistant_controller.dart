@@ -42,6 +42,13 @@ enum AssistantTestState {
 /// account; in that state [noteTranscribed] does nothing at all and no code
 /// path in this feature can reach the network.
 ///
+/// OFF ALSO MEANS INERT. With the switch off, starting up reads ONE small JSON
+/// file - the settings, which is how it learns the switch is off - and stops
+/// there: no keystore read, no outbox file, no connectivity subscription, no
+/// timer. [setEnabled] does that deferred work the moment the user turns it on,
+/// and undoes it when they turn it off, so a feature nobody uses costs a file
+/// read per launch and nothing else.
+///
 /// THE ONE OUTBOUND PATH. Everything that leaves goes through
 /// [AssistantOutbox], which is the only caller of [EmailSender]. What leaves is
 /// one plain-text email per note, holding the instruction the user spoke with
@@ -112,6 +119,17 @@ class AssistantController extends ChangeNotifier {
   AssistantSettings _settings = const AssistantSettings();
   SmtpAccount? _account;
   bool _loaded = false;
+
+  /// Whether the account and the saved outbox have been read. False on a
+  /// disabled launch until something asks - see [prepare].
+  bool _prepared = false;
+
+  /// Memoised, so two screens asking at once do not read the keystore twice.
+  Future<void>? _preparing;
+
+  /// Whether the machinery that can actually send is running: the connectivity
+  /// subscription and the outbox timer. Only ever true while [enabled].
+  bool _active = false;
   bool _disposed = false;
   AssistantTestState _testState = AssistantTestState.idle;
   AssistantFailure? _testFailure;
@@ -120,38 +138,95 @@ class AssistantController extends ChangeNotifier {
 
   // ---------------------------------------------------------------- lifecycle
 
-  /// Reads the settings, the account and the saved outbox, then moves anything
-  /// that was waiting when the app was last killed.
+  /// Reads the settings and, ONLY IF THE FEATURE IS ON, the account, the saved
+  /// outbox and the connection - then moves anything that was waiting when the
+  /// app was last killed.
   ///
   /// Called once at startup. Safe to call again; the second call does nothing.
+  ///
+  /// WITH THE SWITCH OFF THIS STOPS AFTER THE SETTINGS FILE. Reading it is
+  /// unavoidable: it is how the switch is known. Nothing else is touched - the
+  /// keystore is not opened, the outbox file is not read, no connectivity
+  /// stream is subscribed to and no timer is set. [prepare] is how the
+  /// feature's own screens get the rest when the user looks at them, and
+  /// [setEnabled] is what starts the machinery.
   Future<void> initialise() async {
     if (_loaded) return;
     _settings = await _settingsStore.load();
+    _loaded = true;
+    if (!_settings.enabled) {
+      _emit();
+      return;
+    }
+    await _activate();
+  }
+
+  /// Reads the account and the saved outbox WITHOUT starting anything.
+  ///
+  /// For the feature's own screens, and for them only. With the switch off
+  /// nothing about the feature is read at launch, but the row in Recorder
+  /// settings still has to tell "Off" apart from "Not set up", and the setup
+  /// screen still has to show the address that is saved. So the row asks for
+  /// this when it appears - see `view/assistant/assistant_settings_row.dart`.
+  ///
+  /// It subscribes to nothing and sends nothing: looking at the settings of a
+  /// feature that is off is not turning it on.
+  Future<void> prepare() => _preparing ??= _prepare();
+
+  Future<void> _prepare() async {
+    if (!_loaded) {
+      _settings = await _settingsStore.load();
+      _loaded = true;
+    }
     _account = await _accounts.load();
     await _outbox.load();
-    _loaded = true;
+    _prepared = true;
+    _emit();
+  }
+
+  /// Everything [prepare] does, plus the parts that can make a send happen:
+  /// the connectivity subscription and the timer.
+  Future<void> _activate() async {
+    await prepare();
+    if (_disposed || _active) return;
+    _active = true;
     _watchNetwork();
     _emit();
     // A note that was queued and then had the app killed under it goes now.
     unawaited(_pump());
   }
 
+  /// Stops the machinery. What is on disk is NOT touched: an instruction that
+  /// was queued is still queued, and goes when the feature is on again.
+  void _deactivate() {
+    _active = false;
+    _tick?.cancel();
+    _tick = null;
+    final watch = _networkWatch;
+    _networkWatch = null;
+    unawaited(watch?.cancel());
+  }
+
   @override
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    _tick?.cancel();
-    _tick = null;
-    unawaited(_networkWatch?.cancel());
+    _deactivate();
     _outbox.onChanged = null;
     super.dispose();
   }
 
   // ----------------------------------------------------------------- settings
 
-  /// False until [initialise] has finished. A screen shows its own placeholder
-  /// rather than "off" while this is false.
+  /// False until the settings have been read. A screen shows its own
+  /// placeholder rather than "off" while this is false.
   bool get isLoaded => _loaded;
+
+  /// False until the account and the saved outbox have been read as well -
+  /// which, with the feature off, does not happen until [prepare] is called.
+  /// [hasAccount], [statusFor] and [recentSends] are only meaningful once this
+  /// is true.
+  bool get isReady => _loaded && _prepared;
 
   /// Whether a note beginning with the wake phrase is emailed.
   ///
@@ -190,13 +265,30 @@ class AssistantController extends ChangeNotifier {
   /// How long the Undo button stays up.
   Duration get undoWindow => _policy.undoWindow;
 
-  /// Turns the feature on or off. Turning it off leaves the outbox alone:
-  /// anything already past its undo window has been promised and still goes.
-  /// Use [forgetEverything] to clear it out as well.
+  /// Turns the feature on or off.
+  ///
+  /// TURNING IT ON does the work a disabled launch skipped: the account, the
+  /// saved outbox, the connectivity subscription and a first pump. So the first
+  /// note after the switch goes on behaves exactly as it would have if the
+  /// feature had been on all along - including sending anything that was left
+  /// queued from last time.
+  ///
+  /// TURNING IT OFF stops all of that: the subscription is cancelled and the
+  /// timer is dropped, so an app the user has switched off holds nothing open.
+  /// WHAT IS QUEUED IS KEPT, NOT SENT. The outbox file is left exactly as it
+  /// is - nothing is dropped - and those entries go out when the feature is
+  /// switched on again. Off has to mean nothing leaves the phone; finishing a
+  /// queue after the user has said stop would be worse than a late
+  /// instruction. Use [forgetEverything] to throw them away instead.
   Future<void> setEnabled(bool value) async {
     if (_settings.enabled == value) return;
     _settings = _settings.copyWith(enabled: value);
     await _settingsStore.save(_settings);
+    if (value) {
+      await _activate();
+    } else {
+      _deactivate();
+    }
     _emit();
   }
 
@@ -264,6 +356,8 @@ class AssistantController extends ChangeNotifier {
   Future<void> forgetEverything() async {
     _settings = const AssistantSettings();
     await _settingsStore.save(_settings);
+    // Off, and so inert: no subscription and no timer left behind.
+    _deactivate();
     await _accounts.clear();
     _account = null;
     await _outbox.clear();
@@ -276,8 +370,8 @@ class AssistantController extends ChangeNotifier {
 
   AssistantTestState get testState => _testState;
 
-  /// Why the last test did not go. Read [AssistantFailureMessage.message] for
-  /// the sentence to show.
+  /// Why the last test did not go. `AssistantFailureMessage.message`, in the
+  /// view's own copy, is the sentence to show.
   AssistantFailure? get testFailure => _testFailure;
 
   /// Sends one email to the assistant, right now, with no undo window and
@@ -381,7 +475,7 @@ class AssistantController extends ChangeNotifier {
     if (entry == null) return null;
     // One short buzz, so the user knows without looking. Android only; on iOS
     // [canVibrate] is false and the Undo banner is the whole feedback.
-    unawaited(_haptics?.buzz(BuzzPattern.assistantHeard) ?? Future<void>.value());
+    unawaited(_haptics?.buzz(BuzzPattern.confirm) ?? Future<void>.value());
     _emit();
     // The five-second undo starts now; this wakes up when it ends.
     _schedule();
@@ -396,14 +490,15 @@ class AssistantController extends ChangeNotifier {
   /// reason or the time it went. Null when there is none.
   AssistantSend? entryFor(String noteId) => _outbox.entryFor(noteId);
 
-  /// The failure sentence to show for [noteId], or null when there is nothing
-  /// to say.
-  String? failureMessageFor(String noteId) {
+  /// What to tell the user about [noteId], or null when there is nothing to
+  /// say. `AssistantFailureMessage.message` turns it into the sentence - the
+  /// words live in the view, not here.
+  AssistantFailure? failureFor(String noteId) {
     final entry = _outbox.entryFor(noteId);
     final failure = entry?.failure;
     if (entry == null || failure == null) return null;
     if (entry.status == AssistantSendStatus.sent) return null;
-    return failure.message;
+    return failure;
   }
 
   /// How much of the undo window is left for [noteId] - [Duration.zero] when
@@ -455,7 +550,8 @@ class AssistantController extends ChangeNotifier {
   /// that wakes every second to find nothing to do is a battery cost for
   /// nothing.
   void _schedule() {
-    if (_disposed) return;
+    // Not while the feature is off: a switched-off feature sets no timers.
+    if (_disposed || !_active) return;
     _tick?.cancel();
     _tick = null;
     final due = _outbox.nextDue;
@@ -468,7 +564,9 @@ class AssistantController extends ChangeNotifier {
   }
 
   Future<void> _pump() async {
-    if (_disposed) return;
+    // THE ONE GATE THE OUTBOUND PATH GOES THROUGH. Nothing leaves the phone
+    // while the feature is off, whoever asked.
+    if (_disposed || !_active) return;
     await _outbox.pump();
     if (_disposed) return;
     _schedule();

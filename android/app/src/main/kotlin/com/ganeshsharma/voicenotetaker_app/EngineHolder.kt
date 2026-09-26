@@ -370,9 +370,9 @@ object EngineHolder {
         val millis = when (pattern) {
             // A tick: notes are saving again.
             "resumed" -> 60L
-            // A short double-tap's worth: the assistant heard its name. Short
-            // on purpose - it is a confirmation, not an alarm.
-            "assistantHeard" -> 120L
+            // A short double-tap's worth: something was recognised. Short on
+            // purpose - it is a confirmation, not an alarm.
+            "confirm" -> 120L
             // A firm buzz: notes have stopped saving.
             else -> 400L
         }

@@ -7,6 +7,7 @@ import 'package:voicenotetaker_app/model/model_download.dart';
 import 'package:voicenotetaker_app/view/models_view.dart';
 import 'package:voicenotetaker_app/view/settings_view.dart';
 import 'package:voicenotetaker_app/view/widgets/common.dart';
+import 'package:voicenotetaker_app/view/widgets/end_row.dart';
 
 import 'harness.dart';
 
@@ -53,6 +54,54 @@ void main() {
         scrollable: find.descendant(of: find.byType(SettingsView), matching: find.byType(Scrollable)).first);
     await tester.tap(find.bySemanticsLabel('Diagnostics'));
     expect(diagnostics, isTrue);
+  });
+
+  /// The end rows are below the fold; the list only builds what it shows.
+  Future<void> scrollToTheFoot(WidgetTester tester) async {
+    final list = find
+        .descendant(
+          of: find.byType(SettingsView),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    await tester.drag(list, const Offset(0, -2000));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('the end rows stack, and the group owns the gap above itself',
+      (tester) async {
+    final harness = ViewHarness();
+    addTearDown(harness.dispose);
+    await pumpScreen(
+      tester,
+      SettingsView(
+        controller: harness.controller,
+        onBack: () {},
+        onOpenDiagnostics: () {},
+        onExportNotes: () {},
+      ),
+    );
+    await scrollToTheFoot(tester);
+
+    // Export notes and Diagnostics, and no assistant row on a build without
+    // the feature.
+    expect(find.byType(EndRow), findsNWidgets(2));
+    expect(find.text('Export notes'), findsOneWidget);
+    expect(find.text('Diagnostics'), findsOneWidget);
+  });
+
+  testWidgets('nothing at the foot at all when there is nothing to put there',
+      (tester) async {
+    final harness = ViewHarness();
+    addTearDown(harness.dispose);
+    await pumpScreen(
+      tester,
+      SettingsView(controller: harness.controller, onBack: () {}),
+    );
+    await scrollToTheFoot(tester);
+
+    // No rows, and so no gap either - the group draws nothing.
+    expect(find.byType(EndRow), findsNothing);
   });
 
   testWidgets('auto-sleep: not connected, nothing chosen and nothing tappable',
