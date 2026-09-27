@@ -660,12 +660,13 @@ class DownloadRetryPolicy {
 /// download UI the user has ever seen use.
 String formatBytes(int bytes) {
   if (bytes < 1000) return '$bytes B';
-  // One decimal below ten, whole numbers above - and the threshold is checked
-  // AFTER rounding, so 9,953 B reads as `10 kB` rather than `10.0 kB`.
+  // One decimal below ten, whole numbers above - and every threshold is checked
+  // AFTER rounding, so 9,953 B reads as `10 kB` rather than `10.0 kB`, and
+  // 999,500 B reads as `1.0 MB` rather than `1000 kB`, which is not a unit.
   final kb = bytes / 1000;
-  if (kb < 1000) return '${_short(kb)} kB';
+  if (kb.round() < 1000) return '${_short(kb)} kB';
   final mb = bytes / (1000 * 1000);
-  if (mb < 1000) return '${_short(mb)} MB';
+  if (mb.round() < 1000) return '${_short(mb)} MB';
   return '${_short(bytes / (1000 * 1000 * 1000))} GB';
 }
 

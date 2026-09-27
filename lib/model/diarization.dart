@@ -214,9 +214,13 @@ class SpeakerTurn {
   }) {
     final from = (start * sampleRateHz).round();
     final to = (end * sampleRateHz).round();
+    // Clamp the start first, then clamp the end against THAT: clamping the end
+    // against the raw start leaves a wholly-negative range with end < start,
+    // which is the one thing this factory exists to prevent.
+    final first = from < 0 ? 0 : from;
     return SpeakerTurn(
-      start: from < 0 ? 0 : from,
-      end: to < from ? from : to,
+      start: first,
+      end: to < first ? first : to,
       speaker: speaker,
     );
   }
