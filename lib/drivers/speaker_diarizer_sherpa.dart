@@ -12,9 +12,9 @@ import 'speech_recognizer.dart' show pcm16leToFloat32;
 
 /// [SpeakerDiarizer] backed by `sherpa_onnx` (k2-fsa, Apache-2.0).
 ///
-/// One of the TWO files in the app that may name `sherpa_onnx` - the other is
-/// `speech_recognizer_sherpa.dart`. Everything it accepts and emits is a
-/// `lib/model/` type.
+/// One of the THREE files in the app that may name `sherpa_onnx` - the others
+/// are `speech_recognizer_sherpa.dart` and `speaker_embedder_sherpa.dart`.
+/// Everything it accepts and emits is a `lib/model/` type.
 ///
 /// THE CONFIGURATION. `OfflineSpeakerDiarization` with a pyannote
 /// segmentation model and a 3D-Speaker CAM++ embedding model, `FastClustering`

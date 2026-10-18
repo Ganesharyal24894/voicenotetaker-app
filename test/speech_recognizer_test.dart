@@ -37,7 +37,7 @@ void main() {
   // The swap-layer rule, enforced: the engine package is named in the DRIVER
   // files that wrap it and nowhere else - one per thing it is used for, so
   // swapping either is still one new class and one line in `main.dart`.
-  test('sherpa_onnx is imported by the two driver files only', () {
+  test('sherpa_onnx is imported by the driver files only', () {
     final importers = Directory('lib')
         .listSync(recursive: true)
         .whereType<File>()
@@ -49,6 +49,7 @@ void main() {
         .toList();
     expect(importers..sort(), <String>[
       'lib/drivers/speaker_diarizer_sherpa.dart',
+      'lib/drivers/speaker_embedder_sherpa.dart',
       'lib/drivers/speech_recognizer_sherpa.dart',
     ]);
   });
