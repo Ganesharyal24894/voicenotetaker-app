@@ -175,9 +175,10 @@ Future<void> main() async {
             ),
   );
 
-  // Over-the-air firmware updates. NO SCREEN USES IT YET: it reads `fe0a` on
-  // each connect and asks GitHub for the newest release at most once a day,
-  // and nothing reaches the recorder until a screen calls `install()`. Fed
+  // Over-the-air firmware updates: it reads `fe0a` on each connect and asks
+  // GitHub for the newest release at most once a day, and nothing reaches the
+  // recorder until Update now on the update screen calls `install()`
+  // (`lib/view/firmware/`). Fed
   // from the controller rather than holding a link of its own, so there is
   // still one owner of the connection.
   final firmware = FirmwareUpdateService(
@@ -247,6 +248,7 @@ Future<void> main() async {
       exports: exports,
       shareSheet: const SharePlusShareSheet(),
     ),
+    firmware: firmware,
   ));
 }
 
@@ -292,11 +294,15 @@ class VoiceNotetakerApp extends StatefulWidget {
     this.assistant,
     this.undoNotifier,
     this.newExportController,
+    this.firmware,
     super.key,
   });
 
   final AppController controller;
   final SummaryController? summaries;
+
+  /// Recorder updates, for Today, Settings and the update screen.
+  final FirmwareUpdateService? firmware;
 
   /// "Speak to your assistant". Null on a build with the feature left out; the
   /// settings screen and the Undo banner read everything they need from it.
@@ -352,6 +358,7 @@ class _VoiceNotetakerAppState extends State<VoiceNotetakerApp> {
         assistant: widget.assistant,
         undoNotifier: widget.undoNotifier,
         newExportController: widget.newExportController,
+        firmware: widget.firmware,
       ),
     );
   }

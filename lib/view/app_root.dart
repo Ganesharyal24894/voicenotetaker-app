@@ -11,10 +11,13 @@ import '../model/device_state.dart';
 import '../services/assistant/undo_notifier.dart';
 import '../model/note_days.dart';
 import '../model/recording_info.dart';
+import '../services/firmware/firmware_update_service.dart';
 import 'connection_lost_view.dart';
 import 'developer_view.dart';
 import 'diagnostics_view.dart';
 import 'export_notes_sheet.dart';
+import 'firmware/update_progress.dart';
+import 'firmware/update_view.dart';
 import 'home/summarize_sheet.dart';
 import 'home/summary_scope.dart';
 import 'home_view.dart';
@@ -48,10 +51,16 @@ class AppRoot extends StatefulWidget {
     this.assistant,
     this.undoNotifier,
     this.newExportController,
+    this.firmware,
     super.key,
   });
 
   final AppController controller;
+
+  /// Recorder updates: Today's row, Settings' Software row and the update
+  /// screen. Null leaves all three out, which is what a test that is not
+  /// about updates wants.
+  final FirmwareUpdateService? firmware;
 
   /// "Send to Instinct". Null leaves the feature out of every screen below -
   /// no row in Settings, no Undo banner, no mark on a note - which is what a
@@ -98,6 +107,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         },
       );
 
+  /// Lives as long as the app, so the update screen can be left and
+  /// re-entered mid-transfer without losing its estimate or its percent.
+  late final UpdateProgress? _updateProgress =
+      widget.firmware == null ? null : UpdateProgress(widget.firmware!.state);
+
   /// The user asked to pair a recorder from Home. Home is otherwise kept up
   /// while there are notes to read - see [_buildPages].
   bool _pairing = false;
@@ -119,6 +133,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_onControllerChanged);
     _heroController.dispose();
+    _updateProgress?.dispose();
     if (widget.summaries == null) _summaries.dispose();
     super.dispose();
   }
@@ -290,6 +305,23 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         onExportNotes: widget.newExportController == null
             ? null
             : () => _exportNotes(context),
+        updates: widget.firmware,
+        onOpenUpdate: () => _openUpdate(context),
+      ),
+    );
+  }
+
+  /// Pushes the recorder-update screen, from Today's row or Settings'
+  /// Software row. The run lives in the service, not in the route.
+  void _openUpdate(BuildContext context) {
+    final firmware = widget.firmware;
+    if (firmware == null) return;
+    _push(
+      context,
+      (context) => UpdateView(
+        updates: firmware,
+        progress: _updateProgress,
+        onClose: () => Navigator.of(context).pop(),
       ),
     );
   }
@@ -420,6 +452,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                   // on Developer options.
                   onOpenSettings: () => _openSettings(context),
                   onConnect: _askToPair,
+                  updates: widget.firmware,
+                  onOpenUpdate: () => _openUpdate(context),
                 ),
               ),
             ),

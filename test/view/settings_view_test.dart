@@ -83,9 +83,9 @@ void main() {
     );
     await scrollToTheFoot(tester);
 
-    // Export notes and Diagnostics, and no assistant row on a build without
-    // the feature.
-    expect(find.byType(EndRow), findsNWidgets(2));
+    // Export notes, and no assistant row on a build without the feature.
+    // Diagnostics is no longer down here: it sits in the Recorder section.
+    expect(find.byType(EndRow), findsOneWidget);
     expect(find.text('Export notes'), findsOneWidget);
     expect(find.text('Diagnostics'), findsOneWidget);
   });

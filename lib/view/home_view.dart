@@ -10,7 +10,9 @@ import '../model/device_profile.dart';
 import '../model/home_status.dart';
 import '../model/notes_overview.dart';
 import '../model/recording_info.dart';
+import '../services/firmware/firmware_update_service.dart';
 import 'assistant_view.dart';
+import 'firmware/update_ready_row.dart';
 import 'home/notes_tab.dart';
 import 'home/summarize_sheet.dart';
 import 'home/today_tab.dart';
@@ -39,6 +41,8 @@ class HomeView extends StatefulWidget {
     this.assistant,
     this.onOpenSettings,
     this.onConnect,
+    this.updates,
+    this.onOpenUpdate,
     super.key,
   });
 
@@ -60,6 +64,13 @@ class HomeView extends StatefulWidget {
   /// Opens the scan screen over Home, from the card Today shows while always
   /// listening has no recorder. Null leaves the card out.
   final VoidCallback? onConnect;
+
+  /// Recorder updates, for Today's "A recorder update is ready" row. Null
+  /// shows no row.
+  final FirmwareUpdateService? updates;
+
+  /// Opens the recorder-update screen from that row.
+  final VoidCallback? onOpenUpdate;
 
   static const int todayTab = 0;
   static const int notesTab = 1;
@@ -151,6 +162,11 @@ class _HomeViewState extends State<HomeView> {
             if (_tab == HomeView.todayTab) ...<Widget>[
               PrivacyBanner(controller: controller),
               ConnectBanner(controller: controller, onConnect: widget.onConnect),
+              // Quiet, and last: it waits for a tap, nothing is wrong.
+              UpdateReadyRow(
+                updates: widget.updates,
+                onOpen: widget.onOpenUpdate ?? () {},
+              ),
             ],
             Expanded(
               child: IndexedStack(

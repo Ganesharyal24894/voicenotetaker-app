@@ -4,9 +4,10 @@ import '../theme.dart';
 import 'app_icons.dart';
 
 /// A plain row at the foot of a screen: a title, a line of meta, a chevron
-/// and a hairline above it. Export notes and Diagnostics are both one of
-/// these, which is what makes them read as a pair rather than as two
-/// unrelated buttons that happen to be adjacent.
+/// and a hairline above it. Export notes is one of these, so the rows at the
+/// foot read as a stack rather than as unrelated buttons that happen to be
+/// adjacent. (Diagnostics used to be one too; it now sits under the Software
+/// row in the Recorder section, as `canvas-update/` draws it.)
 ///
 /// SHARED, AND SO IN `widgets/`: the assistant's own row in Recorder settings
 /// is one of these too, and it lives inside the feature

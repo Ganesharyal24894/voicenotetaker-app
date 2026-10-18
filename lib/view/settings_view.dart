@@ -9,7 +9,9 @@ import '../controller/models_controller.dart';
 import '../model/auto_sleep.dart';
 import '../model/home_status.dart';
 import '../model/model_download.dart';
+import '../services/firmware/firmware_update_service.dart';
 import 'assistant/assistant_settings_row.dart';
+import 'firmware/recorder_section.dart';
 import 'format.dart';
 import 'models_view.dart';
 import 'pair_new_phone_view.dart';
@@ -25,8 +27,8 @@ import 'widgets/status_tone.dart';
 /// Recorder settings - `Settings.dc.html`.
 ///
 /// Reached from Home's status line and its menu, in every build. Sections -
-/// Listening, Auto-sleep, Audio, and Pairing once this phone is known to be
-/// the recorder's owner - and a row into Diagnostics.
+/// Listening, Auto-sleep, Audio, Pairing once this phone is known to be the
+/// recorder's owner, and Recorder: the Software row and Diagnostics.
 ///
 /// PAIRING IS HIDDEN UNTIL IT MEANS SOMETHING: a recorder that does not pair
 /// (nothing known), or one this phone has not paired with, has nothing to
@@ -48,6 +50,8 @@ class SettingsView extends StatelessWidget {
     this.onOpenModels,
     this.onOpenAssistant,
     this.onExportNotes,
+    this.updates,
+    this.onOpenUpdate,
     super.key,
   });
 
@@ -77,6 +81,12 @@ class SettingsView extends StatelessWidget {
   /// to the share sheet. Null hides the row, which is what a build with no
   /// share sheet and a screen pumped on its own in a test both want.
   final VoidCallback? onExportNotes;
+
+  /// Recorder updates, for the Software row. Null hides the row.
+  final FirmwareUpdateService? updates;
+
+  /// Opens the recorder-update screen from the Software row.
+  final VoidCallback? onOpenUpdate;
 
   static const String title = 'Recorder settings';
 
@@ -139,6 +149,13 @@ class SettingsView extends StatelessWidget {
                               ),
                     ),
                   ],
+                  // Software, and Diagnostics under it, as `canvas-update/`
+                  // draws them. Last of the sections, where Diagnostics was.
+                  RecorderSection(
+                    updates: updates,
+                    onOpenUpdate: onOpenUpdate,
+                    onOpenDiagnostics: onOpenDiagnostics,
+                  ),
                   // The plain rows at the bottom, no section caption between
                   // them: each is a door out of Settings rather than a setting,
                   // and each draws its own hairline so they stack. The group
@@ -157,12 +174,6 @@ class SettingsView extends StatelessWidget {
                           title: 'Export notes',
                           meta: 'One zip of your recordings and transcripts',
                           onTap: onExportNotes!,
-                        ),
-                      if (onOpenDiagnostics != null)
-                        EndRow(
-                          title: 'Diagnostics',
-                          meta: 'Battery, connection, mic check',
-                          onTap: onOpenDiagnostics!,
                         ),
                     ],
                   ),

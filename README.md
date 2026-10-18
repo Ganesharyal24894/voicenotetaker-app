@@ -380,6 +380,26 @@ peak readout on the recording screen comes from `LevelMeter` through
 `AppController.peakDbfs`. The note screen's audio panel is bound to the real
 player through `AppController.playbackState`.
 
+## Recorder update
+
+The phone updates the recorder's firmware over Bluetooth, built to the
+approved `canvas-update` artboards. A quiet "A recorder update is ready" row
+shows on Today while the update can go now, and Recorder settings has a
+Software row with the recorder's version. Nothing is sent until **Update now**,
+which is only enabled while the recorder is connected and on its charger.
+
+* Logic: `lib/services/firmware/firmware_update_service.dart` (check,
+  download, `OTA!` handoff, transfer, confirm) with its states in
+  `lib/model/firmware_update_state.dart` and the offer rules in
+  `lib/model/firmware_update.dart`.
+* Screens: `lib/view/firmware/` - `update_view.dart` (ready, blocked,
+  updating, done, failed), the Today row (`update_ready_row.dart`), the
+  Recorder section in Settings (`recorder_section.dart`) and every string in
+  `update_copy.dart`.
+* The run lives in the service, so the update screen can be left mid-transfer
+  and opened again from Settings. Where releases come from:
+  [Firmware releases](#firmware-releases).
+
 ## Speaking to your assistant - the one thing this app sends
 
 Say **"Instinct, remind me to call the bank at six"** into the recorder. The
