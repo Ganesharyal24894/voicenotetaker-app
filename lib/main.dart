@@ -17,6 +17,8 @@ import 'drivers/disk_space_channel.dart';
 import 'drivers/download_client.dart';
 import 'drivers/email_sender_mailer.dart';
 import 'drivers/file_store.dart';
+import 'drivers/firmware_installer_nordic.dart';
+import 'drivers/firmware_release_source.dart';
 import 'drivers/hashing_crypto.dart';
 import 'drivers/haptics_channel.dart';
 import 'drivers/network_status_connectivity.dart';
@@ -31,6 +33,9 @@ import 'drivers/undo_notification_channel.dart';
 import 'services/assistant/undo_notifier.dart';
 import 'services/codec/frame_decoder.dart';
 import 'services/export/note_export_service.dart';
+import 'services/firmware/firmware_check_store.dart';
+import 'services/firmware/firmware_download.dart';
+import 'services/firmware/firmware_update_service.dart';
 import 'services/summary/day_summary_store.dart';
 import 'services/transcription/model_download_service.dart';
 import 'services/transcription/speech_model_store.dart';
@@ -168,6 +173,32 @@ Future<void> main() async {
                 spokenAt: recordedAt,
               ),
             ),
+  );
+
+  // Over-the-air firmware updates. NO SCREEN USES IT YET: it reads `fe0a` on
+  // each connect and asks GitHub for the newest release at most once a day,
+  // and nothing reaches the recorder until a screen calls `install()`. Fed
+  // from the controller rather than holding a link of its own, so there is
+  // still one owner of the connection.
+  final firmware = FirmwareUpdateService(
+    transport: ble,
+    releases: GitHubFirmwareReleaseSource(client: IoDownloadClient()),
+    installer: NordicDfuFirmwareInstaller(),
+    download: FirmwareDownload(
+      fileStore: fileStore,
+      client: IoDownloadClient(),
+      hashing: const CryptoHashing(),
+      directory: fileStore.join(support, 'firmware'),
+    ),
+    store: FirmwareCheckStore(fileStore: fileStore, directory: support),
+  );
+  unawaited(firmware.initialise());
+  controller.addListener(
+    () => firmware.observeRecorder(
+      deviceId: controller.connectedDevice?.id,
+      charging: controller.batteryCharging,
+      batteryPercent: controller.batteryPercent,
+    ),
   );
 
   // The Undo notification, for the five seconds before an instruction goes

@@ -165,6 +165,28 @@ abstract class BleTransport {
 
   Future<void> unsubscribeCapture(String deviceId);
 
+  /// Reads `fe0a`, the firmware version, as the ASCII it carries.
+  ///
+  /// Throws [BleTransportException] when the characteristic is absent - older
+  /// firmware, which cannot take an over-the-air update either - or the read
+  /// fails. Parsing is `FirmwareVersion.tryParse`, not the transport's job.
+  Future<String> readFirmwareVersion(String deviceId);
+
+  /// Writes `OTA!` to `fe06`: the recorder reboots into its bootloader's BLE
+  /// OTA mode and the link drops.
+  ///
+  /// Throws [BleTransportException] when the write is refused - which is how
+  /// the firmware says "not on USB power" - or fails. A link that drops before
+  /// the write response arrives also throws, so callers must watch the link
+  /// rather than trust the result alone.
+  Future<void> requestOtaBootloader(String deviceId);
+
+  /// Scans for a bootloader in OTA mode - advertised name `AdaDFU` or the
+  /// legacy DFU service, see `DfuBootloader` - until [window] elapses or the
+  /// subscription is cancelled. The stream closing means the window ended,
+  /// exactly as for [scan].
+  Stream<DiscoveredDevice> scanForDfuBootloader({required Duration window});
+
   /// Signal strength of the LIVE link to [deviceId], in dBm.
   ///
   /// Not the same number as [DiscoveredDevice.rssi], which is one sample taken

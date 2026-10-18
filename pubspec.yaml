@@ -27,8 +27,9 @@ dependencies:
   # Offline speech-to-text runtime (k2-fsa, Apache-2.0). Runs ONNX models on
   # the CPU with no network. Pinned exactly: the Dart bindings mirror a native
   # C API whose config structs change between releases. Named in
-  # lib/drivers/speech_recognizer_sherpa.dart and
-  # lib/drivers/speaker_diarizer_sherpa.dart, and nowhere else.
+  # lib/drivers/speech_recognizer_sherpa.dart,
+  # lib/drivers/speaker_diarizer_sherpa.dart and
+  # lib/drivers/speaker_embedder_sherpa.dart, and nowhere else.
   sherpa_onnx: 1.13.8
 
   # Which transport the phone is on - Wi-Fi or mobile data - so a 197 MB model
@@ -107,6 +108,16 @@ dependencies:
   # Native memory for that driver's buffers. The Dart team's own package
   # (BSD-3-Clause), already in the lock file as a transitive dependency.
   ffi: ^2.1.0
+
+  # The over-the-air firmware transfer: Nordic's own Android and iOS DFU
+  # libraries behind one Dart API. MIT (the plugin); the Nordic libraries it
+  # pulls in - no.nordicsemi.android:dfu on Android, IOS-DFU-Library over
+  # Swift Package Manager on iOS - are BSD-3-Clause. The recorder's Adafruit
+  # bootloader speaks Nordic LEGACY DFU, which both libraries still support,
+  # and writing that protocol ourselves (init packet, PRN flow control, the
+  # bootloader-mode reconnect) on two platforms is what this saves. Named in
+  # lib/drivers/firmware_installer_nordic.dart and nowhere else.
+  nordic_dfu: ^8.1.0
 
 dev_dependencies:
   flutter_test:

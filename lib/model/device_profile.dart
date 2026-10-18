@@ -76,6 +76,23 @@ abstract final class DeviceProfile {
   static const String batteryHistoryCharacteristicUuid =
       '6e40fe09-b5a3-f393-e0a9-e50e24dcca9e';
 
+  /// `fe06` - WRITE (encrypted), four bytes that reboot the recorder into its
+  /// bootloader. `DFU!` is the USB rescue; [otaMagic] is the update.
+  static const String bootloaderCharacteristicUuid =
+      '6e40fe06-b5a3-f393-e0a9-e50e24dcca9e';
+
+  /// `OTA!` on `fe06`: reboot into the bootloader's BLE OTA mode, which
+  /// advertises as `AdaDFU` and NEVER times out. The firmware refuses it
+  /// without USB power, with the same ATT error as a wrong value. Write it
+  /// only with a verified package on the phone, ready to send.
+  static const List<int> otaMagic = <int>[0x4F, 0x54, 0x41, 0x21];
+
+  /// `fe0a` - READ (encrypted), the firmware version: ASCII semver with no
+  /// terminator, e.g. `0.1.0`. Not the Device Information Service, which
+  /// Zephyr serves unencrypted. Firmware older than it has no `OTA!` either.
+  static const String firmwareVersionCharacteristicUuid =
+      '6e40fe0a-b5a3-f393-e0a9-e50e24dcca9e';
+
   /// Every notification is prefixed with a little-endian uint16 sequence
   /// number; gaps in it are packets dropped on the link.
   static const int sequenceHeaderBytes = 2;

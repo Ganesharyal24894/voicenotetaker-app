@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show ascii;
 import 'dart:developer' as developer;
 import 'dart:io' show Platform;
 
@@ -11,6 +12,7 @@ import '../model/battery_status.dart';
 import '../model/capture_flags.dart';
 import '../model/device_profile.dart';
 import '../model/device_state.dart';
+import '../model/dfu_bootloader.dart';
 import '../model/die_temperature.dart';
 import '../model/pairing_advert.dart';
 import '../model/pairing_outcome.dart';
@@ -143,14 +145,38 @@ class UniversalBleTransport implements BleTransport, BlePairing {
   }
 
   @override
-  Stream<DiscoveredDevice> scan() {
+  Stream<DiscoveredDevice> scan() => _scanFor(
+        // These filters are OR'd by universal_ble: the peripheral is
+        // accepted on either its advertised service or its local name,
+        // because not every platform surfaces both.
+        ub.ScanFilter(
+          withServices: [DeviceProfile.serviceUuid],
+          withNamePrefix: [DeviceProfile.advertisedName],
+        ),
+        BleTransport.scanWindow,
+      );
+
+  @override
+  Stream<DiscoveredDevice> scanForDfuBootloader({required Duration window}) =>
+      _scanFor(
+        // OR'd, as above. The bootloader puts both its name and the 128-bit
+        // DFU service in one advertising packet; either is enough.
+        ub.ScanFilter(
+          withServices: [DfuBootloader.serviceUuid],
+          withNamePrefix: [DfuBootloader.advertisedName],
+        ),
+        window,
+      );
+
+  /// One bounded scan with [filter], closing its stream when [window] ends.
+  Stream<DiscoveredDevice> _scanFor(ub.ScanFilter filter, Duration window) {
     late final StreamController<DiscoveredDevice> controller;
     StreamSubscription<ub.BleDevice>? subscription;
-    Timer? window;
+    Timer? timer;
 
     Future<void> stop() async {
-      window?.cancel();
-      window = null;
+      timer?.cancel();
+      timer = null;
       await subscription?.cancel();
       subscription = null;
       await stopScan();
@@ -164,20 +190,12 @@ class UniversalBleTransport implements BleTransport, BlePairing {
           onError: controller.addError,
         );
         try {
-          await ub.UniversalBle.startScan(
-            // These filters are OR'd by universal_ble: the peripheral is
-            // accepted on either its advertised service or its local name,
-            // because not every platform surfaces both.
-            scanFilter: ub.ScanFilter(
-              withServices: [DeviceProfile.serviceUuid],
-              withNamePrefix: [DeviceProfile.advertisedName],
-            ),
-          );
+          await ub.UniversalBle.startScan(scanFilter: filter);
           _scanning = true;
           // `UniversalBle.scanStream` runs until it is told to stop, so the
           // window is imposed here. Closing the controller is what tells the
           // caller the scan FINISHED - see `BleTransport.scan`.
-          window = Timer(BleTransport.scanWindow, () async {
+          timer = Timer(window, () async {
             try {
               await stop();
             } on BleTransportException {
@@ -713,6 +731,39 @@ class UniversalBleTransport implements BleTransport, BlePairing {
     }
     if (controller != null && !controller.isClosed) {
       await controller.close();
+    }
+  }
+
+  @override
+  Future<String> readFirmwareVersion(String deviceId) async {
+    try {
+      final bytes = await ub.UniversalBle.read(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.firmwareVersionCharacteristicUuid,
+      );
+      return ascii.decode(bytes);
+    } on FormatException catch (e) {
+      throw BleTransportException('the firmware version is not ASCII', e);
+    } catch (e) {
+      // Firmware without `fe0a` fails here, and so does a dropped link.
+      throw BleTransportException('could not read the firmware version', e);
+    }
+  }
+
+  @override
+  Future<void> requestOtaBootloader(String deviceId) async {
+    try {
+      // With response: a refusal (not on USB power) has to come back as an
+      // error, and a write without response would report success either way.
+      await ub.UniversalBle.write(
+        deviceId,
+        DeviceProfile.serviceUuid,
+        DeviceProfile.bootloaderCharacteristicUuid,
+        Uint8List.fromList(DeviceProfile.otaMagic),
+      );
+    } catch (e) {
+      throw BleTransportException('the recorder did not take OTA!', e);
     }
   }
 

@@ -44,9 +44,15 @@
          permission, granted at install. -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- TWO THINGS, AND THEY ARE THE ONLY TWO.
+    <!-- THREE THINGS, AND THEY ARE THE ONLY THREE.
          IN: the speech models, from a public GitHub release, on demand and
          only when the user asks. See doc/models.md.
+         IN: the recorder's firmware. The GitHub releases list is read at most
+         once a day while a recorder is connected; the package itself is
+         fetched only when the user asks for the update. The over-the-air
+         transfer runs in nordic_dfu's own foreground service, which needs
+         FOREGROUND_SERVICE_CONNECTED_DEVICE (declared below, and by the
+         plugin too) and BLUETOOTH_SCAN (below) - nothing new.
          OUT: one plain-text email per note that the user began with the wake
          phrase, sent by SMTP to their own AI assistant - the instruction text
          and nothing else, and only once the user has turned the feature on and
