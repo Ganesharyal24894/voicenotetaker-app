@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Merged into the app's manifest only when it is built with
+         dart-define ASSISTANT=true; see android/app/build.gradle.kts. -->
+    <application>
+        <!-- The Undo button on the "Sending to Instinct" notification. Not
+             exported: only this app's own PendingIntent ever fires it. -->
+        <receiver
+            android:name="com.ganeshsharma.voicenotetaker_app.UndoReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

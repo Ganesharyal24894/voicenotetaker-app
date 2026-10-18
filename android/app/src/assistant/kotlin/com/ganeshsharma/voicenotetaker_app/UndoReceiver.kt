@@ -12,14 +12,14 @@ import android.content.Intent
  * does is take the notification down and hand the note's id across.
  *
  * The process may not be running when this fires - the user is looking at a
- * notification from a phone in a pocket - so [EngineHolder.deliverUndo] starts
- * the Dart side if it has to and parks the id until Dart asks for it.
+ * notification from a phone in a pocket - so [AssistantChannel.deliverUndo]
+ * starts the Dart side if it has to and parks the id until Dart asks for it.
  */
 class UndoReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != UndoNotification.ACTION_UNDO) return
         val noteId = intent.getStringExtra(UndoNotification.EXTRA_NOTE_ID) ?: return
         UndoNotification.cancel(context)
-        EngineHolder.deliverUndo(context.applicationContext, noteId)
+        AssistantChannel.deliverUndo(context.applicationContext, noteId)
     }
 }

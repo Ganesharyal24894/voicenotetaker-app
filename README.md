@@ -277,6 +277,7 @@ libopus (≈ 4 s); later runs reuse it.
 | `test/view/theme_test.dart` | every design token, and the measured contrast ratios the palette rests on |
 | `test/view/*_view_test.dart` | each screen in its main states, against a `mocktail` fake transport |
 | `test/view/app_root_test.dart` | which screen the device state selects, and navigation between them |
+| `test/config/assistant_switch_test.dart` | the assistant is built, and its row is in Recorder settings, exactly when the build has `--dart-define=ASSISTANT=true`; run it both ways |
 | `test/assistant/*_test.dart` | the wake phrase against real ASR spellings and its near misses, the retry ladder rung by rung, the outbox's undo / dedupe / persistence / offline behaviour, and the privacy assertions (one keystore entry, no password in any file, the body is the instruction and nothing else) |
 
 ### The cross-language golden test
@@ -387,9 +388,14 @@ because the transcript *begins* with the wake phrase, the instruction alone is
 emailed to the user's own AI assistant, over SMTP from the user's own Gmail
 account, five seconds later unless they tap **Undo**.
 
-**It is off on a fresh install and stays off until the user turns it on and
-puts in a sending account.** In that state nothing in the feature opens a
-socket. Everything else in the app remains offline (transcription,
+**It is left out of the app unless the app is built with
+`--dart-define=ASSISTANT=true`** - see [Build switches](#build-switches) below.
+A build without it has no assistant code in the Dart binary, no Undo receiver
+in the Android manifest and no row in Recorder settings.
+
+**Built in, it is still off on a fresh install and stays off until the user
+turns it on and puts in a sending account.** In that state nothing in the
+feature opens a socket. Everything else in the app remains offline (transcription,
 diarization) or user-driven (the export zip goes to the share sheet, the
 summary prompt through the clipboard, the model download pulls files *in*).
 
@@ -411,6 +417,37 @@ The whole design - the fuzzy wake-phrase match against what the ASR models
 actually write in Latin and Devanagari, the undo window, the retry ladder,
 where each thing is stored, and exactly what the screens have to provide - is
 **[doc/assistant-instructions.md](doc/assistant-instructions.md)**.
+
+### Build switches
+
+One define switches the assistant in, for the Dart and the Android side
+together. Off is the default; with it off, `main.dart` builds no
+`AssistantController`, no Undo notifier and no transcript hook, and the AOT
+compiler drops the feature's Dart code - `mailer` included - from the binary.
+
+```sh
+./run.sh --dart-define=ASSISTANT=true                            # run on the phone
+flutter build apk --dart-define=ASSISTANT=true                   # build it
+tool/flutter_test.sh --dart-define=ASSISTANT=true test/config/   # the switch's own test
+```
+
+| | Where | Reads |
+|---|---|---|
+| Dart | `kAssistant` in `lib/config/features.dart`, used by `buildAssistant` in `main.dart` | `--dart-define=ASSISTANT=true` |
+| Android | `android/app/build.gradle.kts`: compiles `src/assistant/` (the `/assistant` channel, `UndoNotification`, `UndoReceiver` and its manifest entry) instead of the empty `src/noAssistant/` | the same define - `flutter run` and `flutter build` pass every define to Gradle in the `dart-defines` project property, so there is no second flag to forget |
+| iOS | nothing to switch; the iPhone has no assistant-specific native code | |
+
+**What stays in every build:** the `flutter_secure_storage` native plugin. Flutter
+has no conditional dependencies, so every plugin in `pubspec.yaml` is linked
+and registered on both phones whether or not Dart ever calls it. On Android
+that is its classes and the parts of Google Tink it uses, and at engine start
+one method channel and one idle worker thread; it opens no keystore until it
+is called, and a build without the assistant never calls it. On the iPhone it
+is one more Swift package, registered and never called. Taking it out per
+build would mean swapping in a stub package through `pubspec_overrides.yaml`,
+which rewrites `pubspec.lock` with every switch, and a stub that imitates the
+package well enough for `test/assistant/secret_store_secure_test.dart` - not
+worth it for an idle plugin.
 
 ## Package choices
 
@@ -491,6 +528,9 @@ worse, being plain XML.
 It appears in exactly one file, `lib/drivers/secret_store_secure.dart`, behind
 the `SecretStore` seam, so no test outside
 `test/assistant/secret_store_secure_test.dart` ever goes near a keystore.
+
+It is the one part of the assistant that a build without it still carries: see
+[Build switches](#build-switches).
 
 ### The speech models — licensing rationale
 

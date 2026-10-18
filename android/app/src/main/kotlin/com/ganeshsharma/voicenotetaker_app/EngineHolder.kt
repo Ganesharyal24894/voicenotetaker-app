@@ -44,13 +44,6 @@ import io.flutter.plugin.common.MethodChannel
 object EngineHolder {
     private const val ENGINE_ID = "main"
     private const val BACKGROUND_CHANNEL = "com.ganeshsharma.voicenotetaker_app/background"
-
-    /**
-     * "Send to Instinct". Its own channel rather than a few more methods on
-     * the background one, because this is the only channel Kotlin CALLS INTO
-     * Dart on, and a method-call handler can only be set once per channel.
-     */
-    private const val ASSISTANT_CHANNEL = "com.ganeshsharma.voicenotetaker_app/assistant"
     private const val NOTIFICATION_PERMISSION_REQUEST = 7021
 
     /**
@@ -64,12 +57,9 @@ object EngineHolder {
     @SuppressLint("StaticFieldLeak")
     var activity: Activity? = null
 
-    /** The live assistant channel, or null while there is no engine. */
-    private var assistant: MethodChannel? = null
-
     /**
-     * The live background channel. Held for the same reason as [assistant]:
-     * Kotlin calls INTO Dart on it to say that the keep-alive stopped.
+     * The live background channel, or null while there is no engine. Held
+     * because Kotlin calls INTO Dart on it to say that the keep-alive stopped.
      */
     private var background: MethodChannel? = null
 
@@ -87,18 +77,14 @@ object EngineHolder {
      */
     private var cpuLock: PowerManager.WakeLock? = null
 
-    /**
-     * An Undo tapped before Dart was listening - the notification outlived the
-     * process. Dart collects it with `takePendingUndo` as it starts.
-     */
-    private var pendingUndo: String? = null
-
     fun obtain(context: Context): FlutterEngine {
         FlutterEngineCache.getInstance().get(ENGINE_ID)?.let { return it }
         val app = context.applicationContext
         val engine = FlutterEngine(app)
         installBackgroundChannel(app, engine)
-        installAssistantChannel(app, engine)
+        // "Send to Instinct". An empty object on a build without the
+        // assistant - see `android/app/build.gradle.kts`.
+        AssistantChannel.install(app, engine)
         engine.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
         FlutterEngineCache.getInstance().put(ENGINE_ID, engine)
         return engine
@@ -113,58 +99,10 @@ object EngineHolder {
         if (ListeningService.running) return
         val engine = FlutterEngineCache.getInstance().get(ENGINE_ID) ?: return
         FlutterEngineCache.getInstance().remove(ENGINE_ID)
-        assistant = null
+        AssistantChannel.release()
         background = null
         releaseCpu()
         engine.destroy()
-    }
-
-    /**
-     * The Undo button on the notification was tapped.
-     *
-     * Nothing is decided here: Dart's outbox owns the undo window and is the
-     * only thing that may take an entry out. With no engine running, one is
-     * started and the id waits for it.
-     */
-    fun deliverUndo(context: Context, noteId: String) {
-        val channel = assistant
-        if (channel == null) {
-            pendingUndo = noteId
-            obtain(context)
-            return
-        }
-        Handler(Looper.getMainLooper()).post {
-            channel.invokeMethod("undoTapped", noteId)
-        }
-    }
-
-    private fun installAssistantChannel(app: Context, engine: FlutterEngine) {
-        val channel = MethodChannel(engine.dartExecutor.binaryMessenger, ASSISTANT_CHANNEL)
-        assistant = channel
-        channel.setMethodCallHandler { call, result ->
-            when (call.method) {
-                "showUndo" -> {
-                    UndoNotification.show(
-                        app,
-                        call.argument<String>("noteId") ?: "",
-                        call.argument<String>("title") ?: "",
-                        call.argument<String>("text") ?: "",
-                        call.argument<Number>("readyAt")?.toLong() ?: 0L,
-                    )
-                    result.success(null)
-                }
-                "hideUndo" -> {
-                    UndoNotification.cancel(app)
-                    result.success(null)
-                }
-                "takePendingUndo" -> {
-                    val waiting = pendingUndo
-                    pendingUndo = null
-                    result.success(waiting)
-                }
-                else -> result.notImplemented()
-            }
-        }
     }
 
     private fun installBackgroundChannel(app: Context, engine: FlutterEngine) {

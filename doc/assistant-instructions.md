@@ -9,8 +9,18 @@ else is offline (transcription, diarization) or user-driven (the export zip
 goes to the share sheet; the summary prompt goes through the clipboard; the
 model download pulls files *in*).
 
-**It is off until the user sets it up.** A fresh install has the switch off and
-no sending account, and in that state no code in this feature opens a socket.
+**It is not in the app unless the build asks for it.** Build with
+`--dart-define=ASSISTANT=true` (`./run.sh --dart-define=ASSISTANT=true`,
+`flutter build apk --dart-define=ASSISTANT=true`); without it `main.dart`
+builds none of the feature, the compiler leaves its Dart code out, and Android
+compiles the empty `src/noAssistant/` instead of `src/assistant/`. The one
+define drives both halves - see "Build switches" in the README, which also
+says what a build without it still carries (the `flutter_secure_storage`
+plugin, linked and never called).
+
+**Built in, it is off until the user sets it up.** A fresh install has the
+switch off and no sending account, and in that state no code in this feature
+opens a socket.
 
 ## What is sent, when, and to whom
 
@@ -53,9 +63,12 @@ phone" is something anyone can check in one file.
 | The row in Recorder settings, and the failure sentences | `lib/view/assistant/` |
 | SMTP seam / implementation | `lib/drivers/email_sender.dart`, `email_sender_mailer.dart` |
 | Keystore seam / implementation | `lib/drivers/secret_store.dart`, `secret_store_secure.dart` |
+| The build switch | `lib/config/features.dart` (`kAssistant`), `buildAssistant` in `lib/main.dart` |
+| Android: the `/assistant` channel, the Undo notification and its receiver | `android/app/src/assistant/` (and its empty twin, `src/noAssistant/`) |
 
 `AppController` is joined to none of it except one hook: `onTranscriptSaved`,
-called in `transcribe()` the moment a transcript lands, wired in `main.dart`.
+called in `transcribe()` the moment a transcript lands, wired in `main.dart` -
+and left null by a build without the feature.
 The recorder knows nothing about instructions.
 
 ## The wake phrase
@@ -156,12 +169,12 @@ those files, and outside `main.dart`, knows the feature's name.
 | The row into it | `view/assistant/assistant_settings_row.dart`, put at the foot of Recorder settings by `settings_view.dart` | Not set up / On / Off |
 | Setup, and the settled state | `AssistantView` | One screen: the form until there is an account, the switch and the history after |
 | The Undo banner | `AssistantUndoBanner`, above Home's tab bar | The instruction, a countdown, Undo |
-| The same thing with the app closed | `AssistantUndoNotifier` over `drivers/undo_notification.dart`, drawn by `android/.../UndoNotification.kt` | Android only |
+| The same thing with the app closed | `AssistantUndoNotifier` over `drivers/undo_notification.dart`, drawn by `android/app/src/assistant/.../UndoNotification.kt` | Android only |
 | The mark on a note | `AssistantNoteMark`, above the note's title | Sent to Instinct / Couldn't send - Try again |
 | The title in the notes list | `note_list.dart`, `quoteAs:` | `titleFor`, so the wake phrase is not the headline |
 
-`main.dart` already builds the controller and hands it to `VoiceNotetakerApp`
-as `assistant:`; it is a `ChangeNotifier`, so an
+`main.dart` builds the controller (on a build with `ASSISTANT=true`) and hands
+it to `VoiceNotetakerApp` as `assistant:`, null otherwise; it is a `ChangeNotifier`, so an
 `AnimatedBuilder`/`ListenableBuilder` on it is enough.
 
 **Setup, in Recorder settings.** Nothing but a placeholder until `isLoaded`.
@@ -207,4 +220,11 @@ near-miss negatives, the state machine and retry ladder rung by rung, the
 outbox's undo / dedupe / persistence / backoff / offline behaviour, the
 controller as a screen would use it, and the privacy assertions above
 (exactly one keystore entry; no password or address in any settings file; the
-body is the instruction and nothing else).
+body is the instruction and nothing else). They build the controller themselves, so they pass with or without the
+define.
+
+`test/config/assistant_switch_test.dart` goes through `buildAssistant`, as the
+app does: the assistant and its row in Recorder settings are there exactly when
+the build has `ASSISTANT=true`. Run it both ways:
+`tool/flutter_test.sh test/config/` and
+`tool/flutter_test.sh --dart-define=ASSISTANT=true test/config/`.
