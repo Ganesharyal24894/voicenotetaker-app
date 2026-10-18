@@ -49,6 +49,18 @@ void main() {
       expect(BatteryStatus.fromBytes(<int>[50, 0x00]).charging, isFalse);
     });
 
+    test('bit 1 of byte 1 is external power, independent of charging', () {
+      final full = BatteryStatus.fromBytes(<int>[100, 0x02]);
+      expect(full.externalPower, isTrue);
+      expect(full.charging, isFalse);
+      final both = BatteryStatus.fromBytes(<int>[50, 0x03]);
+      expect(both.externalPower, isTrue);
+      expect(both.charging, isTrue);
+      // Firmware that predates the bit never sets it.
+      expect(BatteryStatus.fromBytes(<int>[50, 0x01]).externalPower, isFalse);
+      expect(full, isNot(BatteryStatus.fromBytes(<int>[100, 0x00])));
+    });
+
     test('charging is readable even when the percentage is not', () {
       // A device that cannot measure the cell can still tell that power is in,
       // and that is worth showing.
@@ -75,8 +87,8 @@ void main() {
     });
 
     test('reserved flag bits set means a firmware this build cannot read', () {
-      expect(() => BatteryStatus.fromBytes(<int>[50, 0x02]), throwsFormatException);
-      expect(() => BatteryStatus.fromBytes(<int>[50, 0x03]), throwsFormatException);
+      expect(() => BatteryStatus.fromBytes(<int>[50, 0x04]), throwsFormatException);
+      expect(() => BatteryStatus.fromBytes(<int>[50, 0x07]), throwsFormatException);
       expect(() => BatteryStatus.fromBytes(<int>[50, 0x80]), throwsFormatException);
       expect(() => BatteryStatus.fromBytes(<int>[50, 0xFF]), throwsFormatException);
     });
@@ -86,7 +98,8 @@ void main() {
       expect(BatteryStatus.unknownPercent, 0xFF);
       expect(BatteryStatus.maxPercent, 100);
       expect(BatteryStatus.chargingBit, 0x01);
-      expect(BatteryStatus.reservedFlagBits, 0xFE);
+      expect(BatteryStatus.externalPowerBit, 0x02);
+      expect(BatteryStatus.reservedFlagBits, 0xFC);
     });
   });
 

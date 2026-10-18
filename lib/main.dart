@@ -197,7 +197,7 @@ Future<void> main() async {
     () => firmware.observeRecorder(
       deviceId: controller.connectedDevice?.id,
       charging: controller.batteryCharging,
-      batteryPercent: controller.batteryPercent,
+      externalPower: controller.batteryExternalPower,
     ),
   );
 

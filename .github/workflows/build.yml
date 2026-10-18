@@ -55,6 +55,9 @@ jobs:
       # the golden test then decodes with it. No ccache shim on this image, so
       # tool/flutter_test.sh is not needed here.
       - run: flutter test
+      # The same suite with the assistant compiled in, so neither side of the
+      # switch can rot unseen. The iOS build below stays flag-off.
+      - run: flutter test --dart-define=ASSISTANT=true
 
   ios:
     needs: test

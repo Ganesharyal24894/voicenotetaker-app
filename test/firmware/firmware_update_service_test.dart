@@ -54,9 +54,9 @@ void main() {
   }
 
   /// The recorder connecting, then the version read and the check settling.
-  Future<void> connect({bool charging = true}) async {
+  Future<void> connect({bool charging = true, bool externalPower = true}) async {
     service.observeRecorder(
-        deviceId: recorder, charging: charging, batteryPercent: 70);
+        deviceId: recorder, charging: charging, externalPower: externalPower);
     await pumpEventQueue();
     // The check touches real files, which the microtask queue does not cover.
     for (var i = 0; i < 200 && service.state.value is UpdateChecking; i++) {
@@ -70,7 +70,7 @@ void main() {
     installer.onFinished = () {
       transport.firmwareVersion = version;
       service.observeRecorder(
-          deviceId: recorder, charging: true, batteryPercent: 70);
+          deviceId: recorder, charging: true, externalPower: true);
     };
   }
 
@@ -101,8 +101,71 @@ void main() {
     expect((service.state.value as UpdateAvailable).blockedBy, isNull);
   });
 
+  test('external power is enough, even with the cell not charging', () async {
+    await connect(charging: false, externalPower: true);
+    expect((service.state.value as UpdateAvailable).blockedBy, isNull);
+  });
+
+  test('an sd recorder asks for, and is offered, the sd zip only', () async {
+    final plain = releaseOf('0.2.0');
+    final sd = releaseOf('0.2.0', variant: 'sd');
+    releases.byVariant = {null: plain, 'sd': sd};
+    transport.firmwareVersion = '0.1.0+sd';
+    await connect();
+    expect(releases.askedVariants, ['sd']);
+    expect(service.latestRelease!.zipName, 'voiceNotetaker-0.2.0-sd.zip');
+    expect((service.state.value as UpdateAvailable).blockedBy, isNull);
+  });
+
+  test('a default recorder asks for, and is offered, the plain zip only',
+      () async {
+    releases.byVariant = {
+      null: releaseOf('0.2.0'),
+      'sd': releaseOf('0.2.0', variant: 'sd'),
+    };
+    await connect();
+    expect(releases.askedVariants, [null]);
+    expect(service.latestRelease!.zipName, 'voiceNotetaker-0.2.0.zip');
+  });
+
+  test('a cached release for another build is replaced at once', () async {
+    await connect(); // caches the default zip for a default recorder
+    service.observeRecorder(
+        deviceId: null, charging: false, externalPower: false);
+    final sd = releaseOf('0.2.0', variant: 'sd');
+    releases.byVariant = {null: releaseOf('0.2.0'), 'sd': sd};
+    transport.firmwareVersion = '0.1.0+sd';
+    await connect();
+    expect(releases.askedVariants.last, 'sd', reason: 'not held off a day');
+    expect(service.latestRelease!.zipName, sd.zipName);
+  });
+
+  test('the confirm step compares the variant too', () async {
+    final sd = releaseOf('0.2.0', variant: 'sd');
+    releases.release = sd;
+    client.routes[sd.zipUrl] = (200, packageBytes);
+    transport.firmwareVersion = '0.1.0+sd';
+    await connect();
+    comesBackAs('0.2.0');
+    await service.install();
+    expect((service.state.value as UpdateFailed).reason,
+        UpdateFailure.versionMismatch);
+  });
+
+  test('the confirm step passes when number and variant both match',
+      () async {
+    final sd = releaseOf('0.2.0', variant: 'sd');
+    releases.release = sd;
+    client.routes[sd.zipUrl] = (200, packageBytes);
+    transport.firmwareVersion = '0.1.0+sd';
+    await connect();
+    comesBackAs('0.2.0+sd');
+    await service.install();
+    expect(service.state.value, isA<UpdateDone>());
+  });
+
   test('off the charger the offer says why it cannot start', () async {
-    await connect(charging: false);
+    await connect(charging: false, externalPower: false);
     expect((service.state.value as UpdateAvailable).blockedBy,
         UpdateBlockReason.notOnCharger);
   });
@@ -120,7 +183,7 @@ void main() {
       () async {
     await connect();
     service.observeRecorder(
-        deviceId: null, charging: false, batteryPercent: null);
+        deviceId: null, charging: false, externalPower: false);
     await connect();
     expect(releases.calls, 1);
 
@@ -134,7 +197,7 @@ void main() {
 
     now = now.add(const Duration(hours: 25));
     service.observeRecorder(
-        deviceId: null, charging: false, batteryPercent: null);
+        deviceId: null, charging: false, externalPower: false);
     await connect();
     expect(releases.calls, 2);
   });
@@ -188,7 +251,7 @@ void main() {
     transport
       ..refuseOta = true
       ..otaDropsLink = false;
-    await connect(charging: false);
+    await connect(charging: false, externalPower: false);
     await service.install();
 
     final failed = service.state.value as UpdateFailed;

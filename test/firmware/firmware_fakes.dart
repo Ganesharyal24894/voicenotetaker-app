@@ -41,11 +41,14 @@ class FakeDownloadClient implements DownloadClient {
 final List<int> packageBytes = List<int>.generate(3000, (i) => i * 7 & 0xFF);
 final String packageSha = sha256.convert(packageBytes).toString();
 
-FirmwareRelease releaseOf(String version, {String? sha, int? size}) =>
+FirmwareRelease releaseOf(String version,
+        {String? sha, int? size, String? variant}) =>
     FirmwareRelease(
-      version: FirmwareVersion.tryParse(version)!,
-      zipName: 'voiceNotetaker-$version.zip',
-      zipUrl: 'https://example.test/voiceNotetaker-$version.zip',
+      version: FirmwareVersion.tryParse(
+          variant == null ? version : '$version+$variant')!,
+      zipName: 'voiceNotetaker-$version${variant == null ? '' : '-$variant'}.zip',
+      zipUrl: 'https://example.test/voiceNotetaker-$version'
+          '${variant == null ? '' : '-$variant'}.zip',
       sha256: sha ?? packageSha,
       sizeBytes: size ?? packageBytes.length,
       publishedAt: DateTime.utc(2026, 10, 18),
@@ -56,12 +59,17 @@ class FakeReleaseSource implements FirmwareReleaseSource {
   FakeReleaseSource(this.release);
 
   FirmwareRelease? release;
+
+  /// When set, the release is picked by the asked-for variant instead.
+  Map<String?, FirmwareRelease>? byVariant;
   int calls = 0;
+  final List<String?> askedVariants = <String?>[];
 
   @override
-  Future<FirmwareRelease?> latest() async {
+  Future<FirmwareRelease?> latest({String? variant}) async {
     calls++;
-    return release;
+    askedVariants.add(variant);
+    return byVariant != null ? byVariant![variant] : release;
   }
 }
 

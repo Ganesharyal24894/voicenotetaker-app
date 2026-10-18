@@ -5,8 +5,8 @@
 ///   * `[0]` - charge percent, `0 .. 100`, or [unknownPercent] (`0xFF`) when
 ///     the device itself does not know. Every other value is a firmware this
 ///     build cannot read.
-///   * `[1]` - flags. Bit 0 is [chargingBit]; every other bit is reserved and
-///     must be zero.
+///   * `[1]` - flags. Bit 0 is [chargingBit], bit 1 is [externalPowerBit]; every
+///     other bit is reserved and must be zero.
 ///
 /// Pure data, like [AutoSleep.fromBytes]: this is the device protocol, not the
 /// BLE stack, so it lives in `model/` and survives a package swap.
@@ -15,7 +15,11 @@
 /// different fact from "the battery is empty", and the two must never render
 /// the same way. That is why [percent] is nullable rather than defaulting.
 class BatteryStatus {
-  const BatteryStatus({required this.percent, required this.charging});
+  const BatteryStatus({
+    required this.percent,
+    required this.charging,
+    this.externalPower = false,
+  });
 
   /// `0xFF` in byte 0 - the device has no reading to report.
   static const int unknownPercent = 0xFF;
@@ -26,9 +30,14 @@ class BatteryStatus {
   /// Bit 0 of the flags byte - the cell is charging.
   static const int chargingBit = 0x01;
 
+  /// Bit 1 - external power (USB/VBUS) is present. Exactly what the firmware
+  /// checks before it accepts `OTA!`. Firmware that predates the bit never
+  /// sets it, so absent reads as false.
+  static const int externalPowerBit = 0x02;
+
   /// Every other flag bit. Set in a value we read means a firmware newer than
   /// this build, and the flags are not ours to interpret.
-  static const int reservedFlagBits = 0xFE;
+  static const int reservedFlagBits = 0xFC;
 
   /// The characteristic is exactly this long.
   static const int valueBytes = 2;
@@ -41,6 +50,10 @@ class BatteryStatus {
   /// Whether the cell is being charged. Known independently of [percent]: a
   /// device that cannot measure its charge can still tell that power is in.
   final bool charging;
+
+  /// Whether external power is present. Stays true when a full cell is no
+  /// longer charging, which [charging] does not.
+  final bool externalPower;
 
   /// Whether there is a percentage to show at all.
   bool get hasPercent => percent != null;
@@ -72,20 +85,23 @@ class BatteryStatus {
     return BatteryStatus(
       percent: charge == unknownPercent ? null : charge,
       charging: flags & chargingBit != 0,
+      externalPower: flags & externalPowerBit != 0,
     );
   }
 
   @override
   String toString() =>
       'BatteryStatus(${percent == null ? 'unknown' : '$percent%'}'
-      '${charging ? ', charging' : ''})';
+      '${charging ? ', charging' : ''}'
+      '${externalPower ? ', external power' : ''})';
 
   @override
   bool operator ==(Object other) =>
       other is BatteryStatus &&
       other.percent == percent &&
-      other.charging == charging;
+      other.charging == charging &&
+      other.externalPower == externalPower;
 
   @override
-  int get hashCode => Object.hash(percent, charging);
+  int get hashCode => Object.hash(percent, charging, externalPower);
 }

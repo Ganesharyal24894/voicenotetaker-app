@@ -16,13 +16,29 @@ void main() {
       expect('${v('0.2.0-rc.1')}', '0.2.0-rc.1');
     });
 
+    test('keeps build metadata as the variant and compares without it', () {
+      expect(v('0.1.0').variant, isNull);
+      expect(v('0.1.0+sd').variant, 'sd');
+      expect(v('0.2.0-rc1+nostorage').variant, 'nostorage');
+      expect(v('0.2.0-rc1+nostorage').preRelease, 'rc1');
+      expect(v('0.1.0+sd'), v('0.1.0'));
+      expect(v('0.1.0+sd').hashCode, v('0.1.0').hashCode);
+      expect(v('0.1.0+sd') > v('0.0.9+nostorage'), isTrue);
+      expect(v('0.1.0+sd').compareTo(v('0.1.0+nostorage')), 0);
+      expect('${v('0.1.0+sd')}', '0.1.0');
+      expect(v('0.1.0+sd').full, '0.1.0+sd');
+      expect(v(v('0.2.0-rc1+sd').full).variant, 'sd');
+    });
+
     test('refuses anything else rather than guessing', () {
       for (final bad in [
+        '0.1.0+',
+        '0.1.0+a+b',
+        '0.1.0+a.b',
         '',
         '0.1',
         '0.1.0.0',
         '01.1.0',
-        '0.1.0+build',
         '0.1.0-',
         '0.1.0-a..b',
         '0.1.0\u0000',
@@ -71,15 +87,15 @@ void main() {
       FirmwareRelease? release,
       bool noRelease = false,
       bool charging = true,
+      bool externalPower = true,
       bool connected = true,
-      int? percent = 60,
     }) =>
         UpdateDecision.evaluate(
           current: current == null ? null : v(current),
           latest: noRelease ? null : (release ?? latest),
           charging: charging,
+          externalPower: externalPower,
           connected: connected,
-          batteryPercent: percent,
         );
 
     test('a newer release on the charger is offered', () {
@@ -97,7 +113,8 @@ void main() {
     test('a downgrade is never offered, whatever else is true', () {
       expect(decide(current: '0.3.0'), const UpdateNone());
       expect(decide(current: '0.2.1', connected: false), const UpdateNone());
-      expect(decide(current: '1.0.0', charging: false), const UpdateNone());
+      expect(decide(current: '1.0.0', externalPower: false, charging: false),
+          const UpdateNone());
     });
 
     test('a release build replaces its own pre-release', () {
@@ -105,14 +122,33 @@ void main() {
     });
 
     test('off the charger it is blocked, not hidden', () {
-      expect(decide(charging: false),
-          UpdateBlocked(latest, UpdateBlockReason.notOnCharger));
-      expect(decide(charging: false, percent: null),
+      expect(decide(externalPower: false, charging: false),
           UpdateBlocked(latest, UpdateBlockReason.notOnCharger));
     });
 
-    test('a full cell may be on its cable, so the firmware decides', () {
-      expect(decide(charging: false, percent: 100), UpdateOffered(latest));
+    test('external power counts even when the cell is not charging', () {
+      // A full cell still on its cable: charging bit 0, external power 1.
+      expect(decide(externalPower: true, charging: false),
+          UpdateOffered(latest));
+    });
+
+    test('a firmware without the external-power bit falls back to charging',
+        () {
+      expect(decide(externalPower: false, charging: true),
+          UpdateOffered(latest));
+    });
+
+    test('a recorder of another build is never offered this release', () {
+      expect(decide(current: '0.1.0+sd'), const UpdateNone());
+      expect(decide(release: releaseOf('0.2.0', variant: 'sd')),
+          const UpdateNone());
+      expect(decide(current: '0.1.0+sd', release: releaseOf('0.2.0', variant: 'sd')),
+          UpdateOffered(releaseOf('0.2.0', variant: 'sd')));
+      expect(
+          decide(
+              current: '0.1.0+nostorage',
+              release: releaseOf('0.2.0', variant: 'sd')),
+          const UpdateNone());
     });
 
     test('disconnected it is blocked until the recorder is back', () {

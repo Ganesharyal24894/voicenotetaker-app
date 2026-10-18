@@ -431,6 +431,9 @@ flutter build apk --dart-define=ASSISTANT=true                   # build it
 tool/flutter_test.sh --dart-define=ASSISTANT=true test/config/   # the switch's own test
 ```
 
+CI runs the whole suite twice, once without the define and once with
+`--dart-define=ASSISTANT=true`; the iOS build step stays flag-off.
+
 | | Where | Reads |
 |---|---|---|
 | Dart | `kAssistant` in `lib/config/features.dart`, used by `buildAssistant` in `main.dart` | `--dart-define=ASSISTANT=true` |
@@ -448,6 +451,28 @@ build would mean swapping in a stub package through `pubspec_overrides.yaml`,
 which rewrites `pubspec.lock` with every switch, and a stub that imitates the
 package well enough for `test/assistant/secret_store_secure_test.dart` - not
 worth it for an idle plugin.
+
+### Firmware releases
+
+Recorder firmware updates are fetched from this repository's GitHub releases
+(`GitHubFirmwareReleaseSource.defaultRepository`, decided 2026-10-18), next to
+the speech models. The firmware source repository is private, so its zips are
+published here. The app lists the newest releases and ignores tags: it takes
+only assets named like a firmware package and picks the highest version, so
+the `models-v1` release beside them is never mistaken for firmware. Drafts and
+pre-releases are skipped.
+
+Per firmware release, attach both files of each build:
+
+| Build (`fe0a` reports) | Zip | Digest |
+|---|---|---|
+| default (`0.1.0`) | `voiceNotetaker-0.1.0.zip` | `voiceNotetaker-0.1.0.zip.sha256` |
+| SD (`0.1.0+sd`) | `voiceNotetaker-0.1.0-sd.zip` | `voiceNotetaker-0.1.0-sd.zip.sha256` |
+| no storage (`0.1.0+nostorage`) | `voiceNotetaker-0.1.0-nostorage.zip` | `voiceNotetaker-0.1.0-nostorage.zip.sha256` |
+
+The `.sha256` is `sha256sum` output (`<hex>  <zip name>`). A recorder is only
+ever offered the zip of its own build, and after the reboot the app checks
+that the recorder reports both the new version and the same build.
 
 ## Package choices
 

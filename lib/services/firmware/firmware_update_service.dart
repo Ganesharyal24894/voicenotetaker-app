@@ -74,7 +74,7 @@ class FirmwareUpdateService {
   String? _deviceId;
   String? _recorderAddress;
   bool _charging = false;
-  int? _batteryPercent;
+  bool _externalPower = false;
   FirmwareVersion? _installed;
   FirmwareRelease? _latest;
   DateTime? _lastAttempt;
@@ -93,8 +93,8 @@ class FirmwareUpdateService {
         current: _installed,
         latest: _latest,
         charging: _charging,
+        externalPower: _externalPower,
         connected: _deviceId != null,
-        batteryPercent: _batteryPercent,
       );
 
   /// Loads what the last check found and whether its package is already here.
@@ -112,11 +112,11 @@ class FirmwareUpdateService {
   void observeRecorder({
     required String? deviceId,
     required bool charging,
-    required int? batteryPercent,
+    required bool externalPower,
   }) {
     final changed = deviceId != _deviceId;
     _charging = charging;
-    _batteryPercent = batteryPercent;
+    _externalPower = externalPower;
     if (changed) {
       _deviceId = deviceId;
       if (deviceId == null) {
@@ -138,7 +138,10 @@ class FirmwareUpdateService {
       waiter.complete(version);
       return;
     }
-    if (!_running) await checkForUpdate();
+    // A cached release for another build is no use: look again at once.
+    final cached = _latest?.version.variant;
+    final mismatch = version != null && _latest != null && cached != version.variant;
+    if (!_running) await checkForUpdate(force: mismatch);
   }
 
   Future<FirmwareVersion?> _readVersion(String deviceId) async {
@@ -168,7 +171,7 @@ class FirmwareUpdateService {
     final current = _state.value;
     final show = current is! UpdateFailed && current is! UpdateDone;
     if (show) _set(const UpdateChecking());
-    final latest = await _releases.latest();
+    final latest = await _releases.latest(variant: _installed?.variant);
     if (latest != null) {
       _latest = latest;
       _readyPath = await _download.verifiedPath(latest);
@@ -335,10 +338,11 @@ class FirmwareUpdateService {
     _returnWaiter = null;
     if (!cameBack) {
       _fail(UpdateFailure.recorderDidNotReturn, release, canRetry: false);
-    } else if (version != release.version) {
+    } else if (version != release.version ||
+        version?.variant != release.version.variant) {
       _fail(UpdateFailure.versionMismatch, release,
           canRetry: false,
-          detail: 'the recorder reports ${version ?? 'no readable version'}');
+          detail: 'the recorder reports ${version?.full ?? 'no readable version'}');
     } else {
       _otaRequested = false;
       _readyPath = null;

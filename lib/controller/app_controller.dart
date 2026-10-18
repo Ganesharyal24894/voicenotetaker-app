@@ -1472,6 +1472,9 @@ class AppController extends ChangeNotifier {
   /// the percentage it is not a number put in front of the user.
   bool get batteryCharging => _battery?.charging ?? false;
 
+  /// External power (USB/VBUS) present, per `fe05` bit 1.
+  bool get batteryExternalPower => _battery?.externalPower ?? false;
+
   /// The reading itself, for callers that want both halves at once.
   BatteryStatus? get batteryStatus => _battery;
 

@@ -106,12 +106,58 @@ void main() {
     ]);
     digestFor('voiceNotetaker-0.2.0.zip');
     digestFor('voiceNotetaker-0.3.0-sd.zip');
-    expect('${(await GitHubFirmwareReleaseSource(client: client).latest())!.version}',
-        '0.2.0');
-    final sd = await GitHubFirmwareReleaseSource(client: client, variant: 'sd')
-        .latest();
+    final plain = (await GitHubFirmwareReleaseSource(client: client).latest())!;
+    expect(plain.zipName, 'voiceNotetaker-0.2.0.zip');
+    expect(plain.version.variant, isNull);
+    final sd =
+        await GitHubFirmwareReleaseSource(client: client).latest(variant: 'sd');
     expect(sd!.zipName, 'voiceNotetaker-0.3.0-sd.zip');
-    expect('${sd.version}', '0.3.0');
+    expect(sd.version.full, '0.3.0+sd');
+  });
+
+  test('each variant gets only its own zip, and none means none', () async {
+    publish([
+      release('g', [
+        ...firmwareAssets('0.4.0', suffix: '-nostorage'),
+        ...firmwareAssets('0.3.0', suffix: '-sd'),
+      ]),
+    ]);
+    digestFor('voiceNotetaker-0.4.0-nostorage.zip');
+    digestFor('voiceNotetaker-0.3.0-sd.zip');
+    final source = GitHubFirmwareReleaseSource(client: client);
+    expect(await source.latest(), isNull, reason: 'no default zip published');
+    expect((await source.latest(variant: 'sd'))!.zipName,
+        'voiceNotetaker-0.3.0-sd.zip');
+    expect((await source.latest(variant: 'nostorage'))!.zipName,
+        'voiceNotetaker-0.4.0-nostorage.zip');
+  });
+
+  test('model releases in the same list are ignored, whatever their tag',
+      () async {
+    publish([
+      release('models-v1', [
+        asset('sherpa_encoder.onnx'),
+        asset('sherpa_tokens.txt'),
+        asset('voiceNotetaker-notes.zip'),
+        asset('voiceNotetaker-notes.zip.sha256'),
+      ]),
+      release('fw-v0.2.0', firmwareAssets('0.2.0')),
+      release('models-v2', [asset('voiceNotetaker.zip')]),
+    ]);
+    digestFor('voiceNotetaker-0.2.0.zip');
+    final latest = await GitHubFirmwareReleaseSource(client: client).latest();
+    expect(latest!.zipName, 'voiceNotetaker-0.2.0.zip');
+  });
+
+  test('firmware on a release tagged like the models is still found',
+      () async {
+    publish([
+      release('models-v1', [asset('encoder.onnx'), ...firmwareAssets('0.3.0')]),
+      release('models-v0', firmwareAssets('0.1.0')),
+    ]);
+    digestFor('voiceNotetaker-0.3.0.zip');
+    final latest = await GitHubFirmwareReleaseSource(client: client).latest();
+    expect('${latest!.version}', '0.3.0');
   });
 
   test('no network is no release, not an exception', () async {

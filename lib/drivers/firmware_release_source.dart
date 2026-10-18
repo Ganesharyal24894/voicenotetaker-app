@@ -13,7 +13,11 @@ abstract class FirmwareReleaseSource {
   /// not be found out - no network, a rate limit, a malformed answer. NEVER
   /// throws: a failed check is "nothing to offer", and the next check is a
   /// day away anyway.
-  Future<FirmwareRelease?> latest();
+  ///
+  /// [variant] is the recorder's hardware build (`FirmwareVersion.variant`),
+  /// null for the default one. Only that build's package is considered, so an
+  /// `sd` recorder is never handed the default zip nor the reverse.
+  Future<FirmwareRelease?> latest({String? variant});
 }
 
 /// [FirmwareReleaseSource] over the GitHub Releases API.
@@ -26,20 +30,21 @@ abstract class FirmwareReleaseSource {
 /// whose releases also carry the speech models (`models-v1`), and
 /// `/releases/latest` is simply the newest non-draft release - a models tag
 /// as often as not. So the newest page is listed and the highest firmware
-/// version with both assets wins, whatever else was published around it.
+/// version with both assets wins, whatever else was published around it:
+/// tags are ignored, only asset names matching `voiceNotetaker-<v>[-<variant>].zip`
+/// count.
 class GitHubFirmwareReleaseSource implements FirmwareReleaseSource {
   GitHubFirmwareReleaseSource({
     required this._client,
     this.repository = defaultRepository,
-    this.variant,
   });
 
   /// `owner/repo` the firmware releases hang off.
   ///
-  /// THE FINAL HOME IS STILL BEING DECIDED. The firmware repository is
-  /// private, and a private repository's release assets need a token the app
-  /// cannot ship, so the public app repository - where the speech models
-  /// already are - is the likely host. Change it here and nowhere else.
+  /// DECIDED (owner, 2026-10-18): firmware zips are published as releases on
+  /// this public app repository, next to the speech models. The firmware
+  /// source repository is private, and a private repository's release assets
+  /// need a token the app cannot ship. Change it here and nowhere else.
   static const String defaultRepository = 'Ganesharyal24894/voicenotetaker-app';
 
   /// Prefix of every package `release.sh` writes.
@@ -48,7 +53,7 @@ class GitHubFirmwareReleaseSource implements FirmwareReleaseSource {
   /// Hardware builds of the firmware (`voiceNotetaker/variants/*.conf`).
   /// `release.sh sd` names its zip `voiceNotetaker-<version>-sd.zip`, which
   /// would otherwise read as pre-release `sd` of the default build.
-  static const Set<String> knownVariants = <String>{'sd'};
+  static const Set<String> knownVariants = <String>{'sd', 'nostorage'};
 
   /// Releases read per check. A page is plenty at one firmware release in a
   /// while; anything older than this many releases is not the newest.
@@ -61,12 +66,8 @@ class GitHubFirmwareReleaseSource implements FirmwareReleaseSource {
   final DownloadClient _client;
   final String repository;
 
-  /// Which hardware build to look for; null for the default (no storage).
-  /// `fe0a` does not say which one the recorder runs, so the caller must.
-  final String? variant;
-
   @override
-  Future<FirmwareRelease?> latest() async {
+  Future<FirmwareRelease?> latest({String? variant}) async {
     try {
       final list = await _getText(
         'https://api.github.com/repos/$repository/releases?per_page=$pageSize',
@@ -147,7 +148,8 @@ class GitHubFirmwareReleaseSource implements FirmwareReleaseSource {
   }
 
   /// The version in `voiceNotetaker-<version>[-<variant>].zip`, or null when
-  /// [name] is not a package for [variant].
+  /// [name] is not a package for [variant]. The result carries [variant], so
+  /// a release remembers which build it is.
   static FirmwareVersion? versionOfPackage(String name, {String? variant}) {
     if (!name.startsWith(packagePrefix) || !name.endsWith('.zip')) return null;
     var rest = name.substring(packagePrefix.length, name.length - 4);
@@ -156,8 +158,11 @@ class GitHubFirmwareReleaseSource implements FirmwareReleaseSource {
       if (!rest.endsWith(suffix)) return null;
       rest = rest.substring(0, rest.length - suffix.length);
     }
-    final version = FirmwareVersion.tryParse(rest);
-    if (version == null) return null;
+    final parsed = FirmwareVersion.tryParse(rest);
+    // A `+` has no place in a file name; the variant is the `-` suffix.
+    if (parsed == null || parsed.variant != null) return null;
+    final version = FirmwareVersion(
+        parsed.major, parsed.minor, parsed.patch, parsed.preRelease, variant);
     // `0.2.0-sd` asked for as the default build: that is the SD build.
     final tail = version.preRelease?.split('.').last.split('-').last;
     if (variant == null && knownVariants.contains(tail)) return null;

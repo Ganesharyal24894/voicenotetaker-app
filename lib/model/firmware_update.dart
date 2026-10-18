@@ -1,17 +1,22 @@
 /// The recorder's firmware version, as `fe0a` reports it and as a release is
-/// tagged: `MAJOR.MINOR.PATCH`, optionally `-PRERELEASE`.
+/// tagged: `MAJOR.MINOR.PATCH`, optionally `-PRERELEASE`, optionally
+/// `+VARIANT`.
 ///
-/// The firmware takes it from Zephyr's `VERSION` file (`VERSION_MAJOR`,
-/// `VERSION_MINOR`, `PATCHLEVEL` and an optional `EXTRAVERSION`), so this is
-/// the whole grammar there is; build metadata (`+...`) never appears and is
-/// rejected rather than guessed at.
+/// The firmware takes the number from Zephyr's `VERSION` file
+/// (`VERSION_MAJOR`, `VERSION_MINOR`, `PATCHLEVEL` and an optional
+/// `EXTRAVERSION`). A hardware build appends semver build metadata naming
+/// itself: `0.1.0` (default), `0.1.0+sd`, `0.1.0+nostorage`. That is kept as
+/// [variant], and - as semver requires - ignored by every comparison: two
+/// builds of one number are the same version, but they are NOT
+/// interchangeable images, so the update flow checks [variant] itself.
 ///
 /// THE APP IS THE ONLY THING THAT REFUSES A DOWNGRADE. The bootloader does
 /// not check the application version in the init packet, so whether an update
 /// applies is decided here and nowhere else - which is why the comparison is
 /// strict semver precedence rather than string order (`0.10.0` > `0.9.0`).
 class FirmwareVersion implements Comparable<FirmwareVersion> {
-  const FirmwareVersion(this.major, this.minor, this.patch, [this.preRelease]);
+  const FirmwareVersion(this.major, this.minor, this.patch,
+      [this.preRelease, this.variant]);
 
   final int major;
   final int minor;
@@ -21,11 +26,15 @@ class FirmwareVersion implements Comparable<FirmwareVersion> {
   /// release of the same number: `0.2.0-rc1` < `0.2.0`.
   final String? preRelease;
 
+  /// The build metadata after `+` (`sd`, `nostorage`), or null for the
+  /// default build. Never part of ordering or `==`.
+  final String? variant;
+
   static final RegExp _pattern = RegExp(
-    r'^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$',
+    r'^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+))?$',
   );
 
-  /// Parses `0.1.0`, `v0.1.0` (a release tag) or `0.2.0-rc1`. Null for
+  /// Parses `0.1.0`, `v0.1.0` (a release tag), `0.2.0-rc1` or `0.1.0+sd`. Null for
   /// anything else - including a value with a trailing NUL, which `fe0a` is
   /// specified never to send, so seeing one means a firmware this build does
   /// not understand.
@@ -39,6 +48,7 @@ class FirmwareVersion implements Comparable<FirmwareVersion> {
       int.parse(match.group(2)!),
       int.parse(match.group(3)!),
       pre,
+      match.group(5),
     );
   }
 
@@ -86,9 +96,13 @@ class FirmwareVersion implements Comparable<FirmwareVersion> {
   @override
   int get hashCode => Object.hash(major, minor, patch, preRelease);
 
+  /// The number only, for the screen.
   @override
   String toString() =>
       '$major.$minor.$patch${preRelease == null ? '' : '-$preRelease'}';
+
+  /// The number and its `+variant`, which round-trips through [tryParse].
+  String get full => variant == null ? '$this' : '$this+$variant';
 }
 
 /// One published firmware package: the Nordic legacy DFU zip that the
@@ -106,7 +120,7 @@ class FirmwareRelease {
 
   final FirmwareVersion version;
 
-  /// `voiceNotetaker-<version>.zip`, which is also the name it is kept under
+  /// `voiceNotetaker-<version>[-<variant>].zip`, which is also the name it is kept under
   /// on the phone.
   final String zipName;
   final String zipUrl;
@@ -122,7 +136,7 @@ class FirmwareRelease {
   final String notes;
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'version': '$version',
+        'version': version.full,
         'zipName': zipName,
         'zipUrl': zipUrl,
         'sha256': sha256,
@@ -186,17 +200,21 @@ sealed class UpdateDecision {
   /// disconnect, so "an update exists, connect to install it" can be said.
   /// [latest] is null when nothing has been fetched.
   ///
-  /// [charging] is the `fe05` charging bit, which is NOT what the firmware
-  /// checks: it gates `OTA!` on VBUS, and a full cell still on its cable reads
-  /// "not charging". So a cell at 100 % that is not charging is not blocked
-  /// here - it may well be plugged in, and the firmware is the authority
-  /// either way; a refusal comes back as an error on the `OTA!` write.
+  /// [externalPower] is the `fe05` external-power bit, which is exactly what
+  /// the firmware gates `OTA!` on (VBUS). The charging bit is not: a full
+  /// cell still on its cable reads "not charging".
+  ///
+  /// [charging] is only the fallback for a firmware that predates the
+  /// external-power bit (absent reads as 0): charging implies power is in,
+  /// so `externalPower || charging` is the "on its charger" test. The
+  /// firmware stays the authority either way; a refusal comes back as an
+  /// error on the `OTA!` write.
   static UpdateDecision evaluate({
     required FirmwareVersion? current,
     required FirmwareRelease? latest,
     required bool charging,
+    required bool externalPower,
     required bool connected,
-    required int? batteryPercent,
   }) {
     if (latest == null) return const UpdateNone();
     if (current == null) {
@@ -204,12 +222,14 @@ sealed class UpdateDecision {
           ? UpdateBlocked(latest, UpdateBlockReason.unknownVersion)
           : const UpdateNone();
     }
+    // Another hardware build's image (a release cached before the recorder's
+    // variant was known): never offered, whatever its number.
+    if (latest.version.variant != current.variant) return const UpdateNone();
     // Equal or older is never offered: a downgrade is a decision for a
     // cable and a person, not for a background check.
     if (!(latest.version > current)) return const UpdateNone();
     if (!connected) return UpdateBlocked(latest, UpdateBlockReason.notConnected);
-    final maybeFullOnCable = batteryPercent == 100;
-    if (!charging && !maybeFullOnCable) {
+    if (!externalPower && !charging) {
       return UpdateBlocked(latest, UpdateBlockReason.notOnCharger);
     }
     return UpdateOffered(latest);
