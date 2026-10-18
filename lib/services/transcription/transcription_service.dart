@@ -4,15 +4,18 @@ import 'dart:typed_data';
 import '../../drivers/file_store.dart';
 import '../../drivers/process_memory.dart';
 import '../../drivers/speaker_diarizer.dart';
+import '../../drivers/speaker_embedder.dart';
 import '../../drivers/speech_recognizer.dart';
 import '../../model/decode_window.dart';
 import '../../model/diarization.dart';
 import '../../model/language_router.dart';
 import '../../model/loudness_profile.dart';
+import '../../model/note_voices.dart';
 import '../../model/speaker_turns.dart';
 import '../../model/transcription.dart';
 import '../wav_reader.dart';
 import 'speech_model_store.dart';
+import 'turn_embedding.dart';
 import 'window_planner.dart';
 
 /// Why a transcription did not produce a result.
@@ -85,12 +88,17 @@ class TranscriptionException implements Exception {
 /// segment comes back labelled `S1`, `S2`. A note with ONE speaker is not
 /// labelled at all. No diarizer, or its models not installed: nothing changes,
 /// and the transcript is what it always was.
+///
+/// VOICES, BETWEEN THE TWO. With a [SpeakerEmbedder], each cleaned turn is
+/// embedded after the diarizer has exited and before the speech model loads,
+/// so no two networks are ever resident together - see `TurnEmbedding`.
 class TranscriptionService {
   TranscriptionService({
     required this._fileStore,
     required this._models,
     required this._recognizer,
     this._diarizer,
+    this._embedder,
     this._model = SpeechModels.indicConformerHindiInt8,
     this._englishModel = SpeechModels.parakeetTdtEnglishInt8,
     this._vadModel = SpeechModels.sileroVad,
@@ -105,6 +113,10 @@ class TranscriptionService {
   final SpeechModelStore _models;
   final SpeechRecognizer _recognizer;
   final SpeakerDiarizer? _diarizer;
+
+  /// Voice embeddings of each turn; null leaves [TranscriptionResult.voices]
+  /// null and changes nothing else.
+  final SpeakerEmbedder? _embedder;
   final SpeechModel _model;
   final SpeechModel _englishModel;
   final VadModel _vadModel;
@@ -139,6 +151,9 @@ class TranscriptionService {
 
   /// The diarizer's event stream while it runs, for the same reason.
   StreamSubscription<DiarizationEvent>? _diarizing;
+
+  /// The voice embedding step while it runs, for the same reason.
+  TurnEmbedding? _embedding;
 
   /// Completes when the running engine stream has finished, one way or another.
   Completer<void>? _engineDone;
@@ -220,6 +235,7 @@ class TranscriptionService {
   Future<void> releaseEngine() async {
     await cancel();
     await _diarizer?.release();
+    await _embedder?.release();
     await _recognizer.releaseModel();
   }
 
@@ -239,6 +255,7 @@ class TranscriptionService {
       _diarizing = null;
       await speakers.cancel();
     }
+    await _embedding?.cancel();
     final engine = _engine;
     final done = _engineDone;
     if (engine == null || done == null) return;
@@ -486,6 +503,7 @@ class TranscriptionService {
               ? primary.languageCode
               : 'auto',
       englishModelMissing: englishModelMissing,
+      voices: speakers.voices,
     );
   }
 
@@ -519,6 +537,9 @@ class TranscriptionService {
 
     final steps = _speakerSteps(gridWindows);
     onProgress?.call(0, steps + gridWindows);
+    // Diarizing is most of the speaker pass; embedding, when there is an
+    // embedder, is the last fifth.
+    final diarizeShare = _embedder == null ? 1.0 : 0.8;
 
     // NOTHING ELSE IN MEMORY. The recognizer may be holding 188 MB from the
     // note before this one; both speaker networks plus the whole recording as
@@ -548,7 +569,7 @@ class TranscriptionService {
           numClusters: speakerCount,
         ),
         (fraction) => onProgress?.call(
-          (fraction * steps).round(),
+          (fraction * diarizeShare * steps).round(),
           steps + gridWindows,
         ),
       );
@@ -570,6 +591,13 @@ class TranscriptionService {
       sampleRateHz: header.sampleRateHz,
     );
     if (cleaned.isEmpty) return _Speakers(steps: steps);
+
+    final voices = await _embedVoices(path, header, turns, cleaned, numThreads,
+      (fraction) => onProgress?.call(
+        ((diarizeShare + fraction * (1 - diarizeShare)) * steps).round(),
+        steps + gridWindows,
+      ),
+    );
 
     final names = SpeakerTurns.labels(cleaned);
     // ONE VOICE, NO LABELS. A note where only one person spoke reads as plain
@@ -599,7 +627,41 @@ class TranscriptionService {
         for (final window in windows)
           labelled ? names[window.speaker] : null,
       ],
+      voices: voices,
     );
+  }
+
+  /// Embeds each cleaned turn's voice. Null without an embedder, and when
+  /// it fails: the voices are an extra, and losing them must never cost the
+  /// words. Only a CANCEL is passed on, as in [_separateSpeakers].
+  Future<NoteVoices?> _embedVoices(
+    String path,
+    WavHeader header,
+    List<SpeakerTurn> raw,
+    List<SpeakerTurn> cleaned,
+    int numThreads,
+    void Function(double fraction) onFraction,
+  ) async {
+    final embedder = _embedder;
+    if (embedder == null) return null;
+    final embedding = _embedding = TurnEmbedding(
+      embedder,
+      model: _diarizationModel,
+      embeddingPath: _models.diarizationPathOf(
+          _diarizationModel, _diarizationModel.embeddingFile),
+    );
+    try {
+      return await embedding.run(path, header, raw, cleaned,
+          numThreads: numThreads, onProgress: onFraction);
+    } on Object {
+      _throwIfCancelled();
+      return null;
+    } finally {
+      _embedding = null;
+      // Frees a network a job that ended badly may have left behind, before
+      // the speech model is loaded.
+      await embedder.release();
+    }
   }
 
   /// How many progress steps the speaker pass is worth - see
@@ -839,6 +901,7 @@ class _Speakers {
     required this.steps,
     this.windows = const <SampleRange>[],
     this.labels = const <String?>[],
+    this.voices,
   });
 
   /// Nothing ran: no diarizer, or its models are not installed.
@@ -853,4 +916,7 @@ class _Speakers {
 
   /// The label of each window, or null throughout when only one person spoke.
   final List<String?> labels;
+
+  /// Every cleaned turn's voice; null when they were not embedded.
+  final NoteVoices? voices;
 }

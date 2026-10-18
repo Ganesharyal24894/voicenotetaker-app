@@ -105,6 +105,22 @@ abstract final class RecordingNaming {
   static String emptyNotePathOf(String audioPath) =>
       _sidecarOf(audioPath, emptyNoteSuffix);
 
+  /// Suffix of a note's voices: one embedding per turn and the last match.
+  /// Survives the audio sweep - it is all that is left to match the note
+  /// against a voice named later - and stays out of Export (biometric).
+  static const String voicesSuffix = '.voices.json';
+
+  static String voicesPathOf(String audioPath) =>
+      _sidecarOf(audioPath, voicesSuffix);
+
+  /// Suffix of the empty marker saying "no voice the owner knows": the note
+  /// is hidden from lists, never deleted. A marker, like keep-audio, so the
+  /// library learns it from the listing it already makes.
+  static const String backgroundSuffix = '.background.json';
+
+  static String backgroundPathOf(String audioPath) =>
+      _sidecarOf(audioPath, backgroundSuffix);
+
   /// The recording a sidecar at [sidecarPath] with [suffix] belongs to.
   static String audioPathOfSidecar(String sidecarPath, String suffix) =>
       '${sidecarPath.substring(0, sidecarPath.length - suffix.length)}'
@@ -199,7 +215,12 @@ class LibraryService {
         if (present.contains(audio)) continue;
         final transcript = RecordingNaming.transcriptPathOf(audio);
         if (!present.contains(transcript)) continue;
-        final info = await _describeWithoutAudio(audio, transcript);
+        final info = await _describeWithoutAudio(
+          audio,
+          transcript,
+          isBackground:
+              present.contains(RecordingNaming.backgroundPathOf(audio)),
+        );
         if (info != null) found.add(info);
         continue;
       }
@@ -211,6 +232,8 @@ class LibraryService {
         transcriptFailed:
             present.contains(RecordingNaming.transcriptFailurePathOf(path)),
         keepAudio: present.contains(RecordingNaming.keepAudioPathOf(path)),
+        isBackground:
+            present.contains(RecordingNaming.backgroundPathOf(path)),
       );
       if (info != null) found.add(info);
     }
@@ -232,6 +255,7 @@ class LibraryService {
     bool hasTranscript = false,
     bool transcriptFailed = false,
     bool keepAudio = false,
+    bool isBackground = false,
   }) async {
     final stat = await _fileStore.stat(path);
     if (stat == null) return null;
@@ -252,6 +276,7 @@ class LibraryService {
       hasTranscript: hasTranscript,
       transcriptFailed: transcriptFailed,
       keepAudio: keepAudio,
+      isBackground: isBackground,
     );
   }
 
@@ -261,8 +286,9 @@ class LibraryService {
   /// there is then nothing to show.
   Future<RecordingInfo?> _describeWithoutAudio(
     String audioPath,
-    String transcriptPath,
-  ) async {
+    String transcriptPath, {
+    required bool isBackground,
+  }) async {
     try {
       final stat = await _fileStore.stat(transcriptPath);
       if (stat == null) return null;
@@ -279,6 +305,7 @@ class LibraryService {
         duration: transcript.audioDuration,
         hasTranscript: true,
         hasAudio: false,
+        isBackground: isBackground,
       );
     } on Object {
       return null;
@@ -305,6 +332,8 @@ class LibraryService {
     await fileStore.delete(RecordingNaming.keepAudioPathOf(path));
     await fileStore.delete(RecordingNaming.speakerNamesPathOf(path));
     await fileStore.delete(RecordingNaming.speakerSettingsPathOf(path));
+    await fileStore.delete(RecordingNaming.voicesPathOf(path));
+    await fileStore.delete(RecordingNaming.backgroundPathOf(path));
     // Last: for a note whose audio was already removed, this marker is what
     // lists it, so a delete interrupted before here leaves it visible and
     // deletable rather than a hidden stray.

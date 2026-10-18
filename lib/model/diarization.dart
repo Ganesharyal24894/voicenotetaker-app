@@ -22,6 +22,7 @@ class DiarizationModel {
     required this.directoryName,
     required this.segmentationFile,
     required this.embeddingFile,
+    required this.embeddingDim,
     required this.sampleRateHz,
     required this.threshold,
     required this.windowShiftRatio,
@@ -42,6 +43,11 @@ class DiarizationModel {
 
   /// Speaker-embedding network.
   final SpeechModelFile embeddingFile;
+
+  /// Values per embedding [embeddingFile] produces. Known before anything is
+  /// loaded, because the voiceprint store is opened for one size and a note
+  /// with no speech long enough to embed still records which size it is.
+  final int embeddingDim;
 
   /// The only sample rate these models accept.
   final int sampleRateHz;
@@ -94,6 +100,7 @@ abstract final class DiarizationModels {
       name: 'campplus.onnx',
       sizeBytes: 28281164,
     ),
+    embeddingDim: 192,
     sampleRateHz: 16000,
     threshold: 0.9,
     windowShiftRatio: 0.5,

@@ -12,11 +12,14 @@
 /// exist, a rename does not.
 library;
 
-/// The speaker count and merges the user chose for one note.
+/// The speaker count and merges the user chose for one note, and their
+/// answers about whose voices it holds.
 class SpeakerSettings {
   const SpeakerSettings({
     this.speakerCount,
     this.merges = const <String, String>{},
+    this.people = const <String, String>{},
+    this.keep = false,
   });
 
   static const SpeakerSettings empty = SpeakerSettings();
@@ -37,7 +40,16 @@ class SpeakerSettings {
   /// through: no value here is itself a key. Never modified in place.
   final Map<String, String> merges;
 
-  bool get isEmpty => speakerCount == null && merges.isEmpty;
+  /// Label to the voiceprint person the user said it is ("Who's this?").
+  /// Pinned labels are not scored by the matcher; a pin naming a voice since
+  /// forgotten is ignored there.
+  final Map<String, String> people;
+
+  /// The user said this note is not background, whoever is in it.
+  final bool keep;
+
+  bool get isEmpty =>
+      speakerCount == null && merges.isEmpty && people.isEmpty && !keep;
 
   /// What [label] should be shown as, after every merge the user made.
   String resolve(String label) => merges[label] ?? label;
@@ -52,8 +64,35 @@ class SpeakerSettings {
         'must be null (auto) or $minCount-$maxCount',
       );
     }
-    return SpeakerSettings(speakerCount: count, merges: merges);
+    return _with(speakerCount: count);
   }
+
+  /// These settings with [label] pinned to [person]; null removes the pin.
+  SpeakerSettings withPerson(String label, String? person) => _with(
+    people: Map<String, String>.unmodifiable(<String, String>{
+      for (final e in people.entries)
+        if (e.key != label) e.key: e.value,
+      label: ?person,
+    }),
+  );
+
+  SpeakerSettings withKeep(bool keep) => _with(keep: keep);
+
+  SpeakerSettings _with({
+    Object? speakerCount = _unset,
+    Map<String, String>? merges,
+    Map<String, String>? people,
+    bool? keep,
+  }) => SpeakerSettings(
+    speakerCount: identical(speakerCount, _unset)
+        ? this.speakerCount
+        : speakerCount as int?,
+    merges: merges ?? this.merges,
+    people: people ?? this.people,
+    keep: keep ?? this.keep,
+  );
+
+  static const Object _unset = Object();
 
   /// These settings with [from] merged into [into].
   ///
@@ -69,20 +108,19 @@ class SpeakerSettings {
       next[label] = to == from ? target : to;
     });
     next[from] = target;
-    return SpeakerSettings(
-      speakerCount: speakerCount,
-      merges: Map<String, String>.unmodifiable(next),
-    );
+    return _with(merges: Map<String, String>.unmodifiable(next));
   }
 
   /// These settings with every merge forgotten.
   SpeakerSettings withoutMerges() =>
-      SpeakerSettings(speakerCount: speakerCount);
+      _with(merges: const <String, String>{});
 
   Map<String, Object?> toJson() => <String, Object?>{
         'version': formatVersion,
         if (speakerCount != null) 'count': speakerCount,
         if (merges.isNotEmpty) 'merges': <String, String>{...merges},
+        if (people.isNotEmpty) 'people': <String, String>{...people},
+        if (keep) 'keep': true,
       };
 
   /// The settings in [json]; [empty] for anything unreadable. Never throws: a
@@ -111,10 +149,18 @@ class SpeakerSettings {
       }
       if (to != label) merges[label] = to;
     }
+    final rawPeople = json['people'];
     return SpeakerSettings(
       speakerCount:
           count is int && count >= minCount && count <= maxCount ? count : null,
       merges: Map<String, String>.unmodifiable(merges),
+      people: Map<String, String>.unmodifiable(<String, String>{
+        if (rawPeople is Map<String, Object?>)
+          for (final e in rawPeople.entries)
+            if (e.value is String && (e.value as String).isNotEmpty)
+              e.key: e.value as String,
+      }),
+      keep: json['keep'] == true,
     );
   }
 
@@ -122,14 +168,14 @@ class SpeakerSettings {
   bool operator ==(Object other) {
     if (other is! SpeakerSettings ||
         other.speakerCount != speakerCount ||
-        other.merges.length != merges.length) {
+        other.keep != keep) {
       return false;
     }
-    for (final entry in merges.entries) {
-      if (other.merges[entry.key] != entry.value) return false;
-    }
-    return true;
+    return _same(other.merges, merges) && _same(other.people, people);
   }
+
+  static bool _same(Map<String, String> a, Map<String, String> b) =>
+      a.length == b.length && a.entries.every((e) => b[e.key] == e.value);
 
   @override
   int get hashCode => Object.hash(
@@ -137,9 +183,14 @@ class SpeakerSettings {
         Object.hashAllUnordered(
           merges.entries.map((e) => Object.hash(e.key, e.value)),
         ),
+        Object.hashAllUnordered(
+          people.entries.map((e) => Object.hash(e.key, e.value)),
+        ),
+        keep,
       );
 
   @override
   String toString() =>
-      'SpeakerSettings(count: $speakerCount, merges: $merges)';
+      'SpeakerSettings(count: $speakerCount, merges: $merges, '
+      'people: $people, keep: $keep)';
 }

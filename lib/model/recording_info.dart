@@ -15,6 +15,7 @@ class RecordingInfo {
     this.transcriptFailed = false,
     this.hasAudio = true,
     this.keepAudio = false,
+    this.isBackground = false,
   });
 
   /// Absolute path of the WAV file.
@@ -57,6 +58,10 @@ class RecordingInfo {
   /// sweep never removes it.
   final bool keepAudio;
 
+  /// Whether no voice the owner knows was heard in it, so lists hide it. It
+  /// is never deleted for that.
+  final bool isBackground;
+
   @override
   String toString() => 'RecordingInfo($name, $sizeBytes B, '
       '${duration == null ? 'unknown' : '${duration!.inMilliseconds} ms'})';
@@ -74,7 +79,8 @@ class RecordingInfo {
       other.hasTranscript == hasTranscript &&
       other.transcriptFailed == transcriptFailed &&
       other.hasAudio == hasAudio &&
-      other.keepAudio == keepAudio;
+      other.keepAudio == keepAudio &&
+      other.isBackground == isBackground;
 
   @override
   int get hashCode => Object.hash(
@@ -89,5 +95,6 @@ class RecordingInfo {
         transcriptFailed,
         hasAudio,
         keepAudio,
+        isBackground,
       );
 }

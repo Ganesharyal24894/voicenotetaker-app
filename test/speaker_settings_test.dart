@@ -200,4 +200,40 @@ void main() {
       expect(store.files, isEmpty);
     });
   });
+
+  group('who is who', () {
+    test('a pin and keep survive JSON, merges and count changes', () {
+      final settings = SpeakerSettings.empty
+          .withPerson('S2', 'p-1')
+          .withKeep(true)
+          .withMerge('S3', 'S1')
+          .withCount(3)
+          .withoutMerges();
+
+      expect(settings.people, <String, String>{'S2': 'p-1'});
+      expect(settings.keep, isTrue);
+      expect(settings.isEmpty, isFalse);
+      expect(
+        SpeakerSettings.fromJson(jsonDecode(jsonEncode(settings.toJson()))),
+        settings,
+      );
+    });
+
+    test('a pin is replaced, and removed with null', () {
+      final pinned = SpeakerSettings.empty.withPerson('S1', 'me');
+
+      expect(pinned.withPerson('S1', 'p-2').people, {'S1': 'p-2'});
+      expect(pinned.withPerson('S1', null).isEmpty, isTrue);
+    });
+
+    test('a file without them reads as no pins and not kept', () {
+      final settings = SpeakerSettings.fromJson(<String, Object?>{
+        'version': SpeakerSettings.formatVersion,
+        'people': <String, Object?>{'S1': 3, 'S2': ''},
+      });
+
+      expect(settings.people, isEmpty);
+      expect(settings.keep, isFalse);
+    });
+  });
 }

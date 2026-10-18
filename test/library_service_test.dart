@@ -542,6 +542,57 @@ void main() {
     });
   });
 
+  group('voices and background', () {
+    List<int> transcriptJson() => utf8.encode(jsonEncode(
+          Transcript(
+            languageCode: 'hi',
+            modelId: 'm',
+            createdAt: DateTime.utc(2026, 9, 11),
+            audioDuration: const Duration(seconds: 30),
+            segments: const <TranscriptSegment>[],
+          ).toJson(),
+        ));
+
+    test('the sidecars are named beside the recording', () {
+      expect(RecordingNaming.voicesPathOf('$dir/voicenote-1.wav'),
+          '$dir/voicenote-1.voices.json');
+      expect(RecordingNaming.backgroundPathOf('$dir/voicenote-1.wav'),
+          '$dir/voicenote-1.background.json');
+    });
+
+    test('isBackground comes from the marker, with or without audio',
+        () async {
+      final hidden = seed(DateTime(2026, 9, 10, 9, 14));
+      final shown = seed(DateTime(2026, 9, 10, 10, 14));
+      final swept = '$dir/voicenote-20260910-111400.wav';
+      store
+        ..put(RecordingNaming.backgroundPathOf(hidden), <int>[])
+        ..put(RecordingNaming.voicesPathOf(shown), utf8.encode('{}'))
+        ..put(RecordingNaming.transcriptPathOf(swept), transcriptJson())
+        ..put(RecordingNaming.audioRemovedPathOf(swept), <int>[])
+        ..put(RecordingNaming.backgroundPathOf(swept), <int>[]);
+
+      final list = await library.refresh();
+
+      expect(list, hasLength(3), reason: 'neither sidecar is a recording');
+      expect(list.singleWhere((r) => r.path == hidden).isBackground, isTrue);
+      expect(list.singleWhere((r) => r.path == shown).isBackground, isFalse);
+      expect(list.singleWhere((r) => r.path == swept).isBackground, isTrue);
+    });
+
+    test('delete removes the voices and the marker with the recording',
+        () async {
+      final path = seed(DateTime(2026, 9, 10, 9, 14));
+      store
+        ..put(RecordingNaming.voicesPathOf(path), utf8.encode('{}'))
+        ..put(RecordingNaming.backgroundPathOf(path), <int>[]);
+
+      await library.delete(path);
+
+      expect(store.files, isEmpty);
+    });
+  });
+
   group('delete', () {
     test('removes the file and re-publishes the list', () async {
       final keep = seed(DateTime(2026, 9, 10, 9, 14));
