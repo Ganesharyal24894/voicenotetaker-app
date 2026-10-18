@@ -6,6 +6,7 @@
 library;
 
 import 'decode_window.dart';
+import 'note_voices.dart';
 
 /// One file a speech model needs on disk.
 class SpeechModelFile {
@@ -525,9 +526,15 @@ class TranscriptionResult {
     this.rssAfterReleaseKb,
     this.languageCode = 'hi',
     this.englishModelMissing = false,
+    this.voices,
   });
 
   final String audioPath;
+
+  /// The voice of every cleaned turn, for telling the owner from everyone
+  /// else. Null when speaker separation did not run or heard nothing, and
+  /// when embedding failed - the transcript itself is the same either way.
+  final NoteVoices? voices;
 
   /// The model that produced the transcript; both ids joined with `+` when
   /// windows were routed to two.

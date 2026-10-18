@@ -120,6 +120,11 @@ ExportPlan planExport({
   // the sidecar convention - see `RecordingNaming`.
   final byNote = <String, List<FileInfo>>{};
   for (final file in directoryFiles) {
+    // VOICES STAY ON THE PHONE. A note's `.voices.json` is a voiceprint of
+    // everyone in it - biometric - and a zip handed to the share sheet goes
+    // anywhere. (`voices/`, the owner's enrolment, is in the support
+    // directory and never reaches this listing at all.)
+    if (file.path.endsWith(RecordingNaming.voicesSuffix)) continue;
     byNote.putIfAbsent(_stemOf(_baseName(file.path)), () => <FileInfo>[])
         .add(file);
   }

@@ -15,6 +15,7 @@ import 'package:voicenotetaker_app/drivers/haptics.dart';
 import 'package:voicenotetaker_app/drivers/phone_power.dart';
 import 'package:voicenotetaker_app/drivers/platform_settings.dart';
 import 'package:voicenotetaker_app/drivers/speaker_diarizer.dart';
+import 'package:voicenotetaker_app/drivers/speaker_embedder.dart';
 import 'package:voicenotetaker_app/drivers/speech_recognizer.dart';
 import 'package:voicenotetaker_app/model/audio_codec.dart';
 import 'package:voicenotetaker_app/model/background_task_plan.dart';
@@ -24,6 +25,7 @@ import 'package:voicenotetaker_app/model/device_state.dart';
 import 'package:voicenotetaker_app/model/diarization.dart';
 import 'package:voicenotetaker_app/model/die_temperature.dart';
 import 'package:voicenotetaker_app/model/not_saving_alert.dart';
+import 'package:voicenotetaker_app/model/note_voices.dart';
 import 'package:voicenotetaker_app/model/pairing_outcome.dart';
 import 'package:voicenotetaker_app/model/phone_power.dart';
 import 'package:voicenotetaker_app/model/reconnect_backoff.dart';
@@ -128,6 +130,7 @@ class ViewHarness {
     this.testWindow,
     this.recognizer,
     this.diarizer,
+    this.embedder,
     bool speechModelInstalled = true,
     bool speakerModelsInstalled = true,
     BackgroundMode? backgroundMode,
@@ -150,6 +153,8 @@ class ViewHarness {
     // only place the assistant feature touches the recorder. `main.dart`
     // passes `AssistantController.noteTranscribed` here.
     this.onTranscriptSaved,
+    // The voice filter's hook; `main.dart` passes `VoiceLibrary.noteHeard`.
+    this.onVoicesFound,
   }) : transport = MockBleTransport() {
     if (recognizer != null && speechModelInstalled) installSpeechModel();
     if (diarizer != null && speakerModelsInstalled) installSpeakerModels();
@@ -285,6 +290,7 @@ class ViewHarness {
               ),
               recognizer: recognizer!,
               diarizer: diarizer,
+              embedder: embedder,
             ),
       deviceTestService: testWindow == null
           ? null
@@ -311,8 +317,16 @@ class ViewHarness {
               pollInterval: const Duration(milliseconds: 20),
             ),
       onTranscriptSaved: onTranscriptSaved,
+      onVoicesFound: onVoicesFound,
     );
   }
+
+  /// Told about every note's voices, exactly as `main.dart` tells the voice
+  /// filter.
+  final void Function(String path, NoteVoices voices)? onVoicesFound;
+
+  /// The voice embedder, when transcription embeds voices.
+  final SpeakerEmbedder? embedder;
 
   /// Told about every transcript the moment it is saved, exactly as
   /// `main.dart` tells the assistant.

@@ -133,6 +133,34 @@ void main() {
       expect(plan.noteCount, 1, reason: 'five files, but one note');
     });
 
+    test('voices stay on the phone: the .voices.json sidecar is left out, '
+        'even by everything', () {
+      for (final range in ExportRange.values) {
+        final plan = planExport(
+          directoryFiles: <FileInfo>[
+            ...note(
+              '20260918-090000',
+              sidecars: <String>[
+                '.transcript.json',
+                '.voices.json',
+                '.background.json',
+              ],
+            ),
+            // A note whose audio and transcript are gone keeps its voices;
+            // they must not turn up as a stray under "everything" either.
+            file('voicenote-20260910-080000.voices.json', bytes: 9000),
+          ],
+          range: range,
+          now: now,
+        );
+        expect(
+          plan.files.map((f) => f.nameInZip),
+          isNot(contains(endsWith('.voices.json'))),
+          reason: range.name,
+        );
+      }
+    });
+
     test('a note whose audio the sweep removed still exports its transcript',
         () {
       final plan = planExport(

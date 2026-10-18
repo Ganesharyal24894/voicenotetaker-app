@@ -29,6 +29,7 @@ import '../model/level_reading.dart';
 import '../model/link_health.dart';
 import '../model/model_download.dart';
 import '../model/not_saving_alert.dart';
+import '../model/note_voices.dart';
 import '../model/notes_saving.dart';
 import '../model/pairing_outcome.dart';
 import '../model/device_profile.dart';
@@ -45,6 +46,7 @@ import '../model/language_router.dart';
 import '../model/transcript.dart';
 import '../model/transcript_paragraphs.dart';
 import '../model/transcription.dart';
+import '../model/voice_sample.dart';
 import '../services/codec/frame_decoder.dart';
 import '../services/audio_retention_service.dart';
 import '../services/battery_anchor_store.dart';
@@ -136,6 +138,7 @@ class AppController extends ChangeNotifier {
     PhonePower? phonePower,
     this._haptics,
     this._onTranscriptSaved,
+    this._onVoicesFound,
     NotSavingAlertPolicy? notSavingAlert,
     this._backgroundTranscription = false,
     this._powerRecheckInterval = BackgroundTranscriptionPolicy.recheckInterval,
@@ -213,6 +216,11 @@ class AppController extends ChangeNotifier {
   /// assistant feature touch at all.
   final void Function(String path, DateTime recordedAt, Transcript transcript)?
       _onTranscriptSaved;
+
+  /// Told about the voices of a note with speech once its transcript is
+  /// saved, for the voice filter. Anonymous for the same reason as
+  /// [_onTranscriptSaved]: deleting that feature is deleting this argument.
+  final void Function(String path, NoteVoices voices)? _onVoicesFound;
 
   final BleTransport _transport;
   final FileStore _fileStore;
@@ -447,6 +455,11 @@ class AppController extends ChangeNotifier {
         // sent, is entirely `AssistantController`'s business, and on a build
         // where `main.dart` passes nothing this line does nothing.
         _onTranscriptSaved?.call(path, recording.recordedAt, transcript);
+        // Not for a note with no speech: it is about to be deleted.
+        final voices = result.voices;
+        if (voices != null && transcript.hasSpeech) {
+          _onVoicesFound?.call(path, voices);
+        }
         // Nothing said in any window: the note goes, once nothing uses it.
         if (!transcript.hasSpeech) await _markEmptyNote(path);
       } on Object catch (error) {
@@ -1170,8 +1183,9 @@ class AppController extends ChangeNotifier {
   /// cannot be worked out again: the choice is remembered and nothing else
   /// happens.
   Future<void> setSpeakerCount(String path, int? count) async {
-    final current = _speakerSettings[path] ??
-        await _speakerSettingsStore.load(path);
+    // From disk, not the cache: the voice filter writes its pins in the same
+    // file, and a cached copy written back would lose them.
+    final current = await _speakerSettingsStore.load(path);
     if (current.speakerCount == count) return;
     final next = current.withCount(count);
     _speakerSettings[path] = next;
@@ -1198,8 +1212,8 @@ class AppController extends ChangeNotifier {
   /// the same as a note where the engine only ever heard one person.
   Future<void> mergeSpeakers(String path, String from, String into) async {
     if (from == into) return;
-    final current = _speakerSettings[path] ??
-        await _speakerSettingsStore.load(path);
+    // From disk, for the reason in [setSpeakerCount].
+    final current = await _speakerSettingsStore.load(path);
     final next = current.withMerge(from, into);
     if (next == current) return;
     _speakerSettings[path] = next;
@@ -2483,6 +2497,7 @@ class AppController extends ChangeNotifier {
     // patches the WAV header, and a link that has already gone does not stop it
     // from doing that to the bytes already on disk.
     if (isRecording) await stopRecording();
+    if (_voiceSamplePath != null) await _cutVoiceSample();
     // A CHECK CANNOT OUTLIVE THE LINK IT IS MEASURING. Its samples are kept and
     // the batch is labelled stopped early - see `DeviceTestService.cancel` -
     // which is the honest outcome, and it also stops the service holding the
@@ -3430,7 +3445,12 @@ class AppController extends ChangeNotifier {
     final device = _connectedDevice;
     // Not while always-listening: notes are already being made, from the same
     // single frame subscription.
-    if (device == null || isRecording || _session != null) return;
+    if (device == null ||
+        isRecording ||
+        _session != null ||
+        _voiceSamplePath != null) {
+      return;
+    }
     _errorMessage = null;
     // The recorder's default is speech only, so a recording the user started
     // has to ask for everything.
@@ -3484,6 +3504,77 @@ class AppController extends ChangeNotifier {
     _setPhase(_connectedDevice == null ? AppPhase.idle : AppPhase.connected);
     unawaited(_enqueueFinished(_lastRecording!.path));
     unawaited(_sweepEmptyNotesIfPending());
+  }
+
+  // -------------------------------------------------------------------------
+  // VOICE SAMPLE: the owner's guided recording for the voice filter. Recorded
+  // like a note but never one: written where the library does not look, never
+  // queued for transcription. Always-listening pauses for it (one frame
+  // subscription) and comes back after.
+  // -------------------------------------------------------------------------
+
+  String? _voiceSamplePath;
+  bool _voiceSampleCut = false;
+
+  bool get isRecordingVoiceSample => _voiceSamplePath != null;
+
+  /// The link dropped during the voice sample; [stopVoiceSample] still ends it.
+  bool get voiceSampleInterrupted => _voiceSampleCut;
+
+  /// Starts recording the owner's voice into [path]. False when it cannot.
+  Future<bool> startVoiceSample(String path) async {
+    final device = _connectedDevice;
+    if (device == null || isRecording || _voiceSamplePath != null) return false;
+    await _stopContinuousSession(linkUp: true);
+    try {
+      if (_captureSupported == true) {
+        // Everything, not speech only: the check wants the pauses too.
+        await _transport.writeCapture(device.id, CaptureCommand.gateDisabled);
+      }
+      await _recorder.start(
+        deviceId: device.id,
+        path: path,
+        requestCodec: _preferredCodec,
+      );
+    } on Object catch (error) {
+      debugPrint('Voice sample could not start: $error');
+      await _startContinuousSession(device.id);
+      return false;
+    }
+    _voiceSamplePath = path;
+    _voiceSampleCut = false;
+    _level = null;
+    notifyListeners();
+    return true;
+  }
+
+  /// Ends the voice sample, then lets always-listening start again.
+  Future<VoiceSampleTake?> stopVoiceSample() async {
+    final path = _voiceSamplePath;
+    if (path == null) return null;
+    var audio = Duration.zero;
+    var cut = _voiceSampleCut;
+    if (_recorder.isRecording) {
+      try {
+        audio = (await _recorder.stop()).audioDuration;
+      } on RecordingException {
+        cut = true;
+      }
+    }
+    _voiceSamplePath = null;
+    _voiceSampleCut = false;
+    _level = null;
+    final device = _connectedDevice;
+    if (device != null) await _startContinuousSession(device.id);
+    notifyListeners();
+    return VoiceSampleTake(path: path, audio: audio, linkLost: cut);
+  }
+
+  /// The link went: the file is closed now, the take is ended by the screen.
+  Future<void> _cutVoiceSample() async {
+    _voiceSampleCut = true;
+    await _recorder.abort();
+    notifyListeners();
   }
 
   /// Re-reads the recordings directory.

@@ -28,6 +28,7 @@ import 'drivers/secret_store_secure.dart';
 import 'drivers/platform_settings_channel.dart';
 import 'drivers/share_sheet_share_plus.dart';
 import 'drivers/speaker_diarizer_sherpa.dart';
+import 'drivers/speaker_embedder_sherpa.dart';
 import 'drivers/speech_recognizer_sherpa.dart';
 import 'drivers/undo_notification_channel.dart';
 import 'services/assistant/undo_notifier.dart';
@@ -40,6 +41,8 @@ import 'services/summary/day_summary_store.dart';
 import 'services/transcription/model_download_service.dart';
 import 'services/transcription/speech_model_store.dart';
 import 'services/transcription/transcription_service.dart';
+import 'services/voices/voice_library.dart';
+import 'services/voices/voiceprint_store.dart';
 import 'view/app_root.dart';
 import 'view/theme.dart';
 
@@ -92,6 +95,18 @@ Future<void> main() async {
     android: android,
   );
   if (assistant != null) unawaited(assistant.initialise());
+
+  // The voice filter: the owner's voice, the people they named, and every
+  // note's verdict against them. In the support directory, never beside the
+  // recordings - a voiceprint is biometric and stays out of Export.
+  final voices = VoiceLibrary(
+    fileStore: fileStore,
+    recordingsDirectory: fileStore.join(documents, 'recordings'),
+    store: VoiceprintStore(
+      fileStore: fileStore,
+      directory: fileStore.join(support, 'voices'),
+    ),
+  );
 
   final controller = AppController(
     transport: ble,
@@ -148,6 +163,9 @@ Future<void> main() async {
       // case until they are pushed - and notes are transcribed with no speaker
       // labels, exactly as before.
       diarizer: SherpaOnnxSpeakerDiarizer(),
+      // One voice embedding per turn, between the diarizer and the speech
+      // model, for the voice filter. Needs only the diarization pack.
+      embedder: SherpaOnnxSpeakerEmbedder(),
       // Cut windows in the pauses when `models/silero-vad/silero_vad.onnx` is
       // installed. Off unless built with --dart-define=STT_VAD=true, until
       // its CER and cost are measured; with the file absent it changes
@@ -173,7 +191,14 @@ Future<void> main() async {
                 spokenAt: recordedAt,
               ),
             ),
+    // Every note's voices, embedded before enrolment too, so an owner who
+    // enrols later has their older notes filtered as well.
+    onVoicesFound: (path, found) => unawaited(voices.noteHeard(path, found)),
   );
+  // A background marker moved; the lists read it from the folder.
+  voices.changes.listen((_) => unawaited(controller.refreshLibrary()));
+  // Notes matched against an older set of voices are matched again.
+  voices.rematchAll(staleOnly: true).ignore();
 
   // Over-the-air firmware updates: it reads `fe0a` on each connect and asks
   // GitHub for the newest release at most once a day, and nothing reaches the
